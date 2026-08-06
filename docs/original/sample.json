@@ -1,0 +1,35 @@
+[
+  {
+    "request_id": "REQ-0001",
+    "submitted_by": "ana.silva@company.com",
+    "submitted_at": "2026-04-10T09:15:00Z",
+    "raw_ocr_text": "BOM SABOR RESTAURANT LTD\nTAX ID 12.345.678/0001-90\nDATE 09/04/2026\nBUSINESS LUNCH\n2 X EXECUTIVE MEAL R$ 42.50\nSUBTOTAL R$ 85.00\nSERVICE 10% R$ 8.50\nTOTAL R$ 93.50",
+    "claimed_category": "meals",
+    "claimed_amount_brl": 93.5,
+    "attachments": [
+      "receipt_0001.jpg"
+    ]
+  },
+  {
+    "request_id": "REQ-0002",
+    "submitted_by": "carlos.mendes@company.com",
+    "submitted_at": "2026-04-11T14:20:00Z",
+    "raw_ocr_text": "URBAN TAXI SERVICES\nTAX ID 23.456.789/0001-12\nDATE 11/04/2026\nORIGIN: COMPANY HQ\nDESTINATION: AIRPORT TERMINAL 3\nDISTANCE: 18.4 KM\nFARE R$ 64.80",
+    "claimed_category": "transportation",
+    "claimed_amount_brl": 64.8,
+    "attachments": [
+      "receipt_0002.jpg"
+    ]
+  },
+  {
+    "request_id": "REQ-0003",
+    "submitted_by": "rafael.costa@company.com",
+    "submitted_at": "2026-04-13T08:45:00Z",
+    "raw_ocr_text": "GRAND PLAZA HOTEL\nTAX ID 45.678.901/0001-56\nGUEST: RAFAEL COSTA\nCHECK-IN: 10/04/2026\nCHECK-OUT: 12/04/2026\nNIGHTS: 2\nROOM RATE: R$ 320.00 X 2\nBREAKFAST INCLUDED\nTOTAL R$ 640.00",
+    "claimed_category": "lodging",
+    "claimed_amount_brl": 640,
+    "attachments": [
+      "receipt_0003.pdf"
+    ]
+  }
+]
