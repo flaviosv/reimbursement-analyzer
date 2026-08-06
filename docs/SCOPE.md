@@ -33,12 +33,14 @@
 
 # Technical Scope
 
+![Request lifecycle](assets/request-lifecycle.png)
+
 ## Tech Stack
 
 - Python 3.4.17
+    - FastAPI 0.141.1
 - PostgreSQL 18
 - Kafka 3.2.1
-- FastAPI 0.141.1
 
 ## Project bootstrap
 
@@ -62,27 +64,25 @@
 - Original payload
 - Status
     - Auto-Approved
+    - Human-Approved
     - Human Review
-    - Rejected
+    - Auto-Rejected
+    - Human-Rejected
 - Request ID
 - Submited By
 - Submited Date
 - Reciepets Value
-- Reciepets Value
+- Reciepets Date
 - Currency
-- Decision Layer
-    - Deterministic
-    - Probablistic
-- Final Decision
-- Human Review notes
-    - Choose a better name
+- Decision
 - Published
+- Human Review notes
 - Created At
 - Updated At
 
 #### Constraints
 
-- Unique constraint agains Request ID / submited By
+- Unique constraint against Request ID / submited By together
 - Status must be in set of values defined in the schema
 - Decision Layer must be in the set of values defiend in the schema
 - Submited By must be a valid email
@@ -94,18 +94,18 @@
 ### Human Review
 
 - UUID
-- Reimbursement UUID
+- Reimbursement UUID©
 - Status
     - Approved
     - Rejected
-- Approved By
+- Review By
 - Reason
 - Created At
 
 #### Constraints
 
 - Status must be in set of values defined in the schema
-- Approved by must be valid email
+- Review By must be valid email
 
 ## API
 
@@ -113,7 +113,7 @@
 ### POST /api/v1/reimbursement
 - Publish to the topic `Request` with `retry = 0`
     If fails, reject completely the payload
-- Publish to Kafka the entire 
+- Publish to Kafka the entire payload
 - **Payload**
     - Accept any payload with max size of 25mb
     - Those are the minimum required fields in order to have an acceptable payload
@@ -147,30 +147,49 @@
         - Default = 0
 - Filter (query params)
     - status
-        - Values: `auto-approved` | `human-review` | `rejected`
+        - Values: `auto-approved` | `human-approved` | `human-review` | `auto-rejected` | `human-rejected`
         - Not required
         - Default = empty
 - Return the last `Human Review` if any
+- **Responses**
+    - 200
+    - 400
+    - 404
+    - 500
+        - Response body
+        ```json
+        {
+            "msg": "",
+            "data": [
+                ...
+            ]
+        }
+        ```
 
 ### PUT /api/v1/reimbursement/:uuid 
-- Only recheable for `Reimbursement` in `Human Review` status
+- Only recheable for `Reimbursement` in `Human-Rejected` or `Auto-Rejected` or `Human-Review` status
 - Accept approval of rejected `Human Review`
     Do not override the existing record, create a new one
+- The final status must be propagated to the `Reimbursement Entity`
+- For an approval, all the fields from the payload are required
+- For rejecting, just the `reason` and `approved_by` are required
 - **Payload**
     ```json
     {
         "uuid": "",
         "status": "approved | rejected",
         "reason": "",
-        "receipts_date": 0.0,
+        "receipts_date": "yyyy-mm-dd",
         "receipts_value": 0.0,
+        "receipts_currency": "",
+        "approved_by": ""
     }
     ```
 - **Responses**
-    - 200 - Processing error body
-    - 422 - Error body
-    - 400 - Error body
-    - 500 - Error body
+    - 200
+    - 422
+    - 400
+    - 500
     - Error body
         ```json
         {
@@ -195,13 +214,19 @@
 - If any the publish to topic fails, it must rollback the DB transaction
 - If any error happens, it must republish incrementing the retry
 
-## Reimbursement Processor
+## Reimbursement Agent
+
+![Reimbursement processing](assets/reimbursement-processing.png)
 
 ### Constraints
 
 - If the message's `Published Data` is lower than the the `Reimbursement Updated At`, ignore the message
 
-### Auto-Approved / Rejected 
+### Reject
+
+- If `Receipt Date`is older than 90 days, instantly reject
+
+### Auto-Approved
 
 #### Deterministic layer
 - If the payload matches the sample and the minimum required fields are there, move to the deterministic layer, if the required fields to create a minimum Reimbursement entity are not detectable, move to the Probabilistic Layer
@@ -228,9 +253,11 @@
 - If any the values are found, rely on the deterministic layer to auto approve or reject
     - Use LLM as Judge to verify if the found data matches what is expected to create the Reimbursement
 - If none of the values are found, send instantly to `Human Review`
+- 
 
 ### Human review
 - `Requested Value > 2000` must go immediately to `Human Review`
+    - `Receipt Date` must be newer than 90 days
 - Run a LLM check using a cheap and fast model help out the human review, adding a side note with the LLM output
 
 ### Error Handling
@@ -250,46 +277,61 @@
 
 - Add support to Swagger
 
-# Items to add to the definitions
+# Decisions
 
-- This project has the assumption that the payload provided is a sample only and can vary, otherwise no probabilistic (LLM / SLM) layer would be required
-- Didn't add authentication to allow focus on the business rule
-    - The Human Review data schema contains an Approved By, what keeps a plain text email, even though the endpoint is receiving an email, the correct approach would be extract from the JWT as example or other method relying on the authentication
-- I could use a event-driven architecture, however there aren't any requirement justifying it. 
-    - Taking a simpler approach that can be escalated horizontally
-- All the unit / integration tests has been done using AI with manual verification
-- LangFuse support added for traceability
-- Choose the path of not relying on the LLM to determine if it should be approved or not
-    - Started with eh assumption that payloads with different format can arrive to the endpoint
-    - It's possible starting with a small model, reducing cost, as performance is not a hard requirement at the moment
-    - The fact that is a mission critical service we can metrify / monitor the number of requests sent to human review to detect if it's requiring too much human intervention, if it's the case, a new approach relying on the LLM to approve could be placed
-- It wasn't considered in this project the possible extraction of data from `raw_ocr_text` or other possible fields via probabilistic layer / ETL, even though would be a good practice for Data Analyzes
-- Missing Request ID, Submited By, Submited Name and Requested Value moves to Human Review, if in the Human Review it's not possible to determine those values, the Human won't be able to approve, as the traceability hard requirement wouldn't be fullfilled
-- It's possib
-- The Layer field in the Reimbursement entity represents if the status was defined by the Deterministic or Probabilistic layer
-- It's not possible decline an Human Review if the Reimbursement is in Auto Approved status, or the Human Review in Approved status, as it's not possible get the value from the requester account
-    - This is an edge caase not covered by this project
-- None of the samples contains data as the Bank Account information, so this project got the assumption other tool could consume the information from this service and perform the reimbursement by the Submited By
-- Considering the project is missions critical, no requests must be lost, so the `POST /api/v1/reimbursement` will add to a Kafka topic to minimize the loses, so the `Reimbursement` can be processed async
-- The decision to reject completely the payload if publishing to the topic fails when sending the `Reimbursements` is to reduce the complexity of the internal structure, such as the need of adding retries strategies and some validations across the process. Monitoring tools must be in place to detect critical problems in either the endpoint app or Kafka
-- The justification to accep a minimum payload is to make sure the request is identificable, the other information we can use the deterministic or probabilist layer to figure out the values
-    - Consider accepting a pattern for the other fields
-- Assuming monitoring tools are in place to detect errors in any layers and monitoring the number of human reviewes being placed
-- Even though the attachmets could be used to validate if the `raw_ocr_text` matches the data in the attachment, I deliberatedly decided to leave this feature out of the scope to reduce the complexity
-- Assumed the claim_amount_brl it's the total of the `raw_ocr_text`
-- Any payload acceptable with the minimum requirements from the endpoint, to match the documentation where said that the sample payload is just a sample and doesn't reflect all the possibilities
-     - The minimum payload defined in order to make sure it's possible identify who is sending the request and have idepotent requests
+- Request
+    - The project assume that the payload can vary, just a set of fields has been set as required, for the sake of requester's identity
+        - `request_id`
+        - `submitted_by`
+        - `submitted_at`
+    - Considering the project is missions critical, no requests must be lost, so the `POST /api/v1/reimbursement` will publish to a Kafka topic to minimize the loses. The internal processing will make sure the requests will be fully processed or monitored in case of errors
+    - Even though the attachmets could be used to validate if the `raw_ocr_text` matches the data in the attachment, I deliberatedly decided to leave this feature out of the scope to reduce the complexity
+- Authentication
+    - Didn't add authentication to allow focus on the business rule
+    - The Human Review data schema contains an Reviewed By, what keeps a plain text email, even though the endpoint is receiving an email, the correct approach would be extract from the JWT, as example, or other method relying on the authentication step
+- Tests
+    - All the unit / integration tests will be generated by AI and validated manually due to the time available to complete the test
+- Observability
+    - LangFuse support added for Agent's tracing
+    - Regular logging output so other tools can read it
+    - Assuming monitoring tools are in place to detect errors in any layers and monitoring the number of human reviewes being placed
+- Async processing
+    - It has been chosen event-driven architecture to make the system scalable, each consumer can scale as the requests are indepotent
+- Reimbursement Agent
+    - Deterministic Layer
+        - It's gonna exist to either support the Agent as a tool or to simply move to the correct status if no LLM are needed at all
+    - Probabilistic Layer
+        - The LLM is getting two responsabilities
+            - Find the information in a payload different of the expected format
+            - If there are enough information found in the payload, use the LLM to evaluate if the information is solid and not contradictory, with the intetion of covering the gap from the document where
+                - `Value < 200`: Automatically approves
+                - `Value < 200`: Send for Human Review
+        - Reject only `Receipt Date` older than 90 days
+            - If the probabilistic layer find all the required information to evaluate the status and the default policies can't be automatically applied, send to Human Review
+            -
+        - Not reject / discard requests if errors
+            - If repeat errors / edge scenarios happens, immediately is gonna be sent to Human Review, to avoid losing request
+            - Fallback to logging in the output if any services are unavailable (DB / Kafka)
+            - This decision can polute the `Human Review` flow, however monitoring tools can be added in order to evaluate the impact in this flow and apply other approaches after real data comes in
+- Data Extraction
+    - It wasn't considered in this project the possible extraction of data from `raw_ocr_text` or other possible fields via probabilistic layer / ETL, even though would be a good practice for Data Analyzes
+- Human Review
+    - If the system tries to `Human-Approve` without the fields below present in the `Reimbursement` entity, it's gonna be blocked, all those fields are mandatory to have the data consistent
+    -  It's possible to `Human-Approve`if the `Reimbursement`is in `Human-Rejected` or `Auto-Rejected` or `Human-Review`
+        - It has been decided to let the `Auto-Rejected` to ba `Human-Approved` to allow the system recover from the possible agent errors
+    - It's not possible to `Human-Approve` if the `Reimbursement` is rejected, as it's not possible assure the system can get back the money 
+        - This is an edge caase not covered by this project
 
-# Decisions to take
-- Missing the guidelines of the gap between 200 and 2000
-- Add an evaluator of issues happening for the Human Review?
-- The human review status must reflect into the Reinbursement?
-- Lack of Receipts date must send to Human Review
+# Phase 2
+- Human Review Evaluator
+    - Identify what are the most gaps going to Human Review, in order to improve the agent
+- Add an event structure to trigger to other topic when an event happen
 
 # Let the LLM decide a few things
+- It's possible starting with a small model, reducing cost, as performance is not a hard requirement at the moment
 - If the claimed_category matches the raw_ocr_text data
 - If the claimed_amount_brl matches what is described in the raw_ocr_text
 
-Technical Decisions
+# Technical Decisions
 - Use a Python library that retries automatically if fails
 - Make sure kafka can handle a 25mb message, to respect the validation
