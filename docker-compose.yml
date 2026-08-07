@@ -15,6 +15,8 @@ x-langfuse-infra-depends-on: &langfuse-infra-depends-on
   langfuse-clickhouse:
     condition: service_healthy
 
+x-langfuse-public-key: &langfuse-public-key "pk-lf-local-dev"
+
 services:
   # --- App's own data store (Reimbursement / Human Review) ---
   postgres:
@@ -28,6 +30,9 @@ services:
     ports:
       - 127.0.0.1:5433:5432
     volumes:
+      # Postgres 18+ stores data under a version-specific subdirectory of
+      # /var/lib/postgresql (contrast langfuse-postgres below, pinned to 17,
+      # which still uses the older /var/lib/postgresql/data layout).
       - postgres_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U reimbursementanalyzer"]
@@ -36,13 +41,25 @@ services:
       retries: 10
 
   # --- Kafka: single-node KRaft (no ZooKeeper) ---
+  kafka-volume-init:
+    image: busybox
+    container_name: reimbursementanalyzer-flavio-kafka-volume-init
+    # Fresh named volumes are root-owned by default; the kafka image runs as
+    # uid 1000 (appuser) and can't write to it otherwise.
+    command: chown -R 1000:1000 /data
+    volumes:
+      - kafka_data:/data
+
   kafka:
     image: apache/kafka:4.3.1
     container_name: reimbursementanalyzer-flavio-kafka
     hostname: kafka
     restart: always
+    depends_on:
+      kafka-volume-init:
+        condition: service_completed_successfully
     ports:
-      - "9092:9092"
+      - 127.0.0.1:9092:9092
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT"
@@ -59,7 +76,9 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR: 1
-      KAFKA_LOG_DIRS: "/tmp/kraft-combined-logs"
+      KAFKA_LOG_DIRS: "/var/lib/kafka/data"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
     healthcheck:
       test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 || exit 1"]
       interval: 5s
@@ -80,7 +99,7 @@ services:
       - 127.0.0.1:3030:3030
     environment: &langfuse-worker-env
       NEXTAUTH_URL: http://localhost:3000
-      DATABASE_URL: ${LANGFUSE_DATABASE_URL}
+      DATABASE_URL: postgresql://postgres:${LANGFUSE_POSTGRES_PASSWORD}@langfuse-postgres:5432/postgres
       SALT: ${SALT}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse-clickhouse:9000
@@ -120,7 +139,7 @@ services:
       LANGFUSE_INIT_ORG_NAME: ReimbursementAnalyzer
       LANGFUSE_INIT_PROJECT_ID: reimbursement-agent
       LANGFUSE_INIT_PROJECT_NAME: Reimbursement Agent
-      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: pk-lf-local-dev
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: *langfuse-public-key
       LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_INIT_PROJECT_SECRET_KEY}
       LANGFUSE_INIT_USER_EMAIL: admin@reimbursementanalyzer.local
       LANGFUSE_INIT_USER_NAME: Admin
@@ -135,7 +154,7 @@ services:
       langfuse-postgres:
         condition: service_healthy
     environment:
-      LANGFUSE_DATABASE_URL: ${LANGFUSE_DATABASE_URL}
+      LANGFUSE_DATABASE_URL: postgresql://postgres:${LANGFUSE_POSTGRES_PASSWORD}@langfuse-postgres:5432/postgres
     entrypoint: sh
     command: >
       -c '
@@ -180,13 +199,16 @@ services:
       MINIO_ROOT_USER: minio
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     ports:
+      # Unlike every other port below, this one is intentionally not scoped
+      # to 127.0.0.1: LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT (below) points the
+      # browser at localhost:9090 directly for media uploads/downloads.
       - "9090:9000"
       - 127.0.0.1:9091:9001
     volumes:
       - langfuse_minio_data:/data
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
-      interval: 1s
+      interval: 3s
       timeout: 5s
       retries: 5
       start_period: 1s
@@ -218,12 +240,14 @@ services:
       timeout: 3s
       retries: 10
     environment:
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD: ${LANGFUSE_POSTGRES_PASSWORD}
       TZ: UTC
       PGTZ: UTC
     ports:
       - 127.0.0.1:5432:5432
     volumes:
+      # Postgres 17 (unlike the app's Postgres 18 above) still uses this
+      # older /var/lib/postgresql/data layout.
       - langfuse_postgres_data:/var/lib/postgresql/data
 
   # --- The 3 uv-workspace services ---
@@ -231,6 +255,7 @@ services:
     build:
       context: .
       dockerfile: src/api/Dockerfile
+      target: dev
     container_name: reimbursementanalyzer-flavio-api
     restart: always
     depends_on:
@@ -241,12 +266,14 @@ services:
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:19092
     volumes:
-      - ./src:/app/src
+      - ./src/api:/app/src/api
+      - ./src/shared:/app/src/shared
 
   agent:
     build:
       context: .
       dockerfile: src/agent/Dockerfile
+      target: dev
     container_name: reimbursementanalyzer-flavio-agent
     restart: always
     depends_on:
@@ -258,15 +285,17 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:19092
       DATABASE_URL: postgresql://reimbursementanalyzer:${POSTGRES_PASSWORD}@postgres:5432/reimbursementanalyzer
       LANGFUSE_HOST: http://langfuse-web:3000
-      LANGFUSE_PUBLIC_KEY: pk-lf-local-dev
+      LANGFUSE_PUBLIC_KEY: *langfuse-public-key
       LANGFUSE_SECRET_KEY: ${LANGFUSE_INIT_PROJECT_SECRET_KEY}
     volumes:
-      - ./src:/app/src
+      - ./src/agent:/app/src/agent
+      - ./src/shared:/app/src/shared
 
   publisher:
     build:
       context: .
       dockerfile: src/publisher/Dockerfile
+      target: dev
     container_name: reimbursementanalyzer-flavio-publisher
     restart: always
     depends_on:
@@ -278,10 +307,13 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:19092
       DATABASE_URL: postgresql://reimbursementanalyzer:${POSTGRES_PASSWORD}@postgres:5432/reimbursementanalyzer
     volumes:
-      - ./src:/app/src
+      - ./src/publisher:/app/src/publisher
+      - ./src/shared:/app/src/shared
 
 volumes:
   postgres_data:
+    driver: local
+  kafka_data:
     driver: local
   langfuse_postgres_data:
     driver: local

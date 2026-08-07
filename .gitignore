@@ -11,11 +11,9 @@
 !.python-version
 !docker-compose.yml
 !.dockerignore
+!.env.sample
 
 .venv/
 **/__pycache__/
 **/*.py[cod]
 **/*.egg-info/
-**/.pytest_cache/
-**/.mypy_cache/
-**/.ruff_cache/

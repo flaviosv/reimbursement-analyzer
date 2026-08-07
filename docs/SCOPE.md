@@ -37,10 +37,16 @@
 
 ## Tech Stack
 
-- Python 3.4.17
+- Python 3.4.7
     - FastAPI 0.141.1
+    - LangChain v1.3.0
+    - LangGraph v1.2.1
+    - Confluent Kafka for Python 2.15.0
+    - Pydantic 2.13.4
+    - Asyncpg 0.3.10
 - PostgreSQL 18
-- Kafka 3.2.1
+- Kafka 4.3.1 (KRaft, single node — 3.2.1 as originally scoped has no official Docker image; 3.7.0 is the earliest available)
+- LangFuse
 
 ## Project bootstrap
 
@@ -326,6 +332,7 @@
 - Human Review Evaluator
     - Identify what are the most gaps going to Human Review, in order to improve the agent
 - Add an event structure to trigger to other topic when an event happen
+- Improve the deterministic layer, reducing the chance of going to the probabilistic layer, saving tokens and resources
 
 # Let the LLM decide a few things
 - It's possible starting with a small model, reducing cost, as performance is not a hard requirement at the moment

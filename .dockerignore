@@ -3,6 +3,9 @@
 .github/
 docs/
 .vscode/
+.env
+.env.*
+!.env.sample
 **/__pycache__/
 **/*.py[cod]
 **/.pytest_cache/

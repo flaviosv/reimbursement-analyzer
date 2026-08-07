@@ -1,7 +1,7 @@
 [project]
 name = "shared"
 version = "0.1.0"
-description = "Add your description here"
+description = "ReimbursementAnalyzer test - Shared kernel"
 authors = [
     { name = "Flavio Studart", email = "flaviostudart@gmail.com" }
 ]
