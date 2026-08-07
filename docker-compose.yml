@@ -77,6 +77,13 @@ services:
       KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR: 1
       KAFKA_LOG_DIRS: "/var/lib/kafka/data"
+      # 26 MiB: 1 MiB above the API's 25 MiB request ceiling, covering the
+      # envelope prefix and protocol framing. message.max.bytes doubles as
+      # the topic-level default for topics that don't override it.
+      # KAFKA_SOCKET_REQUEST_MAX_BYTES is untouched -- its 100 MB default
+      # already clears this.
+      KAFKA_MESSAGE_MAX_BYTES: 27262976
+      KAFKA_REPLICA_FETCH_MAX_BYTES: 27262976
     volumes:
       - kafka_data:/var/lib/kafka/data
     healthcheck:
