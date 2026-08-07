@@ -259,7 +259,7 @@ services:
     build:
       context: .
       dockerfile: src/api/Dockerfile
-      target: dev
+      target: migrate
     container_name: reimbursementanalyzer-flavio-migrate
     # One-shot. 'always' (used by every sibling below) would restart it
     # forever and it would never report completion to its dependents.
@@ -269,7 +269,6 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql://reimbursementanalyzer:${POSTGRES_PASSWORD}@postgres:5432/reimbursementanalyzer
-    command: ["python", "-m", "api.migrate"]
     volumes:
       - ./src/api:/app/src/api
       - ./src/shared:/app/src/shared
