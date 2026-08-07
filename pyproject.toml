@@ -6,3 +6,22 @@ dependencies = []
 
 [tool.uv.workspace]
 members = ["src/*"]
+
+[dependency-groups]
+dev = [
+    # The suite drives the migration runner, so it needs api's schema tooling
+    # even though the request-serving image does not ship it.
+    "api[migrations]",
+    "pytest>=9.1.1",
+    "testcontainers[postgres]>=4.15.0",
+]
+
+[tool.uv.sources]
+api = { workspace = true }
+
+[tool.pytest.ini_options]
+# The whole workspace, not one member: naming a single package here means a
+# tests directory added to agent or publisher is silently never collected.
+testpaths = ["src"]
+python_classes = ["Describe*"]
+python_functions = ["it_*"]

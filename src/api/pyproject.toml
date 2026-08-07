@@ -7,11 +7,22 @@ authors = [
 ]
 requires-python = ">=3.14.7"
 dependencies = [
+    "asyncpg>=0.31.0",
     "confluent-kafka>=2.15.0",
     "fastapi>=0.141.1",
     "pydantic>=2.13.4",
+    "python-dotenv>=1.2.2",
     "shared",
     "uvicorn[standard]>=0.52.1",
+]
+
+# Installed only by the Dockerfile's migrate stage, so the request-serving
+# image carries neither the DDL tooling nor psycopg[binary]'s vendored
+# libssl/libpq, which a base-image rebuild would never patch.
+[project.optional-dependencies]
+migrations = [
+    "psycopg[binary]>=3.3.4",
+    "yoyo-migrations>=9.0.0",
 ]
 
 [build-system]

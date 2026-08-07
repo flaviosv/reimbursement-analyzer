@@ -44,6 +44,23 @@ ENV PATH="/app/.venv/bin:$PATH"
 EXPOSE 8000
 CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/src"]
 
+# --- migrate: the only image that gets the DDL tooling, runs once and exits ---
+FROM builder AS migrate-builder
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --locked --package api --extra migrations
+
+FROM python:3.14.7-slim AS migrate
+RUN groupadd --system app && useradd --system --gid app --home /app app
+WORKDIR /app
+COPY --from=migrate-builder --chown=app:app /app/.venv /app/.venv
+# Editable like the dev stage, so a newly added .sql is picked up from the
+# bind mount without rebuilding the image.
+COPY --from=migrate-builder --chown=app:app /app/src /app/src
+USER app
+ENV PATH="/app/.venv/bin:$PATH"
+
+CMD ["python", "-m", "api.migrate"]
+
 # --- prod: code baked in non-editable, no reload, runs standalone ---
 FROM builder AS prod-builder
 RUN --mount=type=cache,target=/root/.cache/uv \
