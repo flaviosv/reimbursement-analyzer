@@ -1,20 +1,36 @@
-import os
 from urllib.parse import urlsplit, urlunsplit
 
-DEFAULT_TEST_DATABASE_URL = (
-    "postgresql://reimbursementanalyzer:reimbursementanalyzer@localhost:5433/reimbursementanalyzer_test"
-)
-# Dropping and creating the test database needs a session that is not attached
-# to it; 'postgres' always exists on the server.
+# Matches the postgres service in docker-compose.yml, so tests exercise the
+# same major version the stack runs.
+POSTGRES_IMAGE = "postgres:18"
+TEST_DATABASE = "reimbursementanalyzer_test"
+# Dropping and creating a database needs a session that is not attached to it;
+# 'postgres' always exists on the server.
 MAINTENANCE_DATABASE = "postgres"
-
-
-def target_database_url() -> str:
-    return os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_DATABASE_URL)
 
 
 def database_name(url: str) -> str:
     return urlsplit(url).path.lstrip("/")
+
+
+def with_database(url: str, name: str) -> str:
+    return urlunsplit(urlsplit(url)._replace(path=f"/{name}"))
+
+
+def maintenance_url(url: str) -> str:
+    return with_database(url, MAINTENANCE_DATABASE)
+
+
+def target_database(server_url: str) -> str:
+    """The database the suite should migrate into.
+
+    A caller-supplied server URL names its own database; a bare server (the
+    throwaway container) lands on the default test database.
+    """
+    name = database_name(server_url)
+    if name in ("", MAINTENANCE_DATABASE):
+        return TEST_DATABASE
+    return name
 
 
 def guard_is_test_database(url: str) -> None:
@@ -24,8 +40,3 @@ def guard_is_test_database(url: str) -> None:
             f"refusing to run against database {name!r}: the test suite drops "
             "and recreates its database, so the name must end in '_test'"
         )
-
-
-def maintenance_url(url: str) -> str:
-    parts = urlsplit(url)
-    return urlunsplit(parts._replace(path=f"/{MAINTENANCE_DATABASE}"))

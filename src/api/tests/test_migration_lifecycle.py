@@ -1,10 +1,9 @@
 import threading
 from collections.abc import Iterator
-from urllib.parse import urlsplit, urlunsplit
 
 import psycopg
 import pytest
-from helpers import maintenance_url, target_database_url
+from helpers import maintenance_url, with_database
 from yoyo import get_backend, read_migrations
 
 from api.migrate import apply_migrations, backend_url, migrations_path
@@ -12,22 +11,17 @@ from api.migrate import apply_migrations, backend_url, migrations_path
 EXPECTED_MIGRATIONS = ["0001.create-reimbursement", "0002.create-human-review"]
 
 
-def url_for(database: str) -> str:
-    parts = urlsplit(target_database_url())
-    return urlunsplit(parts._replace(path=f"/{database}"))
-
-
 @pytest.fixture
-def fresh_db(request: pytest.FixtureRequest) -> Iterator[str]:
+def fresh_db(request: pytest.FixtureRequest, server_url: str) -> Iterator[str]:
     # A dedicated database per test: these tests roll migrations back, which
     # would tear the schema out from under the session-scoped suite.
     name = f"reimbursementanalyzer_{abs(hash(request.node.name)) % 10**8}_test"
-    admin_url = maintenance_url(target_database_url())
+    admin_url = maintenance_url(server_url)
     with psycopg.connect(admin_url, autocommit=True) as admin:
         admin.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
         admin.execute(f'CREATE DATABASE "{name}"')
     try:
-        yield url_for(name)
+        yield with_database(server_url, name)
     finally:
         with psycopg.connect(admin_url, autocommit=True) as admin:
             admin.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')

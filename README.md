@@ -72,14 +72,15 @@ To add a migration, create `NNNN.name.sql` plus a matching `NNNN.name.rollback.s
 The suite exercises the migrations against a real PostgreSQL 18 instance — every `CHECK`, `UNIQUE`, and foreign key is asserted to reject its violating row, since an unenforced constraint reads as a guarantee.
 
 ```bash
-# The tests need the database running, but not the rest of the stack
-docker compose up -d postgres
-
 uv run pytest
 ```
 
-Tests use their own `reimbursementanalyzer_test` database, created and dropped by the suite itself. A guard refuses to run against any database whose name does not end in `_test`, so a mis-set `TEST_DATABASE_URL` cannot touch development data. Override the target with:
+That is the whole setup. [Testcontainers](https://testcontainers.com/) starts a throwaway `postgres:18` container for the session and tears it down afterwards, so the suite needs no running stack, shares nothing between runs, and cannot reach a real database. Docker must be running.
+
+To point the suite at a server you supply instead — a CI service container, for example:
 
 ```bash
-TEST_DATABASE_URL=postgresql://user:pw@host:5433/something_test uv run pytest
+TEST_DATABASE_URL=postgresql://user:pw@host:5432/something_test uv run pytest
 ```
+
+That path is guarded: the suite drops and recreates its database, so it refuses any target whose name does not end in `_test`.
