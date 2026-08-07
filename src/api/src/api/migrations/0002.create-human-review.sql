@@ -1,11 +1,4 @@
---
--- file: migrations/0002.create-human-review.sql
---
 -- depends: 0001.create-reimbursement
---
--- Append-only: a new review decision creates a new row rather than
--- overwriting the previous one, so there is no updated_at column.
---
 
 CREATE TABLE human_review (
     uuid                UUID PRIMARY KEY DEFAULT uuidv7(),
@@ -27,3 +20,15 @@ CREATE TABLE human_review (
 -- Serves "return the last Human Review if any" on the reimbursement listing.
 CREATE INDEX human_review_reimbursement_created_idx
     ON human_review (reimbursement_uuid, created_at DESC);
+
+-- An audit trail the application can quietly rewrite is not an audit trail.
+CREATE FUNCTION reject_human_review_mutation() RETURNS TRIGGER AS $$
+BEGIN
+    RAISE EXCEPTION 'human_review is append-only: % is not permitted', TG_OP
+        USING ERRCODE = 'restrict_violation';
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER human_review_append_only
+    BEFORE UPDATE OR DELETE ON human_review
+    FOR EACH ROW EXECUTE FUNCTION reject_human_review_mutation();

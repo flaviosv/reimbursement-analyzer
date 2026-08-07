@@ -3,3 +3,5 @@
 --
 
 DROP TABLE human_review;
+
+DROP FUNCTION reject_human_review_mutation();
