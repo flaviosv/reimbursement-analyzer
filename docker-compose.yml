@@ -250,6 +250,30 @@ services:
       # older /var/lib/postgresql/data layout.
       - langfuse_postgres_data:/var/lib/postgresql/data
 
+  # --- Schema bootstrap: runs once, before any service starts ---
+  # Reuses the api image because the api package owns the migration files.
+  # Deliberately NOT run from the API's startup path: concurrent replicas
+  # would race on the same DDL, and readiness would block on schema work.
+  # This maps 1:1 to a k3s Job or initContainer.
+  migrate:
+    build:
+      context: .
+      dockerfile: src/api/Dockerfile
+      target: dev
+    container_name: reimbursementanalyzer-flavio-migrate
+    # One-shot. 'always' (used by every sibling below) would restart it
+    # forever and it would never report completion to its dependents.
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://reimbursementanalyzer:${POSTGRES_PASSWORD}@postgres:5432/reimbursementanalyzer
+    command: ["python", "-m", "api.migrate"]
+    volumes:
+      - ./src/api:/app/src/api
+      - ./src/shared:/app/src/shared
+
   # --- The 3 uv-workspace services ---
   api:
     build:
@@ -261,10 +285,15 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     ports:
       - "8000:8000"
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:19092
+      DATABASE_URL: postgresql://reimbursementanalyzer:${POSTGRES_PASSWORD}@postgres:5432/reimbursementanalyzer
     volumes:
       - ./src/api:/app/src/api
       - ./src/shared:/app/src/shared
@@ -281,6 +310,8 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:19092
       DATABASE_URL: postgresql://reimbursementanalyzer:${POSTGRES_PASSWORD}@postgres:5432/reimbursementanalyzer
@@ -303,6 +334,8 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:19092
       DATABASE_URL: postgresql://reimbursementanalyzer:${POSTGRES_PASSWORD}@postgres:5432/reimbursementanalyzer
