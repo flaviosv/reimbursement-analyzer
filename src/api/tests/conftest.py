@@ -6,7 +6,7 @@ from helpers import (
     database_name,
     guard_is_test_database,
     maintenance_url,
-    test_database_url,
+    target_database_url,
 )
 
 from api.migrate import apply_migrations
@@ -14,7 +14,7 @@ from api.migrate import apply_migrations
 
 @pytest.fixture(scope="session")
 def migrated_db() -> Iterator[str]:
-    url = test_database_url()
+    url = target_database_url()
     guard_is_test_database(url)
     name = database_name(url)
 

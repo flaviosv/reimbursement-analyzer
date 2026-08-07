@@ -9,7 +9,7 @@ DEFAULT_TEST_DATABASE_URL = (
 MAINTENANCE_DATABASE = "postgres"
 
 
-def test_database_url() -> str:
+def target_database_url() -> str:
     return os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_DATABASE_URL)
 
 
