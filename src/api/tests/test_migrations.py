@@ -264,3 +264,147 @@ def test_updated_at_advances_across_transactions(migrated_db: str) -> None:
         assert updated[0] > created
         writer.execute("DELETE FROM reimbursement WHERE uuid = %s", (uuid,))
         writer.commit()
+
+
+# =============================================================================
+# human_review
+# =============================================================================
+
+HUMAN_REVIEW_COLUMNS = {
+    "created_at",
+    "reason",
+    "reimbursement_uuid",
+    "reviewed_by",
+    "status",
+    "uuid",
+}
+
+
+def insert_review(
+    conn: psycopg.Connection, reimbursement_uuid: Any, **values: Any
+) -> tuple[Any, ...]:
+    values.setdefault("status", "approved")
+    values.setdefault("reviewed_by", "reviewer@company.com")
+    values.setdefault("reason", "looks fine")
+    values["reimbursement_uuid"] = reimbursement_uuid
+    columns = ", ".join(values)
+    placeholders = ", ".join(f"%({name})s" for name in values)
+    row = conn.execute(
+        f"INSERT INTO human_review ({columns}) VALUES ({placeholders})"
+        " RETURNING uuid, created_at",
+        values,
+    ).fetchone()
+    assert row is not None
+    return row
+
+
+@pytest.fixture
+def reimbursement_uuid(conn: psycopg.Connection) -> Any:
+    uuid, _, _ = insert(conn, request_id="REQ-REVIEWED")
+    return uuid
+
+
+def test_human_review_has_exactly_the_specified_columns(
+    conn: psycopg.Connection,
+) -> None:
+    assert columns_of(conn, "human_review") == HUMAN_REVIEW_COLUMNS
+
+
+def test_human_review_lookup_index_exists(conn: psycopg.Connection) -> None:
+    indexes = {
+        name
+        for (name,) in conn.execute(
+            "SELECT indexname FROM pg_indexes WHERE tablename = 'human_review'"
+        ).fetchall()
+    }
+    assert "human_review_reimbursement_created_idx" in indexes
+
+
+def test_review_uuid_is_generated(
+    conn: psycopg.Connection, reimbursement_uuid: Any
+) -> None:
+    uuid, _ = insert_review(conn, reimbursement_uuid)
+    assert uuid is not None
+
+
+@pytest.mark.parametrize("status", ["approved", "rejected"])
+def test_specified_review_statuses_are_accepted(
+    conn: psycopg.Connection, reimbursement_uuid: Any, status: str
+) -> None:
+    insert_review(conn, reimbursement_uuid, status=status)
+
+
+@pytest.mark.parametrize("status", ["pending", "human-approved", "APPROVED", ""])
+def test_unknown_review_status_is_rejected(
+    conn: psycopg.Connection, reimbursement_uuid: Any, status: str
+) -> None:
+    with pytest.raises(errors.CheckViolation) as exc:
+        insert_review(conn, reimbursement_uuid, status=status)
+    assert exc.value.diag.constraint_name == "human_review_status_check"
+
+
+@pytest.mark.parametrize("email", ["not-an-email", "no@domain", "a b@c.com"])
+def test_malformed_reviewed_by_is_rejected(
+    conn: psycopg.Connection, reimbursement_uuid: Any, email: str
+) -> None:
+    with pytest.raises(errors.CheckViolation) as exc:
+        insert_review(conn, reimbursement_uuid, reviewed_by=email)
+    assert exc.value.diag.constraint_name == "human_review_reviewed_by_check"
+
+
+def test_overlong_reviewed_by_is_rejected(
+    conn: psycopg.Connection, reimbursement_uuid: Any
+) -> None:
+    with pytest.raises(errors.CheckViolation) as exc:
+        insert_review(conn, reimbursement_uuid, reviewed_by="a" * 250 + "@c.com")
+    assert exc.value.diag.constraint_name == "human_review_reviewed_by_check"
+
+
+def test_reason_is_required(
+    conn: psycopg.Connection, reimbursement_uuid: Any
+) -> None:
+    with pytest.raises(errors.NotNullViolation):
+        insert_review(conn, reimbursement_uuid, reason=None)
+
+
+def test_reason_is_unbounded(
+    conn: psycopg.Connection, reimbursement_uuid: Any
+) -> None:
+    insert_review(conn, reimbursement_uuid, reason="c" * 100_000)
+
+
+def test_orphan_review_is_rejected(conn: psycopg.Connection) -> None:
+    with pytest.raises(errors.ForeignKeyViolation) as exc:
+        insert_review(conn, "00000000-0000-0000-0000-000000000000")
+    assert exc.value.diag.constraint_name == "human_review_reimbursement_uuid_fkey"
+
+
+def test_deleting_a_reviewed_reimbursement_is_rejected(
+    conn: psycopg.Connection, reimbursement_uuid: Any
+) -> None:
+    insert_review(conn, reimbursement_uuid)
+    # Audit rows must not disappear as a side effect of deleting their parent.
+    # RESTRICT raises restrict_violation (23001); a NO ACTION fallback would
+    # raise foreign_key_violation (23503) instead, so this asserts the
+    # referential action itself, not merely that some FK fired.
+    with pytest.raises(errors.RestrictViolation) as exc:
+        conn.execute("DELETE FROM reimbursement WHERE uuid = %s", (reimbursement_uuid,))
+    assert exc.value.diag.constraint_name == "human_review_reimbursement_uuid_fkey"
+
+
+def test_reviews_are_append_only(
+    conn: psycopg.Connection, reimbursement_uuid: Any
+) -> None:
+    first, _ = insert_review(conn, reimbursement_uuid, status="rejected")
+    second, _ = insert_review(conn, reimbursement_uuid, status="approved")
+    rows = conn.execute(
+        "SELECT uuid, status FROM human_review WHERE reimbursement_uuid = %s"
+        " ORDER BY created_at DESC, uuid DESC",
+        (reimbursement_uuid,),
+    ).fetchall()
+    assert [r[0] for r in rows] == [second, first]
+    assert rows[0][1] == "approved"
+
+
+def test_human_review_has_no_updated_at_column(conn: psycopg.Connection) -> None:
+    assert "updated_at" not in columns_of(conn, "human_review")
