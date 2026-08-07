@@ -105,6 +105,17 @@ class DescribeValidateBatch:
 
         assert str(exc_info.value) == "item 0: submitted_at — Input should have timezone info"
 
+    def it_rejects_a_completely_unparseable_submitted_at(self) -> None:
+        # Distinct from the naive-datetime case above: this string isn't a
+        # datetime at all, not merely one missing a timezone offset (RCV-09's
+        # "not a parseable ISO-8601 datetime" half).
+        item = {**VALID_ITEM, "submitted_at": "not-a-date"}
+
+        with pytest.raises(BatchInvalid) as exc_info:
+            validate_batch(json.dumps([item]).encode())
+
+        assert str(exc_info.value).startswith("item 0: submitted_at — Input should be a valid datetime")
+
     def it_rejects_a_non_json_body(self) -> None:
         with pytest.raises(BatchInvalid) as exc_info:
             validate_batch(b"not json")
