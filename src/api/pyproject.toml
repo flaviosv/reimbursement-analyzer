@@ -9,9 +9,14 @@ requires-python = ">=3.14.7"
 dependencies = [
     "confluent-kafka>=2.15.0",
     "fastapi>=0.141.1",
+    # psycopg (3) drives yoyo only; request-path DB access uses asyncpg.
+    # yoyo's own [postgres] extra pulls psycopg2, which has no wheel path that
+    # avoids a compiler on python:3.14-slim.
+    "psycopg[binary]>=3.3.4",
     "pydantic>=2.13.4",
     "shared",
     "uvicorn[standard]>=0.52.1",
+    "yoyo-migrations>=9.0.0",
 ]
 
 [build-system]
