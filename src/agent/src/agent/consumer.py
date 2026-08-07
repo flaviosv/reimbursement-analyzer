@@ -1,6 +1,7 @@
 import os
 
 from confluent_kafka import Consumer
+from dotenv import load_dotenv
 from shared.models import SampleMessage
 
 # Placeholder topic name for structural validation ahead of the real infra setup.
@@ -8,6 +9,7 @@ TOPIC = "sample-topic"
 
 
 def main() -> None:
+    load_dotenv()
     consumer = Consumer(
         {
             "bootstrap.servers": os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),

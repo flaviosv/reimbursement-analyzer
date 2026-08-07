@@ -1,5 +1,8 @@
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from shared.models import HealthStatus
+
+load_dotenv()
 
 app = FastAPI()
 
