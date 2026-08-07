@@ -1,9 +1,10 @@
+import os
+from secrets import token_hex
 from urllib.parse import urlsplit, urlunsplit
 
 # Matches the postgres service in docker-compose.yml, so tests exercise the
 # same major version the stack runs.
 POSTGRES_IMAGE = "postgres:18"
-TEST_DATABASE = "reimbursementanalyzer_test"
 # Dropping and creating a database needs a session that is not attached to it;
 # 'postgres' always exists on the server.
 MAINTENANCE_DATABASE = "postgres"
@@ -21,16 +22,15 @@ def maintenance_url(url: str) -> str:
     return with_database(url, MAINTENANCE_DATABASE)
 
 
-def target_database(server_url: str) -> str:
-    """The database the suite should migrate into.
+def disposable_database_name() -> str:
+    """A database name no concurrent run can collide with.
 
-    A caller-supplied server URL names its own database; a bare server (the
-    throwaway container) lands on the default test database.
+    The suite drops its database WITH (FORCE), which terminates whatever
+    backends are attached. Under a shared constant name that is not a race but
+    mutual destruction -- two runs against one server tear each other down
+    mid-assertion -- and pytest-xdist cannot work at all.
     """
-    name = database_name(server_url)
-    if name in ("", MAINTENANCE_DATABASE):
-        return TEST_DATABASE
-    return name
+    return f"reimbursementanalyzer_{os.getpid()}_{token_hex(4)}_test"
 
 
 def guard_is_test_database(url: str) -> None:
