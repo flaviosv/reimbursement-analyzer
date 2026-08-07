@@ -44,3 +44,42 @@ This starts the app's Postgres, Kafka (KRaft, single node), the LangFuse observa
 ```bash
 docker compose down -v
 ```
+
+## Database migrations
+
+The schema is owned by the `api` package and applied by a one-shot `migrate` service that runs before `api`, `agent`, or `publisher` start — they each wait on `service_completed_successfully`, so no service ever sees an unmigrated database.
+
+Migrations are plain SQL managed by [yoyo](https://ollycope.com/software/yoyo/latest), living inside the installed package at `src/api/src/api/migrations/` so they ship in the wheel and are available in the production image too.
+
+| Migration | Creates |
+| --------- | ------- |
+| `0001.create-reimbursement` | `reimbursement` table, `set_updated_at()` trigger, status index |
+| `0002.create-human-review` | `human_review` table (append-only), lookup index |
+
+Applying them happens automatically on `docker compose up`. To run them by hand:
+
+```bash
+DATABASE_URL=postgresql://reimbursementanalyzer:$POSTGRES_PASSWORD@localhost:5433/reimbursementanalyzer \
+  uv run python -m api.migrate
+```
+
+Re-running is safe — already-applied migrations are skipped, and a PostgreSQL advisory lock serialises concurrent runners.
+
+To add a migration, create `NNNN.name.sql` plus a matching `NNNN.name.rollback.sql` in the migrations directory, and declare its predecessor with a `-- depends:` header.
+
+## Tests
+
+The suite exercises the migrations against a real PostgreSQL 18 instance — every `CHECK`, `UNIQUE`, and foreign key is asserted to reject its violating row, since an unenforced constraint reads as a guarantee.
+
+```bash
+# The tests need the database running, but not the rest of the stack
+docker compose up -d postgres
+
+uv run pytest
+```
+
+Tests use their own `reimbursementanalyzer_test` database, created and dropped by the suite itself. A guard refuses to run against any database whose name does not end in `_test`, so a mis-set `TEST_DATABASE_URL` cannot touch development data. Override the target with:
+
+```bash
+TEST_DATABASE_URL=postgresql://user:pw@host:5433/something_test uv run pytest
+```
