@@ -83,9 +83,9 @@ async def _seed_reimbursement_with_receipts(
     request_id: str,
     *,
     status: str = "human-review",
-    receipts_value: Decimal = Decimal("100.00"),
-    receipts_date: date = date(2026, 1, 1),
-    currency: str = "BRL",
+    receipts_value: Decimal | None = Decimal("100.00"),
+    receipts_date: date | None = date(2026, 1, 1),
+    currency: str | None = "BRL",
 ) -> UUID:
     uuid = uuid4()
     await db.execute(
@@ -429,6 +429,44 @@ class DescribeReject:
         self, db: asyncpg.Connection
     ) -> None:
         uuid = await _seed_reimbursement(db, "REQ-REJECT-INCOMPLETE", status="human-review")
+
+        row = await reject(db, uuid, eligible_statuses=_ELIGIBLE_STATUSES, reason="bad receipt")
+
+        assert row is None
+        status = await db.fetchval("SELECT status FROM reimbursement WHERE uuid = $1", uuid)
+        assert status == "human-review"
+
+    @pytest.mark.parametrize(
+        ("receipts_value", "receipts_date", "currency", "request_id"),
+        [
+            pytest.param(Decimal("100.00"), None, None, "REQ-REJECT-ONLY-VALUE", id="only_value_set"),
+            pytest.param(None, date(2026, 1, 1), None, "REQ-REJECT-ONLY-DATE", id="only_date_set"),
+            pytest.param(None, None, "BRL", "REQ-REJECT-ONLY-CURRENCY", id="only_currency_set"),
+            pytest.param(
+                Decimal("100.00"), date(2026, 1, 1), None, "REQ-REJECT-TWO-OF-THREE", id="two_of_three_set"
+            ),
+        ],
+    )
+    async def it_returns_none_when_exactly_one_or_two_receipt_fields_are_set(
+        self,
+        db: asyncpg.Connection,
+        receipts_value: Decimal | None,
+        receipts_date: date | None,
+        currency: str | None,
+        request_id: str,
+    ) -> None:
+        # The _REJECT guard is three independent AND'd IS NOT NULL checks, not
+        # one all-or-nothing test — a partial row (e.g. only receipts_value
+        # set) must still fail, or a future AND→OR regression would slip
+        # through undetected by the all-null / all-set cases alone.
+        uuid = await _seed_reimbursement_with_receipts(
+            db,
+            request_id,
+            status="human-review",
+            receipts_value=receipts_value,
+            receipts_date=receipts_date,
+            currency=currency,
+        )
 
         row = await reject(db, uuid, eligible_statuses=_ELIGIBLE_STATUSES, reason="bad receipt")
 
