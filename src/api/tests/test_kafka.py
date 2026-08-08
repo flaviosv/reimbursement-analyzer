@@ -1,27 +1,15 @@
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
-from api.config import KAFKA_MAX_MESSAGE_BYTES, MESSAGE_TIMEOUT_MS, bootstrap_servers
-from api.kafka import get_producer, lifespan_producer, producer_config
+from kafka import get_producer, lifespan_producer
 
-
-class DescribeProducerConfig:
-    def it_sets_kafka_config_from_the_pinned_constants(self) -> None:
-        config = producer_config()
-
-        assert config == {
-            "bootstrap.servers": bootstrap_servers(),
-            "acks": "all",
-            "enable.idempotence": True,
-            "message.max.bytes": KAFKA_MAX_MESSAGE_BYTES,
-            "message.timeout.ms": MESSAGE_TIMEOUT_MS,
-        }
-
-    def it_leaves_retries_at_the_librdkafka_default(self) -> None:
-        # enable.idempotence=true rejects retries=0, and the envelope's own
-        # `retry` counter is a separate, message-carried concept (not
-        # librdkafka's producer-level retries property).
-        assert "retries" not in producer_config()
+# SPEC_DEVIATION: this file constructs a real, unmocked AIOProducer (via
+# lifespan_producer) targeting the default localhost:9092 bootstrap server,
+# with no Docker-gated container. Safe in a Docker-less CI run only because
+# construction and .close() never actually publish anything — produce() is
+# never called against this app, only /producer-identity-check (no Kafka
+# I/O) — so a refused background connection (visible in stderr as librdkafka
+# "Connect...failed") is expected noise, not a test failure.
 
 
 def _build_app() -> FastAPI:

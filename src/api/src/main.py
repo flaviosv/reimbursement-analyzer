@@ -2,9 +2,9 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from shared.models import HealthStatus
 
-from api.errors import register_handlers
-from api.kafka import lifespan_producer
-from api.reimbursement.create.route import router as reimbursement_router
+from errors import register_handlers
+from kafka import lifespan_producer
+from reimbursement.create.route import router as reimbursement_router
 
 load_dotenv()
 

@@ -1,67 +1,12 @@
 import json
 
 import pytest
-from api.config import MAX_BODY_BYTES
-from api.errors import BatchInvalid, PayloadTooLarge
-from api.reimbursement.create.validation import read_capped, validate_batch
-from starlette.requests import Request
+from helpers import valid_reimbursement_item
+from shared.errors import BatchInvalid
 
-VALID_ITEM = {
-    "request_id": "REQ-0001",
-    "submitted_by": "person@example.com",
-    "submitted_at": "2026-01-01T12:00:00Z",
-}
+from reimbursement.create.validation import MAX_BATCH_ITEMS, validate_batch
 
-
-def _request_from_chunks(chunks: list[bytes], content_length: int | None = None) -> Request:
-    headers = []
-    if content_length is not None:
-        headers.append((b"content-length", str(content_length).encode()))
-    scope = {"type": "http", "method": "POST", "headers": headers}
-
-    messages = [
-        {"type": "http.request", "body": chunk, "more_body": index < len(chunks) - 1}
-        for index, chunk in enumerate(chunks)
-    ] or [{"type": "http.request", "body": b"", "more_body": False}]
-
-    async def receive() -> dict:
-        return messages.pop(0)
-
-    return Request(scope, receive)
-
-
-class DescribeReadCapped:
-    # anyio's pytest plugin is present transitively (via starlette/httpx) but
-    # not set to auto mode, so async tests need this marker or they are
-    # silently never awaited.
-    pytestmark = pytest.mark.anyio
-
-    async def it_accepts_a_body_at_exactly_the_byte_limit(self) -> None:
-        chunk_a = b"x" * (MAX_BODY_BYTES - 10)
-        chunk_b = b"y" * 10
-        request = _request_from_chunks([chunk_a, chunk_b])
-
-        result = await read_capped(request)
-
-        assert len(result) == MAX_BODY_BYTES
-
-    async def it_rejects_a_body_one_byte_over_the_limit(self) -> None:
-        chunk_a = b"x" * MAX_BODY_BYTES
-        chunk_b = b"y"
-        request = _request_from_chunks([chunk_a, chunk_b])
-
-        with pytest.raises(PayloadTooLarge, match="payload exceeds 25 MiB limit"):
-            await read_capped(request)
-
-    async def it_decides_from_counted_bytes_not_a_lying_content_length_header(self) -> None:
-        # Header claims a tiny body; the real streamed bytes exceed the cap.
-        # If the header were consulted, this would never raise.
-        chunk_a = b"x" * MAX_BODY_BYTES
-        chunk_b = b"y"
-        request = _request_from_chunks([chunk_a, chunk_b], content_length=10)
-
-        with pytest.raises(PayloadTooLarge):
-            await read_capped(request)
+VALID_ITEM = valid_reimbursement_item()
 
 
 class DescribeValidateBatch:
@@ -107,8 +52,7 @@ class DescribeValidateBatch:
 
     def it_rejects_a_completely_unparseable_submitted_at(self) -> None:
         # Distinct from the naive-datetime case above: this string isn't a
-        # datetime at all, not merely one missing a timezone offset (RCV-09's
-        # "not a parseable ISO-8601 datetime" half).
+        # datetime at all, not merely one missing a timezone offset.
         item = {**VALID_ITEM, "submitted_at": "not-a-date"}
 
         with pytest.raises(BatchInvalid) as exc_info:
@@ -134,6 +78,21 @@ class DescribeValidateBatch:
 
         assert str(exc_info.value) == "batch must contain at least one request"
 
+    def it_rejects_a_batch_over_the_max_item_cap(self) -> None:
+        batch = [{**VALID_ITEM, "request_id": f"REQ-{n}"} for n in range(MAX_BATCH_ITEMS + 1)]
+
+        with pytest.raises(BatchInvalid) as exc_info:
+            validate_batch(json.dumps(batch).encode())
+
+        assert f"at most {MAX_BATCH_ITEMS} items" in str(exc_info.value)
+
+    def it_accepts_a_batch_at_exactly_the_max_item_cap(self) -> None:
+        batch = [{**VALID_ITEM, "request_id": f"REQ-{n}"} for n in range(MAX_BATCH_ITEMS)]
+
+        result = validate_batch(json.dumps(batch).encode())
+
+        assert len(result) == MAX_BATCH_ITEMS
+
     def it_names_the_second_items_index_not_the_first(self) -> None:
         bad_item = {k: v for k, v in VALID_ITEM.items() if k != "request_id"}
 
@@ -149,3 +108,49 @@ class DescribeValidateBatch:
             validate_batch(json.dumps([item]).encode())
 
         assert "SECRET-VALUE-9f3a" not in str(exc_info.value)
+
+    def it_still_names_the_index_when_the_item_itself_is_not_an_object(self) -> None:
+        # No field name is possible here — the item never became one — but
+        # the index alone must still be named.
+        with pytest.raises(BatchInvalid) as exc_info:
+            validate_batch(json.dumps(["not-a-dict"]).encode())
+
+        assert str(exc_info.value) == "item 0: Input should be an object"
+
+    @pytest.mark.parametrize("bad_request_id", ["", "   ", 123])
+    def it_rejects_an_empty_whitespace_or_non_string_request_id(self, bad_request_id) -> None:
+        item = {**VALID_ITEM, "request_id": bad_request_id}
+
+        with pytest.raises(BatchInvalid) as exc_info:
+            validate_batch(json.dumps([item]).encode())
+
+        assert str(exc_info.value).startswith("item 0: request_id —")
+
+    def it_rejects_a_request_id_over_the_length_cap(self) -> None:
+        item = {**VALID_ITEM, "request_id": "x" * 129}
+
+        with pytest.raises(BatchInvalid) as exc_info:
+            validate_batch(json.dumps([item]).encode())
+
+        assert str(exc_info.value) == "item 0: request_id — String should have at most 128 characters"
+
+    def it_rejects_a_request_id_with_disallowed_characters(self) -> None:
+        item = {**VALID_ITEM, "request_id": "REQ 0001!"}
+
+        with pytest.raises(BatchInvalid) as exc_info:
+            validate_batch(json.dumps([item]).encode())
+
+        assert "request_id" in str(exc_info.value)
+
+    def it_rejects_a_bare_epoch_number_for_submitted_at(self) -> None:
+        # AwareDatetime alone accepts int/float as Unix timestamps; this is
+        # not a parseable ISO-8601 string at all.
+        item = {**VALID_ITEM, "submitted_at": 1_700_000_000}
+
+        with pytest.raises(BatchInvalid) as exc_info:
+            validate_batch(json.dumps([item]).encode())
+
+        assert str(exc_info.value) == (
+            "item 0: submitted_at — Value error, input should be an ISO-8601 "
+            "string, not a bare number"
+        )

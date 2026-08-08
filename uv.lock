@@ -71,7 +71,7 @@ wheels = [
 [[package]]
 name = "api"
 version = "0.1.0"
-source = { editable = "src/api" }
+source = { virtual = "src/api" }
 dependencies = [
     { name = "asyncpg" },
     { name = "confluent-kafka" },
@@ -774,7 +774,7 @@ dev = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "api", extras = ["migrations"], editable = "src/api" },
+    { name = "api", extras = ["migrations"], virtual = "src/api" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "testcontainers", extras = ["kafka", "postgres"], specifier = ">=4.15.0" },
@@ -812,11 +812,15 @@ name = "shared"
 version = "0.1.0"
 source = { editable = "src/shared" }
 dependencies = [
+    { name = "confluent-kafka" },
     { name = "pydantic", extra = ["email"] },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "pydantic", extras = ["email"], specifier = ">=2.13.4" }]
+requires-dist = [
+    { name = "confluent-kafka", specifier = ">=2.15.0" },
+    { name = "pydantic", extras = ["email"], specifier = ">=2.13.4" },
+]
 
 [[package]]
 name = "sniffio"

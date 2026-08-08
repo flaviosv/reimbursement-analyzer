@@ -1,34 +1,17 @@
-from typing import Any
+from typing import Annotated, Any
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import Field, TypeAdapter, ValidationError
+from shared.config import MAX_BATCH_ITEMS
+from shared.errors import BatchInvalid
 from shared.models import ReimbursementRequest
-from starlette.requests import Request
-
-from api.config import MAX_BODY_BYTES
-from api.errors import BatchInvalid, PayloadTooLarge
 
 # Module-level: building a TypeAdapter per request re-compiles the validator.
-BATCH_ADAPTER = TypeAdapter(list[ReimbursementRequest])
-
-
-async def read_capped(request: Request) -> bytes:
-    """Stream the body while counting bytes, aborting the moment the running
-    total exceeds MAX_BODY_BYTES — before an oversized body is ever fully
-    buffered. Content-Length is never consulted: it is absent under chunked
-    encoding and is client-controlled either way."""
-    chunks: list[bytes] = []
-    total = 0
-    async for chunk in request.stream():
-        total += len(chunk)
-        if total > MAX_BODY_BYTES:
-            raise PayloadTooLarge("payload exceeds 25 MiB limit")
-        chunks.append(chunk)
-    return b"".join(chunks)
+BATCH_ADAPTER = TypeAdapter(Annotated[list[ReimbursementRequest], Field(max_length=MAX_BATCH_ITEMS)])
 
 
 def _format_error(error: dict[str, Any]) -> str:
     # Built from `loc` and `msg` only — never `input`, which ValidationError
-    # carries as the raw offending value (RCV-11).
+    # carries as the raw offending value.
     loc = error["loc"]
     if not loc:
         return str(error["msg"])

@@ -1,8 +1,9 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, EmailStr
+from shared.errors import BatchInvalid, PayloadTooLarge, PublishFailed
 
-from api.errors import BatchInvalid, PayloadTooLarge, PublishFailed, register_handlers
+from errors import register_handlers
 
 
 class _Payload(BaseModel):

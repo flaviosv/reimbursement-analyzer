@@ -3,25 +3,20 @@ import logging
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from shared.errors import BatchInvalid, PayloadTooLarge, PublishFailed
 from starlette.exceptions import HTTPException as StarletteHTTPException
-
-from api.responses import MessageResponse
 
 logger = logging.getLogger(__name__)
 
 
-class PayloadTooLarge(Exception):
-    """The request body exceeded MAX_BODY_BYTES while streaming."""
+class MessageResponse(BaseModel):
+    """The api's single response-body shape for every non-2xx status, and for
+    201. api-only by definition — no other service builds HTTP responses, so
+    this stays out of `shared`. Folded in here rather than its own file:
+    errors.py was already this class's only real consumer."""
 
-
-class BatchInvalid(Exception):
-    """The batch failed schema validation. The message names the offending
-    item index and field only — never the value (RCV-11)."""
-
-
-class PublishFailed(Exception):
-    """The broker returned a delivery error, or no delivery report arrived
-    within the publish timeout."""
+    msg: str
 
 
 def _msg_response(status_code: int, msg: str) -> JSONResponse:

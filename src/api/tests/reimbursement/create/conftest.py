@@ -1,8 +1,38 @@
+import asyncio
 from collections.abc import Iterator
 
 import pytest
-from api.config import KAFKA_MAX_MESSAGE_BYTES
+from shared.config import KAFKA_MAX_MESSAGE_BYTES
 from testcontainers.community.kafka import KafkaContainer
+
+
+class ImmediateFakeProducer:
+    """Every produce() call returns an already-resolved (or already-failed)
+    future, so awaiting it never actually suspends. Shared by test_producer.py
+    and test_route.py — the only fake either file needs when a call's
+    outcome doesn't have to depend on argument order."""
+
+    def __init__(self, *, error: Exception | None = None) -> None:
+        self.error = error
+        self.produced: list[bytes] = []
+
+    async def produce(self, topic: str, value: bytes | None = None, **kwargs: object):
+        self.produced.append(value)
+        future = asyncio.get_running_loop().create_future()
+        if self.error is not None:
+            future.set_exception(self.error)
+        else:
+            future.set_result(object())
+        return future
+
+
+@pytest.fixture
+def immediate_fake_producer_class() -> type[ImmediateFakeProducer]:
+    # Exposed as a fixture, not a plain import: two conftest.py files exist
+    # in this test tree (AD-009), so a bare `from conftest import ...` is
+    # ambiguous under --import-mode=importlib. Fixtures resolve by pytest's
+    # own directory scoping instead, sidestepping that entirely.
+    return ImmediateFakeProducer
 
 # SPEC_DEVIATION: pinned to testcontainers' own default image
 # (confluentinc/cp-kafka), not the compose broker (apache/kafka:4.3.1).
@@ -12,7 +42,7 @@ from testcontainers.community.kafka import KafkaContainer
 # Apache Kafka release under a different numbering scheme entirely. The
 # container's boot script also targets Confluent-image-only script paths
 # that do not exist in the apache/kafka image. test_compose_parity.py still
-# carries the "we ship 26 MiB" claim against the real compose file; this
+# carries the "we ship 2 MiB" claim against the real compose file; this
 # fixture only proves that a broker sized from the same constant accepts
 # and returns a ceiling-sized message.
 

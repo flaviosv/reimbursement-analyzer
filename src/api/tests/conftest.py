@@ -4,7 +4,6 @@ from contextlib import contextmanager
 
 import psycopg
 import pytest
-from api.migrate import apply_migrations
 from helpers import (
     MAINTENANCE_DATABASE,
     POSTGRES_IMAGE,
@@ -13,6 +12,7 @@ from helpers import (
     maintenance_url,
     with_database,
 )
+from migrate import apply_migrations
 from testcontainers.community.postgres import PostgresContainer
 
 

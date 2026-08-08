@@ -3,7 +3,7 @@ import os
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from importlib.resources import files
+from pathlib import Path
 
 import psycopg
 from dotenv import load_dotenv
@@ -22,7 +22,10 @@ class MigrationLockTimeout(RuntimeError):
 
 
 def migrations_path() -> str:
-    return str(files("api") / "migrations")
+    # api is a virtual (uninstalled) workspace member — no importable
+    # package to resolve resources through — so this is a plain filesystem
+    # path relative to this module, not importlib.resources.
+    return str(Path(__file__).parent / "migrations")
 
 
 def _dsn_body(database_url: str) -> str:

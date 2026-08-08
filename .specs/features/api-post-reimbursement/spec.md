@@ -1,5 +1,13 @@
 # POST /api/v1/reimbursement — Ingress & Kafka Publish Specification
 
+> **Amended 2026-08-08 (AD-013, .specs/STATE.md):** the payload ceiling below
+> was reduced from 25 MiB to **1 MiB** (`MAX_BODY_BYTES` /
+> `KAFKA_MAX_MESSAGE_BYTES` now live in `shared.config`). Every "25 MB"/"25
+> MiB" mention in this document reflects the ceiling as originally
+> implemented and verified; the mechanism, tests, and acceptance criteria
+> below are unchanged — only the numeric constant is. See AD-013 for the
+> sizing rationale.
+
 ## Problem Statement
 
 `docs/SCOPE.md:293` makes no-request-loss the governing constraint: the system
@@ -61,8 +69,8 @@ Every ambiguity is resolved or recorded here — nothing is left silently unclea
 | Kafka message-size configuration | In scope — broker and producer both raised | Without it the `413`/25 MB contract is unenforceable: librdkafka `message.max.bytes` defaults to **1 000 000** and the broker default is ~1 MB, so a valid 25 MB request would 500 on publish. `SCOPE.md:344` explicitly requires this | y |
 | 25 MB enforcement mechanism | Count bytes while streaming the body; abort past the ceiling | `Content-Length` is absent under chunked transfer-encoding and is client-controlled. Streaming also avoids buffering an oversized body before rejecting it | y |
 | Delivery acknowledgement | Block on the per-message delivery report before responding | `SCOPE.md:121` — "If fails, reject completely the payload" is only implementable if the response waits for the broker verdict | y |
-| `413` byte ceiling | `26_214_400` bytes (25 MiB) | "25mb" (`SCOPE.md:125`) read as MiB, the conventional binary reading for a byte limit | **n** |
-| Kafka size ceiling | `27_262_976` bytes (26 MiB) at broker, topic default, and producer | The envelope wraps the body, so a 25 MiB body yields a >25 MiB message; protocol framing adds more. 1 MiB of headroom is the smallest round number that cannot be hit by envelope overhead | **n** |
+| `413` byte ceiling | `1_048_576` bytes (1 MiB) — amended by AD-013, originally `26_214_400` (25 MiB) | Sized against `docs/original/sample.json`'s ~381 byte average item and the 500-item batch cap: ~2,097 bytes/item of headroom, ~5.5x the sample average | **n** |
+| Kafka size ceiling | `2_097_152` bytes (2 MiB) at broker, topic default, and producer — amended by AD-013, originally `27_262_976` (26 MiB) | The envelope wraps the body, so a 1 MiB body yields a >1 MiB message; protocol framing adds more. 1 MiB of headroom is the smallest round number that cannot be hit by envelope overhead | **n** |
 | Kafka topic name | `Request`, verbatim | `SCOPE.md:120` names the topic `Request`. Valid Kafka topic characters; renaming would desynchronise this spec from the publisher's spec | y |
 | Topic creation | Rely on broker auto-create, inheriting the raised broker-level `message.max.bytes` | Auto-created topics take the broker default, so no explicit `max.message.bytes` override is needed. Explicit creation is `SCOPE.md:54`'s bootstrap concern, out of this feature | **n** |
 | Message key | `None` (no key) | A batch has N `request_id`s, so no single natural key exists. Round-robin partitioning is correct for a batch message | y |

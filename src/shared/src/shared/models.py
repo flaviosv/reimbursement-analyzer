@@ -1,6 +1,22 @@
 from typing import Annotated, Any
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, EmailStr, StringConstraints
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    EmailStr,
+    StringConstraints,
+)
+
+
+def _require_str(value: object) -> object:
+    # AwareDatetime alone accepts int/float as Unix timestamps, so a bare
+    # number would otherwise silently pass as "parseable ISO-8601" — it
+    # never was. Runs before AwareDatetime's own parsing (BeforeValidator).
+    if not isinstance(value, str):
+        raise ValueError("input should be an ISO-8601 string, not a bare number")
+    return value
 
 
 class HealthStatus(BaseModel):
@@ -20,9 +36,14 @@ class ReimbursementRequest(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    request_id: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+    request_id: Annotated[
+        str,
+        StringConstraints(
+            strip_whitespace=True, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"
+        ),
+    ]
     submitted_by: EmailStr
-    submitted_at: AwareDatetime
+    submitted_at: Annotated[AwareDatetime, BeforeValidator(_require_str)]
 
 
 class RequestEnvelope(BaseModel):

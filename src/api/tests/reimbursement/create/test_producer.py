@@ -5,35 +5,18 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from api.errors import PublishFailed
-from api.reimbursement.create.producer import (
+from shared.errors import PublishFailed
+from shared.models import RequestEnvelope
+
+from reimbursement.create.producer import (
     PUBLISH_TIMEOUT_SECONDS,
     build_envelope,
     publish,
 )
-from shared.models import RequestEnvelope
 
 pytestmark = pytest.mark.anyio
 
 SAMPLE_JSON_PATH = Path(__file__).resolve().parents[5] / "docs" / "original" / "sample.json"
-
-
-class _ImmediateFakeProducer:
-    """Every produce() call returns an already-resolved (or already-failed)
-    future, so awaiting it never actually suspends."""
-
-    def __init__(self, *, error: Exception | None = None) -> None:
-        self.error = error
-        self.produced: list[bytes] = []
-
-    async def produce(self, topic: str, value: bytes | None = None, **kwargs: object):
-        self.produced.append(value)
-        future = asyncio.get_running_loop().create_future()
-        if self.error is not None:
-            future.set_exception(self.error)
-        else:
-            future.set_result(object())
-        return future
 
 
 class _NeverResolvesFakeProducer:
@@ -42,29 +25,33 @@ class _NeverResolvesFakeProducer:
 
 
 class _OutOfOrderFakeProducer:
-    """Each produce() call schedules its own future to resolve after a
-    caller-configured delay — letting a test make the Nth call's future
-    resolve before or after another call's, in either order."""
+    """Two produce() calls, each returning its own future — call 0's future
+    is only resolved once call 1's has already been observed resolved.
+    Deterministic ordering via an Event, not wall-clock sleeps: no margin to
+    compress or invert under CI scheduler jitter."""
 
-    def __init__(self, resolutions: list[tuple[float, Exception | None]]) -> None:
+    def __init__(self, resolutions: list[Exception | None]) -> None:
         self._resolutions = resolutions
         self.produced: list[bytes] = []
+        self._call_1_done = asyncio.Event()
 
     async def produce(self, topic: str, value: bytes | None = None, **kwargs: object):
         index = len(self.produced)
         self.produced.append(value)
-        delay, error = self._resolutions[index]
+        error = self._resolutions[index]
         future = asyncio.get_running_loop().create_future()
 
-        async def _resolve_later() -> None:
-            await asyncio.sleep(delay)
-            if not future.done():
-                if error is not None:
-                    future.set_exception(error)
-                else:
-                    future.set_result(object())
+        async def _resolve() -> None:
+            if index == 0:
+                await self._call_1_done.wait()
+            if error is not None:
+                future.set_exception(error)
+            else:
+                future.set_result(object())
+            if index == 1:
+                self._call_1_done.set()
 
-        asyncio.ensure_future(_resolve_later())
+        asyncio.ensure_future(_resolve())
         return future
 
 
@@ -118,35 +105,40 @@ class DescribeBuildEnvelope:
 
 class DescribeTimeoutOrdering:
     def it_keeps_the_broker_timeout_below_the_asyncio_timeout(self) -> None:
-        # api.config.MESSAGE_TIMEOUT_MS < PUBLISH_TIMEOUT_SECONDS*1000: librdkafka
-        # must always fail first, so a 500 means "definitely not delivered",
-        # never "not delivered yet" (the phantom-failure risk).
-        from api.config import MESSAGE_TIMEOUT_MS
+        # shared.config.MESSAGE_TIMEOUT_MS < PUBLISH_TIMEOUT_SECONDS*1000:
+        # librdkafka must always fail first, so a 500 means "definitely not
+        # delivered", never "not delivered yet" (the phantom-failure risk).
+        from shared.config import MESSAGE_TIMEOUT_MS
 
         assert MESSAGE_TIMEOUT_MS / 1000 < PUBLISH_TIMEOUT_SECONDS
 
 
 class DescribePublish:
-    async def it_resolves_when_the_broker_acknowledges_delivery(self) -> None:
-        fake = _ImmediateFakeProducer()
+    async def it_resolves_when_the_broker_acknowledges_delivery(
+        self, immediate_fake_producer_class
+    ) -> None:
+        fake = immediate_fake_producer_class()
 
-        await publish(fake, b"[]", ["REQ-1"])
+        result = await publish(fake, b"[]", ["REQ-1"])
 
+        assert result is None
         assert len(fake.produced) == 1
 
-    async def it_raises_publish_failed_on_a_broker_delivery_error(self) -> None:
-        fake = _ImmediateFakeProducer(error=RuntimeError("Local: Message timed out"))
+    async def it_raises_publish_failed_on_a_broker_delivery_error(
+        self, immediate_fake_producer_class
+    ) -> None:
+        fake = immediate_fake_producer_class(error=RuntimeError("Local: Message timed out"))
 
-        with pytest.raises(PublishFailed):
+        with pytest.raises(PublishFailed, match="RuntimeError: Local: Message timed out"):
             await publish(fake, b"[]", ["REQ-1"])
 
     async def it_raises_publish_failed_on_a_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
-            "api.reimbursement.create.producer.PUBLISH_TIMEOUT_SECONDS", 0.05
+            "reimbursement.create.producer.PUBLISH_TIMEOUT_SECONDS", 0.05
         )
         fake = _NeverResolvesFakeProducer()
 
-        with pytest.raises(PublishFailed):
+        with pytest.raises(PublishFailed, match="TimeoutError"):
             await publish(fake, b"[]", ["REQ-1"])
 
     async def it_gives_each_concurrent_publish_its_own_verdict_despite_out_of_order_resolution(
@@ -156,9 +148,7 @@ class DescribePublish:
         # Call 1 (REQ-B) is produced second but resolves FIRST, as a success.
         # A shared-queue bug (the flush()-based design this replaced) would
         # let one request's outcome leak into the other's.
-        fake = _OutOfOrderFakeProducer(
-            resolutions=[(0.05, RuntimeError("late failure")), (0.01, None)]
-        )
+        fake = _OutOfOrderFakeProducer(resolutions=[RuntimeError("late failure"), None])
 
         results = await asyncio.gather(
             publish(fake, b"[]", ["REQ-A"]),
@@ -170,10 +160,10 @@ class DescribePublish:
         assert results[1] is None
 
     async def it_logs_request_ids_and_the_broker_error_but_never_the_payload_body(
-        self, caplog: pytest.LogCaptureFixture
+        self, caplog: pytest.LogCaptureFixture, immediate_fake_producer_class
     ) -> None:
-        caplog.set_level(logging.ERROR, logger="api.reimbursement.create.producer")
-        fake = _ImmediateFakeProducer(error=RuntimeError("simulated broker failure"))
+        caplog.set_level(logging.ERROR, logger="reimbursement.create.producer")
+        fake = immediate_fake_producer_class(error=RuntimeError("simulated broker failure"))
         payload_marker = b'{"secret_marker": "PAYLOAD-SECRET-XYZ"}'
 
         with pytest.raises(PublishFailed):

@@ -2,26 +2,18 @@ import json
 import time
 
 import pytest
-from api.config import MAX_BODY_BYTES
-from api.main import app
-from api.reimbursement.create.producer import REQUEST_TOPIC
 from confluent_kafka import Consumer
 from fastapi.testclient import TestClient
+from helpers import valid_reimbursement_item
+from shared.config import MAX_BODY_BYTES, REQUEST_TOPIC
+
+from main import app
 
 pytestmark = pytest.mark.integration
 
 
-def _item(request_id: str, **extra: object) -> dict:
-    return {
-        "request_id": request_id,
-        "submitted_by": "person@example.com",
-        "submitted_at": "2026-01-01T12:00:00Z",
-        **extra,
-    }
-
-
 def _padded_batch(request_id: str, target_bytes: int) -> bytes:
-    item = _item(request_id, padding="")
+    item = valid_reimbursement_item(request_id, padding="")
     base_length = len(json.dumps([item]))
     item["padding"] = "x" * (target_bytes - base_length)
     result = json.dumps([item]).encode()
@@ -75,7 +67,7 @@ class DescribeRealBrokerRoundTrip:
     ) -> None:
         monkeypatch.setenv("KAFKA_BOOTSTRAP_SERVERS", kafka_bootstrap_server)
         request_id = "REQ-INTEGRATION-NORMAL"
-        raw = json.dumps([_item(request_id)]).encode()
+        raw = json.dumps([valid_reimbursement_item(request_id)]).encode()
 
         with TestClient(app) as client:
             _post(client, raw)
