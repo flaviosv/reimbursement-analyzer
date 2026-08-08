@@ -91,7 +91,9 @@ class DescribeHandleMessage:
         )
 
         assert outcomes == [ItemOutcome.PUBLISHED] * 3
-        assert [row[0] for row in pool.inserted] == ["REQ-0", "REQ-1", "REQ-2"]
+        # Sorted, not positional: `inserted` is appended on completion, and
+        # completion order is explicitly non-deterministic (PUB-39).
+        assert sorted(row[0] for row in pool.inserted) == ["REQ-0", "REQ-1", "REQ-2"]
         assert len(producer.messages(REIMBURSEMENT_TOPIC)) == 3
 
     async def it_holds_at_most_the_configured_number_of_items_in_flight(self) -> None:
@@ -129,9 +131,30 @@ class DescribeHandleMessage:
         )
 
         assert outcomes == [ItemOutcome.PUBLISHED, ItemOutcome.REQUEUED, ItemOutcome.PUBLISHED]
-        assert [row[0] for row in pool.inserted] == ["REQ-0", "REQ-2"]
+        assert sorted(row[0] for row in pool.inserted) == ["REQ-0", "REQ-2"]
         assert [message["uuid"] for message in producer.messages(REIMBURSEMENT_TOPIC)] != []
         assert len(producer.messages(REIMBURSEMENT_TOPIC)) == 2
+
+    async def it_settles_every_item_correctly_when_they_complete_out_of_order(self) -> None:
+        items = [valid_reimbursement_item(f"REQ-{n}") for n in range(3)]
+        pool = FakePool(
+            insert_errors={"REQ-0": asyncpg.PostgresConnectionError("reset")},
+            insert_turns={"REQ-0": 4, "REQ-1": 2},
+        )
+        producer = FakeProducer()
+
+        outcomes = await handle_message(
+            _deps(pool, producer), _envelope(items).model_dump_json().encode()
+        )
+
+        # Completion runs REQ-2, REQ-1, REQ-0 — the reverse of submission — so
+        # an outcome list built in completion order would read
+        # [PUBLISHED, PUBLISHED, REQUEUED] instead.
+        assert [row[0] for row in pool.inserted] == ["REQ-2", "REQ-1"]
+        assert outcomes == [ItemOutcome.REQUEUED, ItemOutcome.PUBLISHED, ItemOutcome.PUBLISHED]
+        assert [
+            message["payload"][0]["request_id"] for message in producer.messages(REQUEST_TOPIC)
+        ] == ["REQ-0"]
 
 
 class DescribeTheReimbursementMessage:

@@ -80,15 +80,24 @@ class FakeConnection:
 class FakePool:
     """Stands in for an asyncpg pool. `insert_errors` fails the insert of the
     named request_ids only, so per-item independence can be exercised; the
-    in-flight counters record how many items hold a connection at once."""
+    in-flight counters record how many items hold a connection at once.
+
+    `insert_turns` holds the named request_ids for that many extra event-loop
+    turns, which reorders completion deterministically without a clock;
+    `insert_delay_seconds` gives every item the same real delay, so the shape
+    of the fan-out (concurrent vs. serialised) becomes observable."""
 
     def __init__(
         self,
         *,
         insert_errors: dict[str, Exception] | None = None,
+        insert_turns: dict[str, int] | None = None,
+        insert_delay_seconds: float = 0.0,
         acquire_error: Exception | None = None,
     ) -> None:
         self.insert_errors = insert_errors or {}
+        self.insert_turns = insert_turns or {}
+        self.insert_delay_seconds = insert_delay_seconds
         self.acquire_error = acquire_error
         self.inserted: list[tuple[Any, ...]] = []
         self.acquisitions = 0
@@ -99,7 +108,9 @@ class FakePool:
         return _FakeAcquisition(self)
 
     async def insert(self, args: tuple[Any, ...]) -> UUID:
-        await asyncio.sleep(0)
+        await asyncio.sleep(self.insert_delay_seconds)
+        for _ in range(self.insert_turns.get(args[0], 0)):
+            await asyncio.sleep(0)
         error = self.insert_errors.get(args[0])
         if error is not None:
             raise error
