@@ -4,10 +4,11 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from helpers import valid_reimbursement_item
+from shared.config import KafkaConfig
 
 from errors import register_handlers
-from kafka import get_producer
 from main import app as real_app
+from producer import get_kafka_config, get_producer
 from reimbursement.create.route import router
 
 VALID_ITEM = valid_reimbursement_item()
@@ -18,6 +19,7 @@ def _build_client(fake) -> TestClient:
     register_handlers(app)
     app.include_router(router)
     app.dependency_overrides[get_producer] = lambda: fake
+    app.dependency_overrides[get_kafka_config] = lambda: KafkaConfig()
     return TestClient(app)
 
 
@@ -122,7 +124,7 @@ class DescribeCreateReimbursement:
     def it_returns_413_and_publishes_nothing_for_an_oversized_body(
         self, immediate_fake_producer_class, monkeypatch
     ) -> None:
-        monkeypatch.setattr("payload.MAX_BODY_BYTES", 10)
+        monkeypatch.setattr("reimbursement.create.payload.MAX_BODY_BYTES", 10)
         fake = immediate_fake_producer_class()
         client = _build_client(fake)
 

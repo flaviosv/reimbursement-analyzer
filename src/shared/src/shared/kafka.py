@@ -1,32 +1,11 @@
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
 from confluent_kafka.aio import AIOProducer
 
-
-def producer_config(
-    bootstrap_servers: str,
-    message_max_bytes: int,
-    message_timeout_ms: int,
-    queue_buffering_max_kbytes: int | None = None,
-    security: dict[str, str] | None = None,
-) -> dict[str, Any]:
-    """Build the librdkafka config dict shared by every producer in this
-    project. Callers own their own topic/size/timeout/security values —
-    nothing here hardcodes a feature-specific number."""
-    config: dict[str, Any] = {
-        "bootstrap.servers": bootstrap_servers,
-        "acks": "all",
-        "enable.idempotence": True,
-        "message.max.bytes": message_max_bytes,
-        "message.timeout.ms": message_timeout_ms,
-    }
-    if queue_buffering_max_kbytes is not None:
-        config["queue.buffering.max.kbytes"] = queue_buffering_max_kbytes
-    if security:
-        config.update(security)
-    return config
+from shared.errors import PublishFailed
 
 
 @asynccontextmanager
@@ -48,3 +27,22 @@ async def managed_producer(
         yield producer
     finally:
         await producer.close()
+
+
+async def publish(producer: AIOProducer, topic: str, payload: bytes, timeout_seconds: float) -> None:
+    """Produce `payload` to `topic` and await the per-message delivery
+    Future. Raises PublishFailed on a broker error or on timeout — never a
+    bare exception, so every caller's error handling stays uniform.
+
+    Stateless and topic/domain-agnostic on purpose, so every layer that
+    needs to publish to Kafka shares this instead of re-implementing it.
+    Callers that need failure context beyond the exception's own message
+    (e.g. correlating business IDs to a delivery failure) should catch
+    PublishFailed and add that context themselves — this function has no
+    concept of what it's carrying.
+    """
+    try:
+        delivery_future = await producer.produce(topic=topic, value=payload)
+        await asyncio.wait_for(delivery_future, timeout=timeout_seconds)
+    except Exception as exc:
+        raise PublishFailed(f"{type(exc).__name__}: {exc}") from exc

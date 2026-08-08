@@ -3,7 +3,7 @@ from shared.config import MAX_BODY_BYTES
 from shared.errors import PayloadTooLarge
 from starlette.requests import Request
 
-from payload import _enforce_max_body_bytes, read_capped
+from reimbursement.create.payload import _enforce_max_body_bytes, read_capped
 
 
 class DescribeEnforceMaxBodyBytes:
@@ -45,7 +45,7 @@ class DescribeReadCapped:
         # tests cheap and independent of MAX_BODY_BYTES's real value,
         # matching the pattern test_route.py already uses.
         cap = 100
-        monkeypatch.setattr("payload.MAX_BODY_BYTES", cap)
+        monkeypatch.setattr("reimbursement.create.payload.MAX_BODY_BYTES", cap)
         return cap
 
     async def it_accepts_a_body_at_exactly_the_byte_limit(self, small_cap: int) -> None:

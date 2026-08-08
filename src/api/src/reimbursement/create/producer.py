@@ -1,14 +1,12 @@
-import asyncio
 import logging
 from datetime import UTC, datetime
 
 from confluent_kafka.aio import AIOProducer
-from shared.config import REQUEST_TOPIC
+from shared.config import REQUEST_TOPIC, KafkaConfig
 from shared.errors import PublishFailed
+from shared.kafka import publish as publish_to_kafka
 
 logger = logging.getLogger(__name__)
-
-PUBLISH_TIMEOUT_SECONDS = 10
 
 
 def build_envelope(raw: bytes, published_at: datetime) -> bytes:
@@ -22,21 +20,15 @@ def build_envelope(raw: bytes, published_at: datetime) -> bytes:
     return prefix + raw + b"}"
 
 
-async def publish(producer: AIOProducer, raw: bytes, request_ids: list[str]) -> None:
-    """Build the envelope, produce to REQUEST_TOPIC, and await the
-    per-message delivery Future. Raises PublishFailed on a broker error or
-    on timeout — never a bare exception, so the route's error handling stays
-    uniform."""
+async def publish(producer: AIOProducer, raw: bytes, request_ids: list[str], config: KafkaConfig) -> None:
+    """Build the envelope and hand it to shared.kafka.publish, the
+    technology-agnostic publisher. request_ids are never part of the
+    published payload — they exist only so a delivery failure can be logged
+    against the business IDs it affects."""
     envelope = build_envelope(raw, datetime.now(UTC))
     try:
-        delivery_future = await producer.produce(topic=REQUEST_TOPIC, value=envelope)
-        await asyncio.wait_for(delivery_future, timeout=PUBLISH_TIMEOUT_SECONDS)
-    except Exception as exc:
-        # The body is never logged — it may be up to MAX_BODY_BYTES and may
-        # carry PII. request_ids come from the already-validated batch.
-        # Broad on purpose (broker errors, timeouts, and anything else all
-        # collapse to one failure mode); the exception's own class name is
-        # folded into the message so responses/logs still identify which
-        # failure actually fired.
+        await publish_to_kafka(producer, REQUEST_TOPIC, envelope, config.publish_timeout_seconds)
+    except PublishFailed as exc:
+        # Body is never logged — may be up to MAX_BODY_BYTES and may carry PII.
         logger.error("failed to publish requests %s: %s", request_ids, exc)
-        raise PublishFailed(f"{type(exc).__name__}: {exc}") from exc
+        raise

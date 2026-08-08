@@ -122,7 +122,7 @@
 - Publish to Kafka the entire payload
 - **Payload**
     - Accept any payload with max size of 1mb (amended from the original
-      25mb — see AD-013 in .specs/STATE.md: sized against
+      25mb — see AD-020 in .specs/STATE.md: sized against
       docs/original/sample.json's ~381 byte average item and the 500-item
       batch cap, leaving ~5.5x headroom per item)
     - Those are the minimum required fields in order to have an acceptable payload
@@ -345,4 +345,4 @@
 # Technical Decisions
 - Use a Python library that retries automatically if fails
 - Make sure kafka can handle a 1mb message, to respect the validation
-  (amended from 25mb — see AD-013 in .specs/STATE.md)
+  (amended from 25mb — see AD-020 in .specs/STATE.md)

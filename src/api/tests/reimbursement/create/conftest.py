@@ -2,7 +2,7 @@ import asyncio
 from collections.abc import Iterator
 
 import pytest
-from shared.config import KAFKA_MAX_MESSAGE_BYTES
+from shared.config import KAFKA_MAX_MESSAGE_BYTES, KafkaConfig
 from testcontainers.community.kafka import KafkaContainer
 
 
@@ -33,6 +33,11 @@ def immediate_fake_producer_class() -> type[ImmediateFakeProducer]:
     # ambiguous under --import-mode=importlib. Fixtures resolve by pytest's
     # own directory scoping instead, sidestepping that entirely.
     return ImmediateFakeProducer
+
+
+@pytest.fixture
+def kafka_config() -> KafkaConfig:
+    return KafkaConfig()
 
 # SPEC_DEVIATION: pinned to testcontainers' own default image
 # (confluentinc/cp-kafka), not the compose broker (apache/kafka:4.3.1).

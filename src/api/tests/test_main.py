@@ -1,11 +1,12 @@
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
-from kafka import get_producer, lifespan_producer
+from main import lifespan
+from producer import get_producer
 
 # SPEC_DEVIATION: this file constructs a real, unmocked AIOProducer (via
-# lifespan_producer) targeting the default localhost:9092 bootstrap server,
-# with no Docker-gated container. Safe in a Docker-less CI run only because
+# lifespan) targeting the default localhost:9092 bootstrap server, with no
+# Docker-gated container. Safe in a Docker-less CI run only because
 # construction and .close() never actually publish anything — produce() is
 # never called against this app, only /producer-identity-check (no Kafka
 # I/O) — so a refused background connection (visible in stderr as librdkafka
@@ -13,7 +14,7 @@ from kafka import get_producer, lifespan_producer
 
 
 def _build_app() -> FastAPI:
-    app = FastAPI(lifespan=lifespan_producer)
+    app = FastAPI(lifespan=lifespan)
 
     @app.get("/producer-identity-check")
     def _check(producer=Depends(get_producer)) -> dict:
@@ -22,7 +23,7 @@ def _build_app() -> FastAPI:
     return app
 
 
-class DescribeLifespanProducer:
+class DescribeLifespan:
     def it_constructs_the_producer_with_batch_size_one(self) -> None:
         app = _build_app()
 
@@ -36,6 +37,12 @@ class DescribeLifespanProducer:
             assert app.state.producer._is_closed is False
 
         assert app.state.producer._is_closed is True
+
+    def it_sets_the_kafka_config_on_app_state(self) -> None:
+        app = _build_app()
+
+        with TestClient(app):
+            assert app.state.kafka_config.bootstrap_servers
 
 
 class DescribeGetProducer:
