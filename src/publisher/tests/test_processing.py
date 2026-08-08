@@ -62,6 +62,12 @@ def _events(caplog: pytest.LogCaptureFixture, level: int) -> list[dict[str, Any]
     ]
 
 
+def _requeued_raw(producer: FakeProducer) -> bytes:
+    """The exact bytes a requeue put back on `Request`, ready to be consumed
+    again — the round trip PUB-14 is about."""
+    return next(value for topic, value in producer.produced if topic == REQUEST_TOPIC)
+
+
 def _stdout_log(caplog: pytest.LogCaptureFixture) -> str:
     """Only the module's own records. The failure log is a separate logger and
     deliberately carries the payload verbatim (PUB-15 bounds stdout, not it)."""
@@ -331,6 +337,44 @@ class DescribeTheRequeue:
         logged = _stdout_log(caplog)
         assert "ana@company.com" not in logged
         assert "PostgresConnectionError" in logged
+
+    async def it_reprocesses_the_message_it_requeued_like_any_other(self) -> None:
+        item = valid_reimbursement_item("REQ-ROUND-TRIP")
+        first = FakeProducer()
+        await handle_message(
+            _deps(
+                FakePool(insert_errors={"REQ-ROUND-TRIP": asyncpg.PostgresConnectionError("reset")}),
+                first,
+            ),
+            _envelope([item]).model_dump_json().encode(),
+        )
+        pool, second = FakePool(), FakeProducer()
+
+        outcomes = await handle_message(_deps(pool, second), _requeued_raw(first))
+
+        assert outcomes == [ItemOutcome.PUBLISHED]
+        assert [row[0] for row in pool.inserted] == ["REQ-ROUND-TRIP"]
+        assert len(second.messages(REIMBURSEMENT_TOPIC)) == 1
+        assert second.messages(REQUEST_TOPIC) == []
+
+    async def it_carries_the_requeued_history_into_the_attempt_after_it(self) -> None:
+        item = valid_reimbursement_item("REQ-ROUND-TRIP-HISTORY")
+        insert_errors = {"REQ-ROUND-TRIP-HISTORY": asyncpg.PostgresConnectionError("reset")}
+        first = FakeProducer()
+        await handle_message(
+            _deps(FakePool(insert_errors=insert_errors), first),
+            _envelope([item]).model_dump_json().encode(),
+        )
+        second = FakeProducer()
+
+        await handle_message(
+            _deps(FakePool(insert_errors=insert_errors), second), _requeued_raw(first)
+        )
+
+        requeued = second.messages(REQUEST_TOPIC)[0]
+        assert requeued["retry"] == 2
+        assert [entry["attempt"] for entry in requeued["errors"]] == [1, 2]
+        assert requeued["payload"] == [item]
 
     async def it_identifies_the_failed_item_by_its_request_id(
         self, caplog: pytest.LogCaptureFixture
