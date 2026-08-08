@@ -17,7 +17,13 @@ def _truncated(value: Any, limit: int, depth: int = 0) -> Any:
     if isinstance(value, str):
         return value[:limit]
     if isinstance(value, dict):
-        return {key: _truncated(item, limit, depth + 1) for key, item in value.items()}
+        # Keys truncated too (S8): `extra="allow"` on ReimbursementRequest
+        # means an item's field *names* are as unbounded as its values —
+        # an oversized key would otherwise pass through this cap untouched.
+        return {
+            (key[:limit] if isinstance(key, str) else key): _truncated(item, limit, depth + 1)
+            for key, item in value.items()
+        }
     if isinstance(value, list):
         return [_truncated(item, limit, depth + 1) for item in value]
     return value

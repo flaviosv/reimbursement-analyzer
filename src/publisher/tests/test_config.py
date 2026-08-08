@@ -44,8 +44,8 @@ class DescribePublisherConfigToConsumerConfig:
 
         consumer_config = config.to_consumer_config(load_config().kafka)
 
-        assert config.max_poll_interval_ms == 300_000
-        assert consumer_config["max.poll.interval.ms"] == 300_000
+        assert config.max_poll_interval_ms == 900_000
+        assert consumer_config["max.poll.interval.ms"] == 900_000
 
     def it_sizes_both_fetch_limits_from_the_shared_message_ceiling(self) -> None:
         config = load_publisher_config()

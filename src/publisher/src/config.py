@@ -23,10 +23,13 @@ class PublisherConfig:
     # starvation under load (R-005).
     item_concurrency: int = 10
     consume_timeout_seconds: float = 1.0
-    # librdkafka's own default, stated rather than inherited: AD-013 sizes the
-    # 500-item cap and the concurrency of 10 against this budget, so the
-    # number it is sized against must be visible here (PUB-42).
-    max_poll_interval_ms: int = 300_000
+    # AD-013's "~400x headroom" was derived from a ~15ms happy-path per-item
+    # estimate only. The failure path is tighter: 500 items / 10 concurrent
+    # * a full 10s publish_timeout_seconds each (broker down, every publish
+    # times out) is 500s worst-case — which the previous 300_000 (5min)
+    # value did not cover (P2). 900_000 (15min) leaves real headroom above
+    # that 500s figure; see R-005's amended analysis.
+    max_poll_interval_ms: int = 900_000
 
     def to_consumer_config(self, kafka: KafkaConfig) -> dict[str, Any]:
         return {

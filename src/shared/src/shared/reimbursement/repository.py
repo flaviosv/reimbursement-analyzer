@@ -64,6 +64,7 @@ async def managed_pool(config: DatabaseConfig) -> AsyncIterator[asyncpg.Pool]:
         dsn=config.dsn,
         min_size=config.pool_min_size,
         max_size=config.pool_max_size,
+        command_timeout=config.command_timeout,
     )
     try:
         yield pool

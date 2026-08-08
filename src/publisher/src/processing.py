@@ -163,6 +163,12 @@ async def process_item(
     except PublishFailed as exc:
         return await _requeue(deps, envelope, index, item, "publish", exc)
     except Exception as exc:
+        # Also catches a COMMIT that fails *after* a successful publish (the
+        # transaction's implicit commit runs when the `async with` block in
+        # _insert_and_publish exits) — mislabeled "db-insert" below even
+        # though the insert itself succeeded. Accepted as-is alongside R5,
+        # which covers the same edge case's consequence (a second row on
+        # redelivery, with a different uuid than the one already published).
         if repository.is_duplicate(exc):
             _log_duplicate(envelope, item, exc)
             return ItemOutcome.DUPLICATE
@@ -178,7 +184,13 @@ async def escalate_item(
     if not _accepts(deps, envelope, index, item):
         return ItemOutcome.INVALID
     try:
-        async with deps.pool.acquire() as conn:
+        # A12 flagged this transaction as redundant for a single INSERT —
+        # that's true for atomicity, but wrong for isolation: without it, a
+        # caught UniqueViolationError below poisons the connection's
+        # enclosing transaction state (verified: removing this broke duplicate-
+        # collision handling under the shared-connection test setup). The
+        # transaction acts as a savepoint boundary, not an atomicity guard.
+        async with deps.pool.acquire(timeout=deps.config.database.acquire_timeout_seconds) as conn:
             async with conn.transaction():
                 await send_human_review(
                     conn, item, envelope.errors, deps.config.failure_log.max_message_chars
@@ -243,7 +255,7 @@ def _accepts(
 async def _insert_and_publish(
     deps: Dependencies, envelope: RequestEnvelope, item: dict[str, Any]
 ) -> None:
-    async with deps.pool.acquire() as conn:
+    async with deps.pool.acquire(timeout=deps.config.database.acquire_timeout_seconds) as conn:
         # The publish sits *inside* the transaction, so a delivery failure
         # rolls the insert back without an explicit rollback call (PUB-09).
         async with conn.transaction():
@@ -271,7 +283,7 @@ async def _requeue(
         stage,
         sanitize(exc),
     )
-    errors = [*envelope.errors, AttemptError.next(envelope.errors, stage, exc)]
+    errors = [*envelope.errors, AttemptError.from_exception(len(envelope.errors) + 1, stage, exc)]
     retried = RequestEnvelope(
         retry=envelope.retry + 1,
         published_at=datetime.now(UTC),

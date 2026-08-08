@@ -61,6 +61,21 @@ class DescribeWrite:
 
         assert _emitted(caplog)[0]["detail"] == "x" * CONFIG.max_message_chars
 
+    def it_truncates_an_oversized_dict_key_not_only_its_values(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # extra="allow" on ReimbursementRequest means an item's field *names*
+        # are as unbounded as its values — only truncating values left an
+        # oversized key untouched (S8).
+        record = _record() | {"y" * 500: "value"}
+
+        with caplog.at_level(logging.CRITICAL, logger=CONFIG.logger_name):
+            failure_log.write(CONFIG, record)
+
+        keys = _emitted(caplog)[0].keys()
+        assert all(len(key) <= CONFIG.max_message_chars for key in keys)
+        assert "y" * CONFIG.max_message_chars in keys
+
     def it_truncates_nested_messages_inside_the_error_history(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:

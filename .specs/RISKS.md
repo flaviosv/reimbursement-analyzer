@@ -300,11 +300,36 @@ that is expensive to diagnose in production.
 
 1. Measure real per-item latency under load and re-derive both numbers from it
    rather than from an estimate.
-2. Make concurrency configurable and assert at startup that it does not exceed
-   the configured DB pool size — turning a silent starvation mode into a
-   refuse-to-boot.
+2. ~~Make concurrency configurable and assert at startup that it does not
+   exceed the configured DB pool size~~ — **done**: `PUBLISHER_ITEM_CONCURRENCY`
+   and `DATABASE_POOL_MAX_SIZE` are both env-configurable, and
+   `check_startup_config` refuses to boot when the pool cannot cover the
+   concurrency (previously dead code — both were hardcoded literals that
+   could never disagree).
 3. Alert on processing time per message as a fraction of `max.poll.interval.ms`,
    so the headroom is observable before it is exhausted rather than after.
+
+### Addendum 2026-08-08 — the "~400x headroom" figure only covers the happy
+path; the failure-path worst case was tighter than `max.poll.interval.ms`
+
+The `500 ÷ 10 × ~15ms` estimate above assumes every item succeeds quickly.
+The failure path has its own, much larger budget: a publish that never gets
+a delivery report waits the full `publish_timeout_seconds` (10s) before
+failing over. Worst case — broker unreachable, every publish times out —
+is `⌈500 ÷ 10⌉ × 10s = 500s` (~8.3 minutes). The previous
+`max.poll.interval.ms` of `300_000` (5 minutes) did **not** cover this: a
+sustained broker outage during a ceiling-sized batch would have triggered
+the exact rebalance-thrashing failure mode this section already describes
+as expensive to diagnose (found independently as **P2** in code review).
+
+**Fix applied:** `max_poll_interval_ms` raised to `900_000` (15 minutes),
+which leaves genuine headroom above the 500s worst case. This is a
+config-only change (`src/publisher/src/config.py`) — it does not touch the
+500-item cap or the concurrency of 10, and it costs only a slower detection
+window for a genuinely dead consumer, which the offset-uncommitted design
+already tolerates (redelivery is safe, per the duplicate path). The
+happy-path "~400x" language elsewhere (`spec.md`'s Edge Cases section) is
+corrected to note this is a happy-path-only figure.
 
 ---
 
