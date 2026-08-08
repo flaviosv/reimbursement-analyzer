@@ -1,5 +1,5 @@
 import asyncpg
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from shared.config import load_config
 
 from dependencies import get_pool
@@ -34,6 +34,12 @@ def _single_status_param(request: Request) -> str | None:
 )
 async def get_reimbursements(
     request: Request,
+    status: str | None = Query(
+        None,
+        description="Comma-separated reimbursement statuses to filter by. "
+        "Must be supplied as a single query parameter (AD-028); repeating "
+        "`status` is rejected.",
+    ),
     limit: LimitQuery = 100,
     offset: OffsetQuery = 0,
     pool: asyncpg.Pool = Depends(get_pool),
