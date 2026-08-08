@@ -184,7 +184,12 @@ class DescribeGetReimbursement:
         request_ids = {item["request_id"] for item in response.json()["data"]}
         assert {"REQ-ALL-PENDING", "REQ-ALL-APPROVED"} == request_ids
 
-    async def it_returns_400_for_an_invalid_status_value(self, db: asyncpg.Connection) -> None:
+    async def it_returns_400_for_pending_status_excluded_from_the_client_facing_whitelist(
+        self, db: asyncpg.Connection
+    ) -> None:
+        # "pending" is a real status column value (AD-003, see
+        # shared/src/shared/reimbursement/use_cases/list_reimbursements.py),
+        # deliberately excluded from the client-facing status whitelist.
         async with _build_client(FakePool(db)) as client:
             response = await client.get("/api/v1/reimbursement", params={"status": "pending"})
 
