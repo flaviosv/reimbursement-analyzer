@@ -166,8 +166,10 @@ T7 → T8 → T9
 
 **Done when**:
 - [ ] `dependencies.get_pool` added, identical shape to `get_producer`
-- [ ] `main.lifespan` nests `async with managed_pool(load_config().database) as pool:` inside the existing producer block, sets `app.state.pool`
-- [ ] Code compiles and imports cleanly (no route yet exercises it — real end-to-end proof is merge-forwarded into T9's `DescribeTheRealApp`, per the Test Co-location "resolving compilation dependencies" rule: nothing observable exists to test here in isolation until a route uses the pool)
+- [ ] `main.lifespan` nests `async with managed_pool(replace(load_config().database, pool_min_size=0)) as pool:` inside the existing producer block, sets `app.state.pool` — **`pool_min_size=0` is required, not optional**: `asyncpg.create_pool()` eagerly pre-connects `min_size` real connections at construction (unlike `AIOProducer`'s lazy connect), so without this override, lifespan construction hard-fails the moment no reachable/authenticated Postgres is present, breaking `test_health.py`/`test_main.py`/`create/test_route.py::DescribeTheRealApp` — none of which are in this task's or any other task's file list. `replace()` overrides the field for this call site only; `shared.config.DatabaseConfig`'s default (`pool_min_size=2`, used by the publisher per AD-017) is untouched. See `design.md`'s `main.lifespan` component and Risks & Concerns for the full diagnosis (discovered during Execute).
+- [ ] `main.py` imports `from dataclasses import replace`
+- [ ] `test_health.py`, `test_main.py`, `create/test_route.py::DescribeTheRealApp` still pass unmodified — confirms the pool is genuinely lazy, not just "happens to work here"
+- [ ] Code compiles and imports cleanly (no route yet exercises the pool's actual queries — real end-to-end proof of a route using it is merge-forwarded into T9's `DescribeTheRealApp`, per the Test Co-location "resolving compilation dependencies" rule)
 - [ ] Gate check passes: `uv run pytest -m "not integration"` (no new DB-touching test at this task; the real wiring proof lands in T9)
 
 **Tests**: none (merge-forward to T9 — see Done when)
