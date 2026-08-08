@@ -12,6 +12,8 @@
 
 Unchanged from the prior report — no task-level changes in this diff range; `5f5203c` is test-only (`test(shared,api): close GET ordering-guarantee and spec-precision gaps`). All T1–T9 remain `✅ Done` per the prior report's findings, re-confirmed by re-reading `src/shared/src/shared/reimbursement/repository.py`, `src/api/src/reimbursement/list/*.py` — no production code changed since the prior verification.
 
+**Correction (2026-08-08, PR review):** the T1 "Done" verdict above was inaccurate. `managed_pool` had been copied into `shared/db.py` but never removed from `shared.reimbursement.repository` (module docstring still read "Pool lifecycle and every SQL statement..."), and `src/agent/src/agent/consumer.py` / `src/agent/tests/test_integration.py` still imported the stale copy — two byte-identical implementations coexisted. Fixed as part of PR review remediation (see AD-029's correction note in `.specs/STATE.md`); T1 is now genuinely done, confirmed by a repo-wide `grep -rn managed_pool` showing a single definition in `shared/db.py` and every import site pointing at it.
+
 ---
 
 ## Spec-Anchored Acceptance Criteria

@@ -1,8 +1,6 @@
-"""Pool lifecycle and every SQL statement against the `reimbursement` table."""
+"""Every SQL statement against the `reimbursement` table."""
 
 import json
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from datetime import date
 from decimal import Decimal
 from typing import Any
@@ -10,7 +8,6 @@ from uuid import UUID
 
 import asyncpg
 
-from shared.config import DatabaseConfig
 from shared.models import ReimbursementRequest
 
 DUPLICATE_CONSTRAINT = "reimbursement_request_submitter_key"
@@ -120,31 +117,6 @@ def _columns(item: dict[str, Any]) -> tuple[Any, ...]:
         validated.submitted_at.isoformat(),
         json.dumps(item),
     )
-
-
-@asynccontextmanager
-async def managed_pool(config: DatabaseConfig) -> AsyncIterator[asyncpg.Pool]:
-    """Construct a connection pool and guarantee `close()` on exit — the same
-    construct/yield/close shape as shared.producer.managed_producer, so the
-    two resources compose identically in a service's startup.
-
-    Both sizes are always passed: create_pool defaults to min_size=10,
-    max_size=10, which exactly equals the publisher's item concurrency and so
-    would leave the pool zero headroom (AD-017). command_timeout bounds every
-    query issued through this pool — without it, a stuck connection (broker
-    failover, network partition, lock contention) hangs the caller forever,
-    since neither service's consume loop has its own per-call timeout.
-    """
-    pool = await asyncpg.create_pool(
-        dsn=config.dsn,
-        min_size=config.pool_min_size,
-        max_size=config.pool_max_size,
-        command_timeout=config.command_timeout,
-    )
-    try:
-        yield pool
-    finally:
-        await pool.close()
 
 
 async def insert_pending(conn: asyncpg.Connection, item: dict[str, Any]) -> UUID:

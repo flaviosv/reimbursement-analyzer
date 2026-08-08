@@ -14,7 +14,6 @@ from shared.reimbursement.repository import (
     insert_human_review,
     insert_pending,
     is_duplicate,
-    managed_pool,
     record_human_review_decision,
     reject,
     update_human_review,

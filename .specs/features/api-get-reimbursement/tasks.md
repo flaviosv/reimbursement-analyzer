@@ -81,8 +81,11 @@ T7 → T8 → T9
 
 ### T1: Relocate `managed_pool` to `shared/db.py` (AD-029)
 
-**What**: Move `managed_pool()` out of `shared.reimbursement.repository` into a new `shared/db.py`; update the repository module's docstring; update the two existing import sites; relocate the existing `DescribeManagedPool` test class.
-**Where**: `src/shared/src/shared/db.py` (new), `src/shared/src/shared/reimbursement/repository.py` (modify), `src/publisher/src/consumer.py` (modify import), `src/publisher/tests/test_integration.py` (modify import), `src/shared/tests/test_db.py` (new, relocated test class), `src/shared/tests/reimbursement/test_repository.py` (modify — remove `DescribeManagedPool`)
+**What**: Move `managed_pool()` out of `shared.reimbursement.repository` into a new `shared/db.py`; update the repository module's docstring; update every existing import site; relocate the existing `DescribeManagedPool` test class.
+
+**Correction (2026-08-08, PR review):** the original task text and STATE.md's AD-029 record inventoried only two import sites (`src/publisher/src/consumer.py`, `src/publisher/tests/test_integration.py`) plus the test file's import. That inventory was incomplete — `src/agent/src/agent/consumer.py` and `src/agent/tests/test_integration.py` also imported `managed_pool` from `shared.reimbursement.repository` and were missed by the original relocation, leaving a duplicate, byte-identical `managed_pool` in both modules. Both are now included below and updated.
+
+**Where**: `src/shared/src/shared/db.py` (new), `src/shared/src/shared/reimbursement/repository.py` (modify), `src/publisher/src/consumer.py` (modify import), `src/publisher/tests/test_integration.py` (modify import), `src/agent/src/agent/consumer.py` (modify import), `src/agent/tests/test_integration.py` (modify import), `src/shared/tests/test_db.py` (new, relocated test class), `src/shared/tests/reimbursement/test_repository.py` (modify — remove `DescribeManagedPool`)
 **Depends on**: None
 **Reuses**: `managed_pool`'s existing implementation verbatim (pure relocation, no logic change) — `shared.producer.managed_producer` as the structural precedent this now matches.
 **Requirement**: AD-029 (infrastructure prerequisite, not a spec AC)
@@ -96,6 +99,9 @@ T7 → T8 → T9
 - [x] `shared.reimbursement.repository` no longer defines or imports `managed_pool`; its module docstring reads "every SQL statement against the reimbursement table" (drops "pool lifecycle")
 - [x] `src/publisher/src/consumer.py` imports `managed_pool` from `shared.db`
 - [x] `src/publisher/tests/test_integration.py` imports `managed_pool` from `shared.db`
+- [x] `src/agent/src/agent/consumer.py` imports `managed_pool` from `shared.db`
+- [x] `src/agent/tests/test_integration.py` imports `managed_pool` from `shared.db`
+- [x] Repo-wide grep for `managed_pool` shows exactly one definition (`shared/db.py`), no definition remains in `shared/reimbursement/repository.py`
 - [x] `src/shared/tests/test_db.py::DescribeManagedPool` exists with both original test methods, unmodified in content
 - [x] `src/shared/tests/reimbursement/test_repository.py` no longer contains `DescribeManagedPool`
 - [x] Full existing `publisher` + `shared` suites still pass — not just this task's new/moved tests (this touches already-shipped, independently-verified code)

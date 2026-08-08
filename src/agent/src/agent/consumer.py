@@ -12,8 +12,8 @@ from contextlib import asynccontextmanager
 from confluent_kafka.aio import AIOConsumer
 from dotenv import load_dotenv
 from shared.config import REIMBURSEMENT_TOPIC, Config, load_config
+from shared.db import managed_pool
 from shared.producer import managed_producer
-from shared.reimbursement.repository import managed_pool
 from shared.signals import install_shutdown_handlers
 
 from agent.config import AgentConfig, load_agent_config

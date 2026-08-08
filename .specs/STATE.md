@@ -887,8 +887,9 @@ placement inconsistency in already-shipped code
 (`publisher-consume-request`, AD-017/AD-025's persistence layer), not a new
 pattern being introduced for the new features alone.
 
-**Implication:** three existing import sites move: `src/publisher/src/consumer.py`,
-`src/publisher/tests/test_integration.py`, and
+**Implication:** existing import sites move: `src/publisher/src/consumer.py`,
+`src/publisher/tests/test_integration.py`, `src/agent/src/agent/consumer.py`,
+`src/agent/tests/test_integration.py`, and
 `src/shared/tests/reimbursement/test_repository.py` (its `DescribeManagedPool`
 test class relocates to a new `src/shared/tests/test_db.py`, matching the
 1:1 test-mirrors-source convention AD-009 established). Pure relocation, no
@@ -896,6 +897,18 @@ behavior change. Any future domain package needing DB access imports
 `shared.db.managed_pool`, never a sibling domain's repository module. This
 is a prerequisite refactor task for whichever of `api-get-reimbursement`/
 `api-put-reimbursement` is implemented first.
+
+**Correction (2026-08-08, PR review):** this record originally inventoried
+only three import sites and omitted `src/agent/src/agent/consumer.py` and
+`src/agent/tests/test_integration.py`, both of which also imported
+`managed_pool` from `shared.reimbursement.repository`. The initial
+implementation of this task moved the two publisher sites and the test
+class but left the original `managed_pool` definition and both agent
+import sites untouched, producing a duplicate, byte-identical
+implementation. Fixed as part of PR review remediation: the duplicate
+definition is deleted from `shared.reimbursement.repository`, both agent
+import sites now import from `shared.db`, and a repo-wide grep confirms a
+single definition remains.
 
 ---
 
