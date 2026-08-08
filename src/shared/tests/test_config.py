@@ -98,6 +98,14 @@ class DescribeDatabaseConfig:
 
         assert config.database.dsn == "postgresql://user:pw@db:5432/reimbursementanalyzer"
 
+    def it_bounds_every_query_at_ten_seconds(self) -> None:
+        # Without a command_timeout, a stuck connection (broker failover,
+        # network partition, lock contention) hangs the caller forever --
+        # neither service's consume loop has its own per-call timeout.
+        config = load_config()
+
+        assert config.database.command_timeout == 10.0
+
     def it_sizes_the_pool_explicitly_rather_than_at_asyncpg_defaults(self) -> None:
         config = load_config()
 

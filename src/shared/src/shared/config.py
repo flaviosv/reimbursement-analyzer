@@ -58,6 +58,7 @@ class DatabaseConfig:
     dsn: str | None
     pool_min_size: int
     pool_max_size: int
+    command_timeout: float = 10.0
 
 
 @dataclass(frozen=True)

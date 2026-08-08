@@ -57,12 +57,16 @@ async def managed_pool(config: DatabaseConfig) -> AsyncIterator[asyncpg.Pool]:
 
     Both sizes are always passed: create_pool defaults to min_size=10,
     max_size=10, which exactly equals the publisher's item concurrency and so
-    would leave the pool zero headroom (AD-017).
+    would leave the pool zero headroom (AD-017). command_timeout bounds every
+    query issued through this pool — without it, a stuck connection (broker
+    failover, network partition, lock contention) hangs the caller forever,
+    since neither service's consume loop has its own per-call timeout.
     """
     pool = await asyncpg.create_pool(
         dsn=config.dsn,
         min_size=config.pool_min_size,
         max_size=config.pool_max_size,
+        command_timeout=config.command_timeout,
     )
     try:
         yield pool
