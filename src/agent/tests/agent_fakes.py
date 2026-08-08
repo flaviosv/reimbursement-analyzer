@@ -83,7 +83,7 @@ class FakePool:
         self.updated: dict[UUID, str] = {}
         self.acquisitions = 0
 
-    def acquire(self) -> _FakeAcquisition:
+    def acquire(self, *, timeout: float | None = None) -> _FakeAcquisition:
         return _FakeAcquisition(self)
 
     async def get(self, uuid: UUID) -> dict[str, Any] | None:

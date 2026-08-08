@@ -231,7 +231,7 @@ Recorded in the spec's Assumptions & Open Questions table:
   what arrives on `Request` and establish the producer patterns this feature
   reuses (`acks=all`, idempotence, per-message delivery await, timeout
   ordering).
-- `src/api/src/api/migrations/0001.create-reimbursement.sql` is the schema of
+- `src/api/src/migrations/0001.create-reimbursement.sql` is the schema of
   record — constraints, unique index, status default.
 - `.specs/RISKS.md` R-001 through R-004 hold everything knowingly deferred.
 - `.specs/STATE.md` AD-005 is the precedent for correcting `SCOPE.md` against

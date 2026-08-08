@@ -58,6 +58,12 @@ class DatabaseConfig:
     dsn: str | None
     pool_min_size: int
     pool_max_size: int
+    # Neither bounded before: a wedged Postgres blocked a coroutine
+    # forever, with nothing to raise and nothing to time out.
+    # acquire_timeout_seconds bounds the wait for a free pool connection;
+    # command_timeout (passed to asyncpg.create_pool) bounds every query
+    # run through it.
+    acquire_timeout_seconds: float = 10.0
     command_timeout: float = 10.0
 
 
@@ -68,56 +74,19 @@ class FailureLogConfig:
 
 
 @dataclass(frozen=True)
-class PublisherConfig:
-    consumer_group_id: str
-    item_concurrency: int = 10
-    consume_timeout_seconds: float = 1.0
-    # librdkafka's own default, stated rather than inherited: AD-013 sizes the
-    # 500-item cap and the concurrency of 10 against this budget, so the
-    # number it is sized against must be visible here (PUB-42).
-    max_poll_interval_ms: int = 300_000
-
-    def to_consumer_config(self, kafka: KafkaConfig) -> dict[str, Any]:
-        return {
-            "bootstrap.servers": kafka.bootstrap_servers,
-            "group.id": self.consumer_group_id,
-            "auto.offset.reset": "earliest",
-            # At librdkafka's default of true, offsets commit on a ~5s timer
-            # regardless of whether their items settled — a crash mid-batch
-            # would silently skip unprocessed items.
-            "enable.auto.commit": False,
-            "max.poll.interval.ms": self.max_poll_interval_ms,
-            "fetch.max.bytes": KAFKA_MAX_MESSAGE_BYTES,
-            "max.partition.fetch.bytes": KAFKA_MAX_MESSAGE_BYTES,
-            **kafka.security_config(),
-        }
-
-
-@dataclass(frozen=True)
-class AgentConfig:
-    consumer_group_id: str
-    consume_timeout_seconds: float = 1.0
-
-    def to_consumer_config(self, kafka: KafkaConfig) -> dict[str, Any]:
-        # No fetch.max.bytes/max.partition.fetch.bytes override, unlike
-        # PublisherConfig: Reimbursement messages are small, fixed-shape
-        # envelopes, so librdkafka's default fetch sizing is sufficient.
-        return {
-            "bootstrap.servers": kafka.bootstrap_servers,
-            "group.id": self.consumer_group_id,
-            "auto.offset.reset": "earliest",
-            "enable.auto.commit": False,
-            **kafka.security_config(),
-        }
-
-
-@dataclass(frozen=True)
 class Config:
+    """Process-wide settings every service constructs.
+
+    Deliberately holds only what a second service could plausibly need too
+    (`database`/`failure_log` are claimed by both `publisher` and `agent`,
+    per AD-025). Single-service tuning — e.g. the publisher's own consumer
+    group/concurrency, or the agent's own — lives in that service's own
+    package instead; see `src/publisher/src/config.py` and
+    `src/agent/src/agent/config.py`."""
+
     kafka: KafkaConfig
     database: DatabaseConfig
     failure_log: FailureLogConfig
-    publisher: PublisherConfig
-    agent: AgentConfig
 
 
 @lru_cache(maxsize=1)
@@ -137,21 +106,19 @@ def load_config() -> Config:
         ),
         # os.getenv, never os.environ[...]: this loader is process-wide and
         # cached, so an unconditional read would make DATABASE_URL mandatory
-        # for api too, which never touches Postgres. The publisher validates
-        # presence at its own startup.
+        # for api too, which never touches Postgres. The publisher/agent
+        # validate presence at their own startup.
         database=DatabaseConfig(
             dsn=os.getenv("DATABASE_URL"),
             pool_min_size=2,
-            pool_max_size=20,
+            # Configurable, not just a literal, so a deployment that raises
+            # PUBLISHER_ITEM_CONCURRENCY without raising this in step is a
+            # startup failure (check_startup_config) rather than silent
+            # connection starvation under load (R-005).
+            pool_max_size=int(os.getenv("DATABASE_POOL_MAX_SIZE", "20")),
         ),
         failure_log=FailureLogConfig(
             logger_name="reimbursementanalyzer.failures",
             max_message_chars=2000,
-        ),
-        publisher=PublisherConfig(
-            consumer_group_id=os.getenv("PUBLISHER_CONSUMER_GROUP_ID", "publisher"),
-        ),
-        agent=AgentConfig(
-            consumer_group_id=os.getenv("AGENT_CONSUMER_GROUP_ID", "agent"),
         ),
     )

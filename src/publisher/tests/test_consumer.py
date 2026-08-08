@@ -8,6 +8,7 @@ from typing import Any
 
 import consumer as consumer_module
 import pytest
+from config import PublisherConfig, load_publisher_config
 from consumer import _install_signal_handlers, check_startup_config, managed_consumer, run
 from fakes import FakePool, FakeProducer
 from helpers import valid_reimbursement_item
@@ -133,8 +134,18 @@ def _armed_signal_handlers(stopping: asyncio.Event) -> Iterator[None]:
         signal.signal(signal.SIGTERM, previous)
 
 
-def _deps(pool: Any, producer: Any, config: Config | None = None) -> Dependencies:
-    return Dependencies(config=config or load_config(), pool=pool, producer=producer)
+def _deps(
+    pool: Any,
+    producer: Any,
+    config: Config | None = None,
+    publisher: PublisherConfig | None = None,
+) -> Dependencies:
+    return Dependencies(
+        config=config or load_config(),
+        publisher=publisher or load_publisher_config(),
+        pool=pool,
+        producer=producer,
+    )
 
 
 def _message(request_ids: list[str], *, retry: int = 0) -> FakeMessage:
@@ -152,30 +163,47 @@ def _with_dsn(config: Config, dsn: str | None) -> Config:
 
 class DescribeTheStartupCheck:
     def it_refuses_to_boot_when_the_pool_cannot_cover_the_item_concurrency(self) -> None:
-        config = load_config()
-        starved = replace(
-            _with_dsn(config, "postgresql://localhost/x"),
-            database=replace(config.database, dsn="postgresql://localhost/x", pool_max_size=4),
-            publisher=replace(config.publisher, item_concurrency=10),
-        )
+        config = _with_dsn(load_config(), "postgresql://localhost/x")
+        starved = replace(config, database=replace(config.database, pool_max_size=4))
+        publisher = replace(load_publisher_config(), item_concurrency=10)
 
         with pytest.raises(RuntimeError) as caught:
-            check_startup_config(starved)
+            check_startup_config(starved, publisher)
 
         assert "4" in str(caught.value)
         assert "10" in str(caught.value)
 
     def it_refuses_to_boot_when_the_database_url_is_unset(self) -> None:
         with pytest.raises(RuntimeError) as caught:
-            check_startup_config(_with_dsn(load_config(), None))
+            check_startup_config(_with_dsn(load_config(), None), load_publisher_config())
 
         assert "DATABASE_URL" in str(caught.value)
 
     def it_boots_on_the_shipped_configuration(self) -> None:
         config = load_config()
+        publisher = load_publisher_config()
 
-        assert config.database.pool_max_size >= config.publisher.item_concurrency
-        assert check_startup_config(_with_dsn(config, "postgresql://localhost/x")) is None
+        assert config.database.pool_max_size >= publisher.item_concurrency
+        assert check_startup_config(_with_dsn(config, "postgresql://localhost/x"), publisher) is None
+
+    def it_refuses_to_boot_when_env_raises_concurrency_past_the_pool(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The guard this class exercises was previously unfailable in any
+        # deployment: pool_max_size and item_concurrency were both hardcoded
+        # literals, so the RuntimeError branch was dead code. Both are
+        # env-driven now — this proves the guard can actually fire.
+        monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/x")
+        monkeypatch.setenv("DATABASE_POOL_MAX_SIZE", "5")
+        monkeypatch.setenv("PUBLISHER_ITEM_CONCURRENCY", "10")
+        load_config.cache_clear()
+        load_publisher_config.cache_clear()
+
+        with pytest.raises(RuntimeError) as caught:
+            check_startup_config(load_config(), load_publisher_config())
+
+        assert "5" in str(caught.value)
+        assert "10" in str(caught.value)
 
 
 class DescribeTheConsumerLifecycle:
@@ -193,7 +221,7 @@ class DescribeTheConsumerLifecycle:
 
         monkeypatch.setattr(consumer_module, "AIOConsumer", LoopRecordingConsumer)
 
-        async with managed_consumer(load_config()):
+        async with managed_consumer(load_config(), load_publisher_config()):
             pass
 
         assert bound == [asyncio.get_running_loop()]
@@ -204,7 +232,7 @@ class DescribeTheConsumerLifecycle:
         built = FakeConsumer([])
         monkeypatch.setattr(consumer_module, "AIOConsumer", lambda config: built)
 
-        async with managed_consumer(load_config()) as opened:
+        async with managed_consumer(load_config(), load_publisher_config()) as opened:
             assert opened is built
             assert built.subscribed == [[REQUEST_TOPIC]]
             assert built.closed is False
@@ -219,7 +247,7 @@ class DescribeTheLoop:
 
         await run(_deps(FakePool(), FakeProducer()), consumer, stopping)
 
-        timeout = load_config().publisher.consume_timeout_seconds
+        timeout = load_publisher_config().consume_timeout_seconds
         assert consumer.consume_kwargs[0] == {"num_messages": 1, "timeout": timeout}
 
     async def it_commits_the_offset_exactly_once_for_a_handled_message(self) -> None:
@@ -341,3 +369,36 @@ class DescribeTheLoop:
             await task
 
         assert consumer.commits == []
+
+    async def it_keeps_consuming_after_a_null_valued_record(self) -> None:
+        # A tombstone/null-value record used to crash the loop permanently:
+        # handle_message called raw.decode() on None.
+        stopping = asyncio.Event()
+        good = _message(["REQ-AFTER-NULL"])
+        consumer = FakeConsumer(
+            [[FakeMessage(value=None)], [good]], stopping=stopping, stop_after=3
+        )
+        pool = FakePool()
+
+        await run(_deps(pool, FakeProducer()), consumer, stopping)
+
+        assert [row[0] for row in pool.inserted] == ["REQ-AFTER-NULL"]
+        assert len(consumer.commits) == 2
+
+    async def it_survives_handle_message_violating_its_never_raises_contract(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Defence in depth: handle_message is documented never to raise
+        # (PUB-32), but nothing enforced that before — a violation would have
+        # taken the whole consume loop down with it.
+        stopping = asyncio.Event()
+        consumer = FakeConsumer([[_message(["REQ-1"])], [_message(["REQ-2"])]], stopping=stopping, stop_after=3)
+
+        async def _raises(deps: Any, raw: Any) -> list[Any]:
+            raise RuntimeError("handle_message broke its contract")
+
+        monkeypatch.setattr(consumer_module, "handle_message", _raises)
+
+        await run(_deps(FakePool(), FakeProducer()), consumer, stopping)
+
+        assert len(consumer.commits) == 2

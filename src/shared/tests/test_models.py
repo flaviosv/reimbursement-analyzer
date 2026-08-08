@@ -55,22 +55,30 @@ class DescribeAttemptError:
             )
 
 
-class DescribeAttemptErrorNext:
-    def it_numbers_the_entry_one_past_the_existing_history(self) -> None:
-        history = [_entry(1), _entry(2)]
-
-        entry = AttemptError.next(history, "publish", RuntimeError("boom"))
+class DescribeAttemptErrorFromException:
+    def it_records_the_attempt_number_it_is_given(self) -> None:
+        entry = AttemptError.from_exception(3, "publish", RuntimeError("boom"))
 
         assert entry.attempt == 3
 
-    def it_stamps_an_aware_utc_timestamp(self) -> None:
-        entry = AttemptError.next([], "db-insert", RuntimeError("boom"))
+    def it_stamps_an_aware_utc_timestamp_by_default(self) -> None:
+        entry = AttemptError.from_exception(1, "db-insert", RuntimeError("boom"))
 
         assert entry.occurred_at.tzinfo is not None
         assert entry.occurred_at.utcoffset() == timedelta(0)
 
+    def it_accepts_an_explicit_occurred_at_instead_of_reading_the_clock(self) -> None:
+        # A pure wire-contract module reading the wall clock internally would
+        # make every caller's result time-dependent; this is the escape
+        # hatch — production omits it, a test that cares can pin it.
+        stamp = datetime(2026, 4, 10, 9, 15, 0, tzinfo=UTC)
+
+        entry = AttemptError.from_exception(1, "db-insert", RuntimeError("boom"), occurred_at=stamp)
+
+        assert entry.occurred_at == stamp
+
     def it_takes_the_stage_the_error_type_and_the_message_from_the_exception(self) -> None:
-        entry = AttemptError.next([], "db-insert", ValueError("bad column"))
+        entry = AttemptError.from_exception(1, "db-insert", ValueError("bad column"))
 
         assert entry.stage == "db-insert"
         assert entry.error_type == "ValueError"
@@ -80,15 +88,39 @@ class DescribeAttemptErrorNext:
         history: list[AttemptError] = []
 
         for stage in ("db-insert", "publish", "db-insert"):
-            history.append(AttemptError.next(history, stage, RuntimeError("boom")))
+            history.append(AttemptError.from_exception(len(history) + 1, stage, RuntimeError("boom")))
 
         assert [entry.attempt for entry in history] == [1, 2, 3]
         assert [entry.stage for entry in history] == ["db-insert", "publish", "db-insert"]
 
     def it_accepts_the_agent_resolve_stage(self) -> None:
-        entry = AttemptError.next([], "resolve", RuntimeError("boom"))
+        entry = AttemptError.from_exception(1, "resolve", RuntimeError("boom"))
 
         assert entry.stage == "resolve"
+
+
+class DescribeRequestEnvelopeBounds:
+    def it_rejects_a_negative_retry(self) -> None:
+        # retry is envelope-level protocol state, not attacker-facing input
+        # (the public API always starts a fresh envelope at retry=0) — but a
+        # directly-produced or hand-crafted message on the Request topic
+        # should not be able to send this negative.
+        with pytest.raises(ValidationError):
+            RequestEnvelope(retry=-1, published_at=datetime.now(UTC), payload=[])
+
+    def it_rejects_a_payload_longer_than_the_shared_batch_ceiling(self) -> None:
+        # The API enforces MAX_BATCH_ITEMS at ingress, but the publisher
+        # cannot assume every producer onto this topic is the API — its own
+        # requeue path is one, a directly-produced message is another — so
+        # it re-asserts the same cap at its own trust boundary.
+        from shared.config import MAX_BATCH_ITEMS
+
+        with pytest.raises(ValidationError):
+            RequestEnvelope(
+                retry=0,
+                published_at=datetime.now(UTC),
+                payload=[{"request_id": f"REQ-{n}"} for n in range(MAX_BATCH_ITEMS + 1)],
+            )
 
 
 class DescribeRequestEnvelopeErrors:

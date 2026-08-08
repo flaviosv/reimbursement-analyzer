@@ -34,8 +34,12 @@ python_functions = ["it_*"]
 # both are virtual (uninstalled) workspace members (see their pyproject.toml
 # files), so their modules are only importable via these explicit paths, not
 # via a normal package install. Both sit on one sys.path and expose bare
-# module names, so publisher's must stay clear of api's
-# {dependencies, errors, main, migrate} — AD-026.
+# module names, so publisher's {config, consumer, processing} must stay
+# clear of api's {dependencies, errors, main, migrate} — AD-026. Same for
+# src/api/tests and src/publisher/tests: publisher's {conftest, fakes,
+# test_config, test_consumer, test_integration, test_processing} vs api's
+# {conftest, helpers, test_compose_parity, test_errors, test_health,
+# test_human_review_schema, test_main, test_reimbursement_schema}.
 # src/agent/tests (but not src/agent/src) is on this list for the same
 # `from fakes import ...` reason as publisher's tests dir — agent itself
 # stays a real installable package (deliberately not flattened, to avoid

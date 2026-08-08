@@ -24,6 +24,8 @@ from shared.producer import publish
 from shared.reimbursement import repository
 from shared.reimbursement.use_cases.send_human_review import escalate_existing
 
+from agent.config import AgentConfig
+
 logger = logging.getLogger(__name__)
 
 GHOST_DROPPED_EVENT = "reimbursement.ghost_dropped"
@@ -52,6 +54,7 @@ class MessageOutcome(Enum):
 @dataclass(frozen=True)
 class Dependencies:
     config: Config
+    agent: AgentConfig
     pool: asyncpg.Pool
     producer: AIOProducer
 
@@ -88,8 +91,10 @@ async def _escalate(deps: Dependencies, envelope: ReimbursementEnvelope) -> Mess
     requeues: past the ceiling there is nothing left to retry. Never
     raises."""
     try:
-        async with deps.pool.acquire() as conn:
-            result = await escalate_existing(conn, envelope.uuid, envelope.errors)
+        async with deps.pool.acquire(timeout=deps.config.database.acquire_timeout_seconds) as conn:
+            result = await escalate_existing(
+                conn, envelope.uuid, envelope.errors, deps.config.failure_log.max_message_chars
+            )
     except Exception as exc:
         logger.error("uuid=%s could not be escalated: %s", envelope.uuid, sanitize(exc))
         failure_log.write(
@@ -117,7 +122,7 @@ async def _resolve(deps: Dependencies, envelope: ReimbursementEnvelope) -> Messa
     """The retry<=3 path: resolve the row by uuid, tolerate a ghost (R-001),
     and apply the staleness guard. Never raises."""
     try:
-        async with deps.pool.acquire() as conn:
+        async with deps.pool.acquire(timeout=deps.config.database.acquire_timeout_seconds) as conn:
             row = await repository.get_by_uuid(conn, envelope.uuid)
     except Exception as exc:
         return await _requeue(deps, envelope, exc)
@@ -146,7 +151,10 @@ async def _requeue(
     itself (the only topic the agent owns) with retry+1 and the error
     history appended. Never raises."""
     logger.error("uuid=%s resolve failed: %s", envelope.uuid, sanitize(exc))
-    errors = [*envelope.errors, AttemptError.next(envelope.errors, "resolve", exc)]
+    errors = [
+        *envelope.errors,
+        AttemptError.from_exception(len(envelope.errors) + 1, "resolve", exc),
+    ]
     retried = ReimbursementEnvelope(
         uuid=envelope.uuid, retry=envelope.retry + 1, published_at=datetime.now(UTC), errors=errors
     )

@@ -104,7 +104,7 @@ class FakePool:
         self.in_flight = 0
         self.max_in_flight = 0
 
-    def acquire(self) -> _FakeAcquisition:
+    def acquire(self, *, timeout: float | None = None) -> _FakeAcquisition:
         return _FakeAcquisition(self)
 
     async def insert(self, args: tuple[Any, ...]) -> UUID:
@@ -145,5 +145,5 @@ class RealPool:
         self.connection = connection
         self.lock = asyncio.Lock()
 
-    def acquire(self) -> _RealAcquisition:
+    def acquire(self, *, timeout: float | None = None) -> _RealAcquisition:
         return _RealAcquisition(self)

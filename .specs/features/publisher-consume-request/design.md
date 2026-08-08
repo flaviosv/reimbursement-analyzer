@@ -3,8 +3,8 @@
 **Spec**: `.specs/features/publisher-consume-request/spec.md`
 **Context**: `.specs/features/publisher-consume-request/context.md`
 **Risks**: `.specs/RISKS.md` (R-001 … R-005)
-**Status**: Draft — v3, reconciled against `docs/codebase/` (commit `1ea1eba`)
-and the shared-kernel refactors `93b96ad`, `0c6d35f`, `7da0697`
+**Status**: Complete — v3 shipped; see `validation.md` for the Verifier's
+PASS.
 
 ---
 
@@ -166,7 +166,8 @@ src/
         └── test_processing.py  +
 ```
 
-Root `pyproject.toml`: `pythonpath = ["src/api/tests", "src/api/src", "src/publisher/src"]`.
+Root `pyproject.toml`: `pythonpath = ["src/api/tests", "src/api/src", "src/publisher/tests", "src/publisher/src"]`
+— gained the `src/publisher/tests` entry once publisher tests existed.
 
 ### Flat-module namespace — no action needed, but a constraint to carry
 

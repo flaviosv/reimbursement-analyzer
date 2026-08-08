@@ -16,6 +16,7 @@ from shared.producer import managed_producer
 from shared.reimbursement.repository import managed_pool
 from shared.signals import install_shutdown_handlers
 
+from agent.config import AgentConfig, load_agent_config
 from agent.validation import Dependencies, handle_message
 
 logger = logging.getLogger(__name__)
@@ -28,14 +29,14 @@ def check_startup_config(config: Config) -> None:
 
 
 @asynccontextmanager
-async def managed_consumer(config: Config) -> AsyncIterator[AIOConsumer]:
+async def managed_consumer(config: Config, agent: AgentConfig) -> AsyncIterator[AIOConsumer]:
     """Construct a subscribed consumer and guarantee `close()` on exit.
 
     Constructed here rather than at import time because AIOConsumer.__init__
     calls asyncio.get_event_loop() — building one outside a running loop
     binds its callbacks to the wrong loop.
     """
-    consumer = AIOConsumer(config.agent.to_consumer_config(config.kafka))
+    consumer = AIOConsumer(agent.to_consumer_config(config.kafka))
     try:
         await consumer.subscribe([REIMBURSEMENT_TOPIC])
         yield consumer
@@ -57,7 +58,7 @@ async def run(deps: Dependencies, consumer: AIOConsumer, stopping: asyncio.Event
         # offset model depends on. No fan-out here — a Reimbursement message
         # already carries exactly one logical unit of work.
         messages = await consumer.consume(
-            num_messages=1, timeout=deps.config.agent.consume_timeout_seconds
+            num_messages=1, timeout=deps.agent.consume_timeout_seconds
         )
         if not messages:
             continue
@@ -78,6 +79,7 @@ async def run(deps: Dependencies, consumer: AIOConsumer, stopping: asyncio.Event
 
 async def _serve() -> None:
     config = load_config()
+    agent = load_agent_config()
     check_startup_config(config)
 
     stopping = asyncio.Event()
@@ -86,10 +88,11 @@ async def _serve() -> None:
     async with (
         managed_pool(config.database) as pool,
         managed_producer(config.kafka.to_producer_config()) as producer,
-        managed_consumer(config) as consumer,
+        managed_consumer(config, agent) as consumer,
     ):
         logger.info("agent consuming %s", REIMBURSEMENT_TOPIC)
-        await run(Dependencies(config=config, pool=pool, producer=producer), consumer, stopping)
+        deps = Dependencies(config=config, agent=agent, pool=pool, producer=producer)
+        await run(deps, consumer, stopping)
 
 
 def main() -> None:

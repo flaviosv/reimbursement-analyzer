@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import agent.consumer as consumer_module
 import pytest
+from agent.config import load_agent_config
 from agent.consumer import check_startup_config, managed_consumer, run
 from agent.validation import Dependencies
 from agent_fakes import FakePool, FakeProducer
@@ -122,7 +123,9 @@ def _armed_signal_handlers(stopping: asyncio.Event) -> Iterator[None]:
 
 
 def _deps(pool: Any, producer: Any, config: Config | None = None) -> Dependencies:
-    return Dependencies(config=config or load_config(), pool=pool, producer=producer)
+    return Dependencies(
+        config=config or load_config(), agent=load_agent_config(), pool=pool, producer=producer
+    )
 
 
 def _message(*, retry: int = 0) -> FakeMessage:
@@ -164,7 +167,7 @@ class DescribeTheConsumerLifecycle:
 
         monkeypatch.setattr(consumer_module, "AIOConsumer", LoopRecordingConsumer)
 
-        async with managed_consumer(load_config()):
+        async with managed_consumer(load_config(), load_agent_config()):
             pass
 
         assert bound == [asyncio.get_running_loop()]
@@ -175,7 +178,7 @@ class DescribeTheConsumerLifecycle:
         built = FakeConsumer([])
         monkeypatch.setattr(consumer_module, "AIOConsumer", lambda config: built)
 
-        async with managed_consumer(load_config()) as opened:
+        async with managed_consumer(load_config(), load_agent_config()) as opened:
             assert opened is built
             assert built.subscribed == [[REIMBURSEMENT_TOPIC]]
             assert built.closed is False
@@ -194,7 +197,7 @@ class DescribeTheLoop:
 
         await run(_deps(FakePool(), FakeProducer()), consumer, stopping)
 
-        timeout = load_config().agent.consume_timeout_seconds
+        timeout = load_agent_config().consume_timeout_seconds
         assert consumer.consume_kwargs[0] == {"num_messages": 1, "timeout": timeout}
 
     async def it_commits_the_offset_after_handling_a_message(self) -> None:

@@ -8,8 +8,11 @@ from pydantic import (
     BeforeValidator,
     ConfigDict,
     EmailStr,
+    Field,
     StringConstraints,
 )
+
+from shared.config import MAX_BATCH_ITEMS
 
 Stage = Literal["db-insert", "publish", "resolve"]
 
@@ -64,10 +67,12 @@ class AttemptError(BaseModel):
     message: str
 
     @classmethod
-    def next(cls, errors: list["AttemptError"], stage: Stage, exc: Exception) -> Self:
+    def from_exception(
+        cls, attempt: int, stage: Stage, exc: Exception, occurred_at: datetime | None = None
+    ) -> Self:
         return cls(
-            attempt=len(errors) + 1,
-            occurred_at=datetime.now(UTC),
+            attempt=attempt,
+            occurred_at=occurred_at or datetime.now(UTC),
             stage=stage,
             error_type=type(exc).__name__,
             message=str(exc),
@@ -75,15 +80,23 @@ class AttemptError(BaseModel):
 
 
 class RequestEnvelope(BaseModel):
-    """The message shape published to the `Request` Kafka topic. The write
-    path never constructs this via the model — the envelope is byte-spliced
-    around the raw request body — but the publisher parses what the api
-    writes with this same definition."""
+    """The message shape published to the `Request` Kafka topic.
 
-    retry: int
+    The *original* write path never constructs this via the model — the
+    envelope is byte-spliced around the raw request body in
+    api/producer.py — but the publisher parses what the api writes with
+    this same definition, and its own requeue path (a *second* write path)
+    does construct one via the model directly."""
+
+    retry: Annotated[int, Field(ge=0)]
     published_at: AwareDatetime
     errors: list[AttemptError] = []
-    payload: list[dict[str, Any]]
+    # Bounded to the same ceiling the API enforces at ingress: the
+    # publisher must not trust that every producer onto this topic is the
+    # API — its own requeue path is one, and a directly-produced message
+    # is another — so it re-asserts the cap at its own trust boundary
+    # rather than relying solely on fetch.max.bytes to keep item count down.
+    payload: Annotated[list[dict[str, Any]], Field(max_length=MAX_BATCH_ITEMS)]
 
 
 class ReimbursementEnvelope(BaseModel):

@@ -6,6 +6,7 @@ import pytest
 from agent_fakes import FakePool, FakeProducer
 from shared.config import REIMBURSEMENT_TOPIC, load_config
 from shared.models import AttemptError, ReimbursementEnvelope
+from agent.config import load_agent_config
 from agent.validation import Dependencies, MessageOutcome, handle_message
 
 pytestmark = pytest.mark.anyio
@@ -21,7 +22,10 @@ def _envelope(**overrides: object) -> ReimbursementEnvelope:
 
 def _deps(pool: FakePool | None = None, producer: FakeProducer | None = None) -> Dependencies:
     return Dependencies(
-        config=load_config(), pool=pool or FakePool(), producer=producer or FakeProducer()
+        config=load_config(),
+        agent=load_agent_config(),
+        pool=pool or FakePool(),
+        producer=producer or FakeProducer(),
     )
 
 

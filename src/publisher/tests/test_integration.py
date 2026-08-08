@@ -8,6 +8,7 @@ from typing import Any
 import asyncpg
 import pytest
 from confluent_kafka import Consumer, KafkaException, TopicPartition
+from config import PublisherConfig, load_publisher_config
 from consumer import managed_consumer, run
 from helpers import valid_reimbursement_item
 from processing import Dependencies
@@ -35,9 +36,8 @@ GROUP_ID = f"publisher-integration-{time.monotonic_ns()}"
 FRAMING_HEADROOM = 4096
 
 
-def _config() -> Config:
-    config = load_config()
-    return replace(config, publisher=replace(config.publisher, consumer_group_id=GROUP_ID))
+def _config() -> tuple[Config, PublisherConfig]:
+    return load_config(), replace(load_publisher_config(), consumer_group_id=GROUP_ID)
 
 
 def _envelope(items: list[dict[str, Any]]) -> bytes:
@@ -86,7 +86,11 @@ async def _await_rows(pool: asyncpg.Pool, request_ids: list[str], timeout: float
 
 
 async def _run_publisher(
-    config: Config, migrated_db: str, request_ids: list[str], timeout: float = 90.0
+    config: Config,
+    publisher: PublisherConfig,
+    migrated_db: str,
+    request_ids: list[str],
+    timeout: float = 90.0,
 ) -> int:
     """Drive the real loop until every expected row lands, then stop it.
     Returns how far the source offset advanced."""
@@ -94,10 +98,10 @@ async def _run_publisher(
     async with (
         managed_pool(replace(config.database, dsn=migrated_db)) as pool,
         managed_producer(config.kafka.to_producer_config()) as producer,
-        managed_consumer(config) as kafka_consumer,
+        managed_consumer(config, publisher) as kafka_consumer,
     ):
         before = await _committed_offset(kafka_consumer)
-        deps = Dependencies(config=config, pool=pool, producer=producer)
+        deps = Dependencies(config=config, publisher=publisher, pool=pool, producer=producer)
         task = asyncio.create_task(run(deps, kafka_consumer, stopping))
         try:
             await _await_rows(pool, request_ids, timeout)
@@ -107,10 +111,21 @@ async def _run_publisher(
         return await _committed_offset(kafka_consumer) - before
 
 
-def _drain_reimbursements(bootstrap_server: str, uuids: set[str], timeout: float) -> list[dict]:
+def _drain_reimbursements(
+    bootstrap_server: str, uuids: set[str], timeout: float, grace_seconds: float = 2.0
+) -> list[dict]:
     """Collect the Reimbursement messages carrying this test's uuids. Drains
     from the beginning with a throwaway group, since the topic is shared by
-    every test in the session."""
+    every test in the session.
+
+    Stopping the instant `len(collected) == len(uuids)` (as this used to)
+    made every "exactly one message" assertion in this module unable to
+    detect an over-publish by construction — it can only prove "at least
+    this many showed up in time." Once the target count is reached, this
+    keeps draining for `grace_seconds` more before returning,
+    so a genuine double-publish within that window still shows up — without
+    taxing the common (correct) case with the full `timeout`.
+    """
     kafka_consumer = Consumer(
         {
             "bootstrap.servers": bootstrap_server,
@@ -122,9 +137,12 @@ def _drain_reimbursements(bootstrap_server: str, uuids: set[str], timeout: float
     )
     kafka_consumer.subscribe([REIMBURSEMENT_TOPIC])
     collected: list[dict] = []
+    satisfied_at: float | None = None
     try:
         deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline and len(collected) < len(uuids):
+        while time.monotonic() < deadline:
+            if satisfied_at is not None and time.monotonic() >= satisfied_at:
+                break
             message = kafka_consumer.poll(1.0)
             if message is None:
                 continue
@@ -133,6 +151,8 @@ def _drain_reimbursements(bootstrap_server: str, uuids: set[str], timeout: float
             decoded = json.loads(message.value())
             if decoded["uuid"] in uuids:
                 collected.append(decoded)
+                if satisfied_at is None and len(collected) >= len(uuids):
+                    satisfied_at = time.monotonic() + grace_seconds
         return collected
     finally:
         kafka_consumer.close()
@@ -155,13 +175,13 @@ class DescribeTheEndToEndRoundTrip:
         self, kafka_bootstrap_server: str, migrated_db: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("KAFKA_BOOTSTRAP_SERVERS", kafka_bootstrap_server)
-        config = _config()
+        config, publisher = _config()
         request_ids = [f"REQ-E2E-BATCH-{n}" for n in range(3)]
         await _produce_request(
             config, _envelope([valid_reimbursement_item(rid) for rid in request_ids])
         )
 
-        await _run_publisher(config, migrated_db, request_ids)
+        await _run_publisher(config, publisher, migrated_db, request_ids)
 
         rows = await _rows(migrated_db, request_ids)
         assert [row["request_id"] for row in rows] == request_ids
@@ -175,13 +195,13 @@ class DescribeTheEndToEndRoundTrip:
         self, kafka_bootstrap_server: str, migrated_db: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("KAFKA_BOOTSTRAP_SERVERS", kafka_bootstrap_server)
-        config = _config()
+        config, publisher = _config()
         request_ids = ["REQ-E2E-UUID"]
         await _produce_request(
             config, _envelope([valid_reimbursement_item("REQ-E2E-UUID", amount=93.5)])
         )
 
-        await _run_publisher(config, migrated_db, request_ids)
+        await _run_publisher(config, publisher, migrated_db, request_ids)
 
         rows = await _rows(migrated_db, request_ids)
         uuids = {str(row["uuid"]) for row in rows}
@@ -197,13 +217,13 @@ class DescribeTheEndToEndRoundTrip:
         self, kafka_bootstrap_server: str, migrated_db: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("KAFKA_BOOTSTRAP_SERVERS", kafka_bootstrap_server)
-        config = _config()
+        config, publisher = _config()
         request_ids = [f"REQ-E2E-OFFSET-{n}" for n in range(2)]
         await _produce_request(
             config, _envelope([valid_reimbursement_item(rid) for rid in request_ids])
         )
 
-        advanced = await _run_publisher(config, migrated_db, request_ids)
+        advanced = await _run_publisher(config, publisher, migrated_db, request_ids)
 
         # Two items, one message: the offset moves once, not once per item.
         assert advanced == 1
@@ -212,7 +232,7 @@ class DescribeTheEndToEndRoundTrip:
         self, kafka_bootstrap_server: str, migrated_db: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("KAFKA_BOOTSTRAP_SERVERS", kafka_bootstrap_server)
-        config = _config()
+        config, publisher = _config()
         request_ids = ["REQ-E2E-CEILING"]
         item = valid_reimbursement_item("REQ-E2E-CEILING", padding="")
         target = KAFKA_MAX_MESSAGE_BYTES - FRAMING_HEADROOM
@@ -226,7 +246,7 @@ class DescribeTheEndToEndRoundTrip:
         assert len(raw) > 1_048_576
 
         await _produce_request(config, raw)
-        await _run_publisher(config, migrated_db, request_ids)
+        await _run_publisher(config, publisher, migrated_db, request_ids)
 
         rows = await _rows(migrated_db, request_ids)
         assert [row["status"] for row in rows] == ["pending"]

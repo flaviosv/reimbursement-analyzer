@@ -4,14 +4,21 @@
 
 `docs/SCOPE.md:293` makes no-request-loss the governing constraint for the
 whole system: `POST /api/v1/reimbursement` (`api-post-reimbursement`,
-implementation in progress) durably hands every accepted batch to the
-`Request` Kafka topic and returns. Nothing downstream exists yet — the
-`publisher` service (`src/publisher/src/consumer.py`, flattened per AD-018) is still the
-bootstrap placeholder that logs a `SampleMessage` from a `sample-queue`
-topic. Until it consumes `Request`, creates the `reimbursement` row, and
-publishes to `Reimbursement`, every accepted request is durably stored in
-Kafka but never becomes a `reimbursement` entity, and the Agent
-(`SCOPE.md:223-274`) has nothing to consume.
+shipped) durably hands every accepted batch to the `Request` Kafka topic
+and returns.
+
+**Status (2026-08-08): implemented.** The paragraph below is preserved as
+this feature's original problem statement — at the time it was written,
+the `publisher` service (`src/publisher/src/consumer.py`, flattened per
+**AD-026**, not AD-018 as an earlier revision of this line said — Q22)
+was still the bootstrap placeholder that logged a `SampleMessage` from a
+`sample-queue` topic. It now consumes `Request`, creates the
+`reimbursement` row, and publishes to `Reimbursement`, per `validation.md`.
+
+Until it consumed `Request`, created the `reimbursement` row, and
+published to `Reimbursement`, every accepted request was durably stored in
+Kafka but never became a `reimbursement` entity, and the Agent
+(`SCOPE.md:223-274`) had nothing to consume.
 
 This feature delivers that middle link: consume, persist, publish — with the
 error handling `SCOPE.md:213-221` mandates for a mission-critical, no-loss
@@ -19,24 +26,24 @@ pipeline.
 
 ## Goals
 
-- [ ] The publisher consumes `Request`, and for each item in a message's
+- [x] The publisher consumes `Request`, and for each item in a message's
       batch, creates a `reimbursement` row and publishes exactly one message
       to `Reimbursement` — as one unit of work per item, not per message.
-- [ ] A DB write and its paired Kafka publish either both happen or neither
+- [x] A DB write and its paired Kafka publish either both happen or neither
       does — `SCOPE.md:219-220`'s rollback requirement is real, not
       best-effort.
-- [ ] Any failure short of the retry ceiling is retried by republishing the
+- [x] Any failure short of the retry ceiling is retried by republishing the
       failed item to `Request` with its retry counter incremented **and its
       accumulated error history attached** — never silently dropped, never
       silently duplicated.
-- [ ] Past the retry ceiling (`retry > 3`), the item is preserved as a
+- [x] Past the retry ceiling (`retry > 3`), the item is preserved as a
       `human-review` row whose `decision_reason` spells out **every failure
       that led there**, so a reviewer can act without reading server logs
       (`SCOPE.md:216-217`).
-- [ ] A resubmitted duplicate is recognized and dropped without exhausting
+- [x] A resubmitted duplicate is recognized and dropped without exhausting
       retries on a condition retrying can never fix — and the drop is
       emitted as a countable event, not a silent no-op.
-- [ ] A full batch completes far inside `max.poll.interval.ms`, so processing
+- [x] A full batch completes far inside `max.poll.interval.ms`, so processing
       time never causes a consumer eviction or a group rebalance
       (**AD-013**).
 
@@ -174,14 +181,31 @@ becomes a lost request and a persistent one arrives explained.
    failed (`db-insert` or `publish`), the error type, and the error message.
 5. WHEN an item has failed on multiple attempts THEN every prior entry SHALL
    still be present — entries are appended, never overwritten or truncated.
+   **Scope note (R2, 2026-08-08):** "never truncated" bounds the *list* —
+   no entry is ever dropped or overwritten. It does not bound each entry's
+   `message` field content, which two separate, deliberate rendering-time
+   caps do apply to: `render_history` truncates it to
+   `max_message_chars` when composing `decision_reason`, and the failure
+   log's own truncation applies the same cap when writing a record. Both
+   are about how much of a *long single message* survives into a bounded
+   text field — neither drops an entry from the list.
 6. WHEN an item is republished THEN its content SHALL be semantically
    identical to the item consumed — same keys in the same order, same values.
 7. WHEN the republished item is later consumed THEN it SHALL be processed
    exactly like any other `Request` message, with no special-casing beyond
    the `retry` value being non-zero.
-8. WHEN a failure is logged to stdout THEN the record SHALL carry the item's
-   `request_id` and the error type, and SHALL NOT carry the item's payload
-   or the driver's value-bearing `DETAIL` text.
+8. WHEN a *routine processing error* is logged (not a last-resort failure-log
+   write) THEN the record SHALL carry the item's `request_id` and the
+   error type, and SHALL NOT carry the item's payload or the driver's
+   value-bearing `DETAIL` text.
+   **Scope correction (R3, 2026-08-08):** this AC predates the "PII in
+   error text" row's 2026-08-08 correction above and was never amended to
+   match it. The two are not the same record kind: the last-resort
+   failure log is the deliberate exception this AC does not cover — it
+   carries the item verbatim by design, and it *also* reaches stdout
+   (the named logger propagates rather than being confined to a separate
+   sink). "Logged to stdout" alone is not the right test for whether a
+   record should carry PII; which logger wrote it is.
 9. WHEN the republish itself fails THEN the system SHALL write the item and
    its error history to the failure log rather than losing it, and
    SHALL treat the item as handled.
@@ -402,8 +426,12 @@ and assert the other 499 are unaffected.
   commit fails, and the group rebalances. It converges (redelivered
   already-committed items are absorbed by the duplicate path) but only by
   thrashing. The 500-item cap and concurrency of 10 exist to keep this
-  unreachable by a ~400× margin; it is a bound to preserve, not a condition
-  to handle at runtime.
+  unreachable — with a large margin on the happy path (~400×, ~15ms/item)
+  and a smaller but still real one on the failure path (~1.8×: 500 items ÷
+  10 concurrent × a full `publish_timeout_seconds` each is ~500s against
+  `max.poll.interval.ms`; see **R-005**'s 2026-08-08 addendum, which is
+  also why that interval was raised from 5 to 15 minutes). It is a bound to
+  preserve, not a condition to handle at runtime.
 
 ---
 
@@ -411,65 +439,67 @@ and assert the other 499 are unaffected.
 
 | Requirement ID | Story | Phase | Status |
 | -------------- | ----- | ------ | ------- |
-| PUB-01 | P1: Atomic item→row+message (per-item unit of work) | Design | Pending |
-| PUB-02 | P1: Atomic item→row+message (row committed at `pending`, one message) | Design | Pending |
-| PUB-03 | P1: Atomic item→row+message (row identity fields populated) | Design | Pending |
-| PUB-04 | P1: Atomic item→row+message (message carries uuid, retry=0, published_at) | Design | Pending |
-| PUB-05 | P1: Atomic item→row+message (message carries no payload) | Design | Pending |
-| PUB-06 | P1: Atomic item→row+message (item independence within a batch) | Design | Pending |
-| PUB-07 | P1: Atomic item→row+message (offset committed exactly once) | Design | Pending |
-| PUB-08 | P1: Rollback+retry (insert failure blocks publish) | Design | Pending |
-| PUB-09 | P1: Rollback+retry (publish failure rolls back the insert) | Design | Pending |
-| PUB-10 | P1: Rollback+retry (republish single item with retry+1) | Design | Pending |
-| PUB-11 | P1: Rollback+retry (error entry appended with stage, type, message) | Design | Pending |
-| PUB-12 | P1: Rollback+retry (prior entries preserved, never truncated) | Design | Pending |
-| PUB-13 | P1: Rollback+retry (republished item semantically identical) | Design | Pending |
-| PUB-14 | P1: Rollback+retry (republished item processed normally) | Design | Pending |
-| PUB-15 | P1: Rollback+retry (stdout log omits payload and DETAIL values) | Design | Pending |
-| PUB-16 | P1: Rollback+retry (republish failure falls back to the file log) | Design | Pending |
-| PUB-17 | P1: Duplicate (unique-violation detection and drop) | Design | Pending |
-| PUB-18 | P1: Duplicate (no retry, no fallback, no file log) | Design | Pending |
-| PUB-19 | P1: Duplicate (structured countable event emitted) | Design | Pending |
-| PUB-20 | P1: Duplicate (absorbs post-crash redelivery) | Design | Pending |
-| PUB-21 | P1: Duplicate (existing row unaffected) | Design | Pending |
-| PUB-22 | P1: `retry > 3` (skip the normal flow) | Design | Pending |
-| PUB-23 | P1: `retry > 3` (human-review row inserted) | Design | Pending |
-| PUB-24 | P1: `retry > 3` (`decision_reason` renders the full error history) | Design | Pending |
-| PUB-25 | P1: `retry > 3` (`decision_reason` non-null even with no history) | Design | Pending |
-| PUB-26 | P1: `retry > 3` (stop on success — no publish, no republish) | Design | Pending |
-| PUB-27 | P1: `retry > 3` (failure-log fallback carries the history) | Design | Pending |
-| PUB-28 | P1: `retry > 3` (unique violation still short-circuits) | Design | Pending |
-| PUB-29 | P1: Bad input (malformed message logged, no side effect) | Design | Pending |
-| PUB-30 | P1: Bad input (invalid item logged, never retried) | Design | Pending |
-| PUB-31 | P1: Bad input (empty payload dropped as a no-op) | Design | Pending |
-| PUB-32 | P1: Bad input (consumer loop survives) | Design | Pending |
-| PUB-33 | P1: Bad input (termination signal drains the message in hand, then exits) | Design | Pending |
-| PUB-34 | P1: Ceiling-sized messages (fetch limits derived from the shared constant) | Design | Pending |
-| PUB-35 | P1: Ceiling-sized messages (a `KAFKA_MAX_MESSAGE_BYTES` message consumed and processed end to end) | Design | Pending |
-| PUB-36 | P1: Concurrency (at most 10 items in flight) | Design | Pending |
-| PUB-37 | P1: Concurrency (excess items wait for a slot, never dropped) | Design | Pending |
-| PUB-38 | P1: Concurrency (per-item independence preserved under concurrency) | Design | Pending |
-| PUB-39 | P1: Concurrency (completion and publish order non-deterministic) | Design | Pending |
-| PUB-40 | P1: Concurrency (offset committed once, after the last item settles) | Design | Pending |
-| PUB-41 | P1: Concurrency (connection pool sized at or above the limit) | Design | Pending |
-| PUB-42 | P1: Concurrency (`max.poll.interval.ms` set explicitly; fan-out genuinely concurrent) | Design | Pending |
+| PUB-01 | P1: Atomic item→row+message (per-item unit of work) | Implemented | Done |
+| PUB-02 | P1: Atomic item→row+message (row committed at `pending`, one message) | Implemented | Done |
+| PUB-03 | P1: Atomic item→row+message (row identity fields populated) | Implemented | Done |
+| PUB-04 | P1: Atomic item→row+message (message carries uuid, retry=0, published_at) | Implemented | Done |
+| PUB-05 | P1: Atomic item→row+message (message carries no payload) | Implemented | Done |
+| PUB-06 | P1: Atomic item→row+message (item independence within a batch) | Implemented | Done |
+| PUB-07 | P1: Atomic item→row+message (offset committed exactly once) | Implemented | Done |
+| PUB-08 | P1: Rollback+retry (insert failure blocks publish) | Implemented | Done |
+| PUB-09 | P1: Rollback+retry (publish failure rolls back the insert) | Implemented | Done |
+| PUB-10 | P1: Rollback+retry (republish single item with retry+1) | Implemented | Done |
+| PUB-11 | P1: Rollback+retry (error entry appended with stage, type, message) | Implemented | Done |
+| PUB-12 | P1: Rollback+retry (prior entries preserved, never truncated) | Implemented | Done |
+| PUB-13 | P1: Rollback+retry (republished item semantically identical) | Implemented | Done |
+| PUB-14 | P1: Rollback+retry (republished item processed normally) | Implemented | Done |
+| PUB-15 | P1: Rollback+retry (stdout log omits payload and DETAIL values) | Implemented | Done |
+| PUB-16 | P1: Rollback+retry (republish failure falls back to the file log) | Implemented | Done |
+| PUB-17 | P1: Duplicate (unique-violation detection and drop) | Implemented | Done |
+| PUB-18 | P1: Duplicate (no retry, no fallback, no file log) | Implemented | Done |
+| PUB-19 | P1: Duplicate (structured countable event emitted) | Implemented | Done |
+| PUB-20 | P1: Duplicate (absorbs post-crash redelivery) | Implemented | Done |
+| PUB-21 | P1: Duplicate (existing row unaffected) | Implemented | Done |
+| PUB-22 | P1: `retry > 3` (skip the normal flow) | Implemented | Done |
+| PUB-23 | P1: `retry > 3` (human-review row inserted) | Implemented | Done |
+| PUB-24 | P1: `retry > 3` (`decision_reason` renders the full error history) | Implemented | Done |
+| PUB-25 | P1: `retry > 3` (`decision_reason` non-null even with no history) | Implemented | Done |
+| PUB-26 | P1: `retry > 3` (stop on success — no publish, no republish) | Implemented | Done |
+| PUB-27 | P1: `retry > 3` (failure-log fallback carries the history) | Implemented | Done |
+| PUB-28 | P1: `retry > 3` (unique violation still short-circuits) | Implemented | Done |
+| PUB-29 | P1: Bad input (malformed message logged, no side effect) | Implemented | Done |
+| PUB-30 | P1: Bad input (invalid item logged, never retried) | Implemented | Done |
+| PUB-31 | P1: Bad input (empty payload dropped as a no-op) | Implemented | Done |
+| PUB-32 | P1: Bad input (consumer loop survives) | Implemented | Done |
+| PUB-33 | P1: Bad input (termination signal drains the message in hand, then exits) | Implemented | Done |
+| PUB-34 | P1: Ceiling-sized messages (fetch limits derived from the shared constant) | Implemented | Done |
+| PUB-35 | P1: Ceiling-sized messages (a `KAFKA_MAX_MESSAGE_BYTES` message consumed and processed end to end) | Implemented | Done |
+| PUB-36 | P1: Concurrency (at most 10 items in flight) | Implemented | Done |
+| PUB-37 | P1: Concurrency (excess items wait for a slot, never dropped) | Implemented | Done |
+| PUB-38 | P1: Concurrency (per-item independence preserved under concurrency) | Implemented | Done |
+| PUB-39 | P1: Concurrency (completion and publish order non-deterministic) | Implemented | Done |
+| PUB-40 | P1: Concurrency (offset committed once, after the last item settles) | Implemented | Done |
+| PUB-41 | P1: Concurrency (connection pool sized at or above the limit) | Implemented | Done |
+| PUB-42 | P1: Concurrency (`max.poll.interval.ms` set explicitly; fan-out genuinely concurrent) | Implemented | Done |
 
-**Coverage:** 42 total, 0 mapped to tasks, 42 unmapped ⚠️ (Tasks phase
-pending)
+**Coverage:** 42 total, 42 mapped to tasks (see `tasks.md`), 0 unmapped.
+Independently re-verified by tlc-spec-driven's Verifier — see
+`validation.md`: spec-anchored check 42/42 matched, sensor 18/18
+mutants killed, full gate 274 passed / 0 failed.
 
 ---
 
 ## Success Criteria
 
-- [ ] A `docs/original/sample.json`-shaped batch, published through the real
+- [x] A `docs/original/sample.json`-shaped batch, published through the real
       `POST /api/v1/reimbursement` → `Request` → publisher path, produces
       exactly one `reimbursement` row and one `Reimbursement` message per
       item, each message carrying only the row's `uuid`.
-- [ ] Killing the DB mid-publish leaves zero orphaned rows.
-- [ ] A resubmitted duplicate never produces a second row, and its drop is
+- [x] Killing the DB mid-publish leaves zero orphaned rows.
+- [x] A resubmitted duplicate never produces a second row, and its drop is
       visible as a countable structured event.
-- [ ] An item that failed four times arrives as a `human-review` row whose
+- [x] An item that failed four times arrives as a `human-review` row whose
       `decision_reason` names all four failures — readable without opening a
       server log.
-- [ ] A malformed message never stops the consumer from processing the next.
-- [ ] A `Request` message at `KAFKA_MAX_MESSAGE_BYTES` is consumed and processed end to end.
+- [x] A malformed message never stops the consumer from processing the next.
+- [x] A `Request` message at `KAFKA_MAX_MESSAGE_BYTES` is consumed and processed end to end.

@@ -10,6 +10,9 @@ from shared.config import FailureLogConfig
 if TYPE_CHECKING:
     from shared.models import AttemptError
 
+_MAX_DEPTH = 10
+_FALLBACK_LOGGER_NAME = "reimbursementanalyzer.failures.fallback"
+
 
 def render_errors(errors: "list[AttemptError]") -> list[dict[str, Any]]:
     """Each `AttemptError` as a JSON-safe dict, in order — the one
@@ -17,13 +20,21 @@ def render_errors(errors: "list[AttemptError]") -> list[dict[str, Any]]:
     return [error.model_dump(mode="json") for error in errors]
 
 
-def _truncated(value: Any, limit: int) -> Any:
+def _truncated(value: Any, limit: int, depth: int = 0) -> Any:
+    if depth > _MAX_DEPTH:
+        return "<max depth exceeded>"
     if isinstance(value, str):
         return value[:limit]
     if isinstance(value, dict):
-        return {key: _truncated(item, limit) for key, item in value.items()}
+        # Keys truncated too: `extra="allow"` on ReimbursementRequest means
+        # an item's field *names* are as unbounded as its values — an
+        # oversized key would otherwise pass through this cap untouched.
+        return {
+            (key[:limit] if isinstance(key, str) else key): _truncated(item, limit, depth + 1)
+            for key, item in value.items()
+        }
     if isinstance(value, list):
-        return [_truncated(item, limit) for item in value]
+        return [_truncated(item, limit, depth + 1) for item in value]
     return value
 
 
@@ -37,11 +48,16 @@ def write(config: FailureLogConfig, record: dict[str, Any]) -> None:
 
     Never raises. This is the last resort, so by definition there is nowhere
     left to report a failure inside it; propagating one would take down the
-    consumer loop it exists to protect.
+    consumer loop it exists to protect. It does still try to leave a trace:
+    on failure it logs to a *different* logger name than `config.logger_name`
+    — if that name's own handler is what just broke, logging to it again
+    here would risk recursing into the same failure instead of reporting it.
     """
     try:
         logging.getLogger(config.logger_name).critical(
             json.dumps(_truncated(record, config.max_message_chars), default=str)
         )
     except Exception:
-        pass
+        logging.getLogger(_FALLBACK_LOGGER_NAME).exception(
+            "failure_log.write could not emit a record for event=%s", record.get("event")
+        )
