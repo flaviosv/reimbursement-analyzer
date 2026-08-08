@@ -141,6 +141,16 @@ class DescribePublisherConfigToConsumerConfig:
 
         assert consumer_config["enable.auto.commit"] is False
 
+    def it_states_the_poll_interval_budget_rather_than_inheriting_it(self) -> None:
+        # AD-013's `500 ÷ 10 × ~15ms` headroom is sized against this interval.
+        # Left at librdkafka's default it is a budget no file in the repo names.
+        config = load_config()
+
+        consumer_config = config.publisher.to_consumer_config(config.kafka)
+
+        assert config.publisher.max_poll_interval_ms == 300_000
+        assert consumer_config["max.poll.interval.ms"] == 300_000
+
     def it_sizes_both_fetch_limits_from_the_shared_message_ceiling(self) -> None:
         config = load_config()
 

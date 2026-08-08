@@ -71,6 +71,10 @@ class PublisherConfig:
     consumer_group_id: str
     item_concurrency: int = 10
     consume_timeout_seconds: float = 1.0
+    # librdkafka's own default, stated rather than inherited: AD-013 sizes the
+    # 500-item cap and the concurrency of 10 against this budget, so the
+    # number it is sized against must be visible here (PUB-42).
+    max_poll_interval_ms: int = 300_000
 
     def to_consumer_config(self, kafka: KafkaConfig) -> dict[str, Any]:
         return {
@@ -81,6 +85,7 @@ class PublisherConfig:
             # regardless of whether their items settled — a crash mid-batch
             # would silently skip unprocessed items.
             "enable.auto.commit": False,
+            "max.poll.interval.ms": self.max_poll_interval_ms,
             "fetch.max.bytes": KAFKA_MAX_MESSAGE_BYTES,
             "max.partition.fetch.bytes": KAFKA_MAX_MESSAGE_BYTES,
             **kafka.security_config(),

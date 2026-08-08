@@ -1,5 +1,7 @@
 import json
 import logging
+import math
+import time
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
@@ -18,7 +20,13 @@ from processing import (
     handle_message,
     process_item,
 )
-from shared.config import MAX_RETRY, REIMBURSEMENT_TOPIC, REQUEST_TOPIC, load_config
+from shared.config import (
+    MAX_BATCH_ITEMS,
+    MAX_RETRY,
+    REIMBURSEMENT_TOPIC,
+    REQUEST_TOPIC,
+    load_config,
+)
 from shared.models import AttemptError, RequestEnvelope, Stage
 from shared.reimbursement.repository import insert_pending
 
@@ -108,6 +116,24 @@ class DescribeHandleMessage:
         # Saturation, not merely a bound: a sequential implementation would
         # also satisfy "never exceeds 10" while breaking AD-013's timing.
         assert pool.max_in_flight == limit
+
+    async def it_overlaps_the_items_instead_of_taking_one_delay_each(self) -> None:
+        items = [valid_reimbursement_item(f"REQ-{n}") for n in range(MAX_BATCH_ITEMS)]
+        limit = load_config().publisher.item_concurrency
+        delay = 0.002
+        pool, producer = FakePool(insert_delay_seconds=delay), FakeProducer()
+
+        started = time.perf_counter()
+        await handle_message(_deps(pool, producer), _envelope(items).model_dump_json().encode())
+        elapsed = time.perf_counter() - started
+
+        # Not a runtime budget: the two shapes are an order of magnitude apart
+        # and the threshold sits between them, so only genuine serialisation
+        # (an await inside the semaphore loop) can cross it. AD-013's poll
+        # interval headroom is what depends on the fan-out being the first.
+        overlapped = math.ceil(len(items) / limit) * delay
+        serialised = len(items) * delay
+        assert elapsed < (overlapped + serialised) / 2
 
     async def it_starts_every_item_rather_than_dropping_those_past_the_limit(self) -> None:
         items = [valid_reimbursement_item(f"REQ-{n}") for n in range(500)]
