@@ -13,6 +13,7 @@ import pytest
 from helpers import valid_reimbursement_item
 from processing import (
     DUPLICATE_DROPPED_EVENT,
+    EMPTY_PAYLOAD_EVENT,
     Dependencies,
     ItemOutcome,
     handle_message,
@@ -54,6 +55,7 @@ class _FakeAcquisition:
         self.pool = pool
 
     async def __aenter__(self) -> "FakeConnection":
+        self.pool.acquisitions += 1
         if self.pool.acquire_error is not None:
             raise self.pool.acquire_error
         self.pool.in_flight += 1
@@ -100,6 +102,7 @@ class FakePool:
         self.insert_errors = insert_errors or {}
         self.acquire_error = acquire_error
         self.inserted: list[tuple[Any, ...]] = []
+        self.acquisitions = 0
         self.in_flight = 0
         self.max_in_flight = 0
 
@@ -116,26 +119,34 @@ class FakePool:
 
 
 class _RealAcquisition:
-    def __init__(self, connection: asyncpg.Connection) -> None:
-        self.connection = connection
+    def __init__(self, pool: "RealPool") -> None:
+        self.pool = pool
 
     async def __aenter__(self) -> asyncpg.Connection:
-        return self.connection
+        await self.pool.lock.acquire()
+        return self.pool.connection
 
     async def __aexit__(self, *exc_info: object) -> bool:
+        self.pool.lock.release()
         return False
 
 
 class RealPool:
     """Hands out the one real connection the `db` fixture owns, so the
-    rollback and duplicate branches run against real asyncpg transaction
-    semantics instead of a fake's own idea of them."""
+    rollback, duplicate and escalation branches run against real asyncpg
+    transaction semantics instead of a fake's own idea of them.
+
+    The lock makes it a pool of exactly one: asyncpg rejects concurrent
+    operations on a single connection, which a real pool never issues because
+    every waiter gets its own. Callers still wait for a slot rather than
+    failing, so the fan-out under test is unchanged."""
 
     def __init__(self, connection: asyncpg.Connection) -> None:
         self.connection = connection
+        self.lock = asyncio.Lock()
 
     def acquire(self) -> _RealAcquisition:
-        return _RealAcquisition(self.connection)
+        return _RealAcquisition(self)
 
 
 def _deps(pool: Any, producer: Any) -> Dependencies:
@@ -173,6 +184,11 @@ def _events(caplog: pytest.LogCaptureFixture, level: int) -> list[dict[str, Any]
         for record in caplog.records
         if record.name == processing.__name__ and record.levelno == level
     ]
+
+
+def _failures(caplog: pytest.LogCaptureFixture) -> list[dict[str, Any]]:
+    logger_name = load_config().failure_log.logger_name
+    return [json.loads(record.message) for record in caplog.records if record.name == logger_name]
 
 
 class DescribeHandleMessage:
@@ -326,12 +342,11 @@ class DescribeADuplicateItem:
     ) -> None:
         await insert_pending(db, valid_reimbursement_item("REQ-DUP-NOLOG"))
         item = valid_reimbursement_item("REQ-DUP-NOLOG")
-        logger_name = load_config().failure_log.logger_name
 
-        with caplog.at_level(logging.CRITICAL, logger=logger_name):
+        with caplog.at_level(logging.CRITICAL, logger=load_config().failure_log.logger_name):
             await process_item(_deps(RealPool(db), FakeProducer()), _envelope([item]), 0, item)
 
-        assert [record for record in caplog.records if record.name == logger_name] == []
+        assert _failures(caplog) == []
 
     async def it_emits_a_countable_event_naming_the_constraint_and_the_envelope_retry(
         self, db: asyncpg.Connection, caplog: pytest.LogCaptureFixture
@@ -439,15 +454,12 @@ class DescribeTheRequeue:
         item = valid_reimbursement_item("REQ-LAST-RESORT")
         pool = FakePool(insert_errors={"REQ-LAST-RESORT": asyncpg.PostgresConnectionError("reset")})
         producer = FakeProducer(errors={REQUEST_TOPIC: RuntimeError("broker unreachable")})
-        logger_name = load_config().failure_log.logger_name
 
-        with caplog.at_level(logging.CRITICAL, logger=logger_name):
+        with caplog.at_level(logging.CRITICAL, logger=load_config().failure_log.logger_name):
             outcome = await process_item(_deps(pool, producer), _envelope([item]), 0, item)
 
         assert outcome is ItemOutcome.LOGGED
-        written = [
-            json.loads(record.message) for record in caplog.records if record.name == logger_name
-        ]
+        written = _failures(caplog)
         assert len(written) == 1
         assert written[0]["request_id"] == "REQ-LAST-RESORT"
         assert written[0]["item"] == item
@@ -463,3 +475,266 @@ class DescribeTheRequeue:
         assert outcome is ItemOutcome.REQUEUED
         errors = producer.messages(REQUEST_TOPIC)[0]["errors"]
         assert errors[0]["error_type"] == "RuntimeError"
+
+
+def _invalid_item(request_id: str = "REQ-INVALID") -> dict[str, Any]:
+    return {
+        "request_id": request_id,
+        "submitted_by": "not-an-email-at-all",
+        "submitted_at": "2026-01-01T12:00:00Z",
+    }
+
+
+def _three_failures() -> list[AttemptError]:
+    return [
+        AttemptError(
+            attempt=n,
+            occurred_at=datetime(2026, 1, 1, 11, n, 0, tzinfo=UTC),
+            stage=stage,
+            error_type=error_type,
+            message=message,
+        )
+        for n, stage, error_type, message in (
+            (1, "db-insert", "PostgresConnectionError", "connection reset by peer"),
+            (2, "publish", "PublishFailed", "broker unreachable"),
+            (3, "db-insert", "CheckViolationError", "submitted_at is in the future"),
+        )
+    ]
+
+
+class DescribeAMessagePastTheRetryCeiling:
+    async def it_preserves_every_item_as_a_human_review_row_instead_of_the_normal_path(
+        self, db: asyncpg.Connection
+    ) -> None:
+        items = [valid_reimbursement_item(f"REQ-CEIL-{n}") for n in range(3)]
+        producer = FakeProducer()
+
+        outcomes = await handle_message(
+            _deps(RealPool(db), producer),
+            _envelope(items, retry=4, errors=_three_failures()).model_dump_json().encode(),
+        )
+
+        assert outcomes == [ItemOutcome.ESCALATED] * 3
+        rows = await db.fetch(
+            "SELECT request_id, status FROM reimbursement WHERE request_id = ANY($1) ORDER BY request_id",
+            [item["request_id"] for item in items],
+        )
+        assert [(row["request_id"], row["status"]) for row in rows] == [
+            ("REQ-CEIL-0", "human-review"),
+            ("REQ-CEIL-1", "human-review"),
+            ("REQ-CEIL-2", "human-review"),
+        ]
+
+    async def it_publishes_nothing_and_requeues_nothing(self, db: asyncpg.Connection) -> None:
+        item = valid_reimbursement_item("REQ-CEIL-QUIET")
+        producer = FakeProducer()
+
+        await handle_message(
+            _deps(RealPool(db), producer),
+            _envelope([item], retry=4, errors=_three_failures()).model_dump_json().encode(),
+        )
+
+        assert producer.produced == []
+
+    async def it_records_the_full_error_history_in_the_decision_reason(
+        self, db: asyncpg.Connection
+    ) -> None:
+        item = valid_reimbursement_item("REQ-CEIL-WHY")
+
+        await handle_message(
+            _deps(RealPool(db), FakeProducer()),
+            _envelope([item], retry=4, errors=_three_failures()).model_dump_json().encode(),
+        )
+
+        reason = await db.fetchval(
+            "SELECT decision_reason FROM reimbursement WHERE request_id = $1", "REQ-CEIL-WHY"
+        )
+        assert "connection reset by peer" in reason
+        assert "broker unreachable" in reason
+        assert "submitted_at is in the future" in reason
+
+    async def it_writes_the_item_and_its_history_to_the_failure_log_when_the_insert_fails(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        item = valid_reimbursement_item("REQ-CEIL-DOWN")
+        pool = FakePool(insert_errors={"REQ-CEIL-DOWN": asyncpg.PostgresConnectionError("reset")})
+        producer = FakeProducer()
+
+        with caplog.at_level(logging.CRITICAL, logger=load_config().failure_log.logger_name):
+            outcomes = await handle_message(
+                _deps(pool, producer),
+                _envelope([item], retry=4, errors=_three_failures()).model_dump_json().encode(),
+            )
+
+        assert outcomes == [ItemOutcome.LOGGED]
+        written = _failures(caplog)
+        assert len(written) == 1
+        assert written[0]["item"] == item
+        assert [entry["message"] for entry in written[0]["errors"]] == [
+            "connection reset by peer",
+            "broker unreachable",
+            "submitted_at is in the future",
+        ]
+
+    async def it_publishes_nothing_when_the_escalation_insert_fails(self) -> None:
+        item = valid_reimbursement_item("REQ-CEIL-DOWN-QUIET")
+        pool = FakePool(
+            insert_errors={"REQ-CEIL-DOWN-QUIET": asyncpg.PostgresConnectionError("reset")}
+        )
+        producer = FakeProducer()
+
+        await handle_message(
+            _deps(pool, producer), _envelope([item], retry=4).model_dump_json().encode()
+        )
+
+        assert producer.produced == []
+
+    async def it_drops_the_item_as_a_duplicate_when_the_escalation_collides(
+        self, db: asyncpg.Connection
+    ) -> None:
+        await insert_pending(db, valid_reimbursement_item("REQ-CEIL-DUP"))
+        item = valid_reimbursement_item("REQ-CEIL-DUP")
+
+        outcomes = await handle_message(
+            _deps(RealPool(db), FakeProducer()),
+            _envelope([item], retry=4, errors=_three_failures()).model_dump_json().encode(),
+        )
+
+        assert outcomes == [ItemOutcome.DUPLICATE]
+        assert await _row_count(db, "REQ-CEIL-DUP") == 1
+
+    async def it_writes_no_failure_log_entry_for_that_duplicate(
+        self, db: asyncpg.Connection, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        await insert_pending(db, valid_reimbursement_item("REQ-CEIL-DUP-NOLOG"))
+        item = valid_reimbursement_item("REQ-CEIL-DUP-NOLOG")
+
+        with caplog.at_level(logging.CRITICAL, logger=load_config().failure_log.logger_name):
+            await handle_message(
+                _deps(RealPool(db), FakeProducer()),
+                _envelope([item], retry=4).model_dump_json().encode(),
+            )
+
+        assert _failures(caplog) == []
+
+
+class DescribeAMalformedMessage:
+    async def it_logs_a_body_that_is_not_json_at_all(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        pool, producer = FakePool(), FakeProducer()
+
+        with caplog.at_level(logging.CRITICAL, logger=load_config().failure_log.logger_name):
+            outcomes = await handle_message(_deps(pool, producer), b"this is not json")
+
+        assert outcomes == [ItemOutcome.LOGGED]
+        assert _failures(caplog)[0]["message"] == "this is not json"
+
+    async def it_logs_an_envelope_that_does_not_match_the_schema(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        pool, producer = FakePool(), FakeProducer()
+
+        with caplog.at_level(logging.CRITICAL, logger=load_config().failure_log.logger_name):
+            outcomes = await handle_message(_deps(pool, producer), b'{"retry": 0}')
+
+        assert outcomes == [ItemOutcome.LOGGED]
+        assert len(_failures(caplog)) == 1
+
+    async def it_touches_neither_the_database_nor_the_broker(self) -> None:
+        pool, producer = FakePool(), FakeProducer()
+
+        await handle_message(_deps(pool, producer), b"this is not json")
+
+        assert pool.acquisitions == 0
+        assert pool.inserted == []
+        assert producer.produced == []
+
+    async def it_lets_the_next_valid_message_process_normally(self) -> None:
+        pool, producer = FakePool(), FakeProducer()
+        good = valid_reimbursement_item("REQ-AFTER-BAD")
+
+        await handle_message(_deps(pool, producer), b"this is not json")
+        outcomes = await handle_message(
+            _deps(pool, producer), _envelope([good]).model_dump_json().encode()
+        )
+
+        assert outcomes == [ItemOutcome.PUBLISHED]
+        assert [row[0] for row in pool.inserted] == ["REQ-AFTER-BAD"]
+
+
+class DescribeAnInvalidItem:
+    async def it_is_neither_retried_nor_published(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        pool, producer = FakePool(), FakeProducer()
+
+        with caplog.at_level(logging.CRITICAL, logger=load_config().failure_log.logger_name):
+            outcomes = await handle_message(
+                _deps(pool, producer), _envelope([_invalid_item()]).model_dump_json().encode()
+            )
+
+        assert outcomes == [ItemOutcome.INVALID]
+        assert producer.produced == []
+        assert pool.inserted == []
+
+    async def it_is_written_to_the_failure_log(self, caplog: pytest.LogCaptureFixture) -> None:
+        item = _invalid_item("REQ-INVALID-LOGGED")
+
+        with caplog.at_level(logging.CRITICAL, logger=load_config().failure_log.logger_name):
+            await handle_message(
+                _deps(FakePool(), FakeProducer()), _envelope([item]).model_dump_json().encode()
+            )
+
+        written = _failures(caplog)
+        assert len(written) == 1
+        assert written[0]["item"] == item
+        assert written[0]["outcome"] == ItemOutcome.INVALID.value
+
+    async def it_gets_no_human_review_row_past_the_retry_ceiling(
+        self, db: asyncpg.Connection
+    ) -> None:
+        item = _invalid_item("REQ-INVALID-CEIL")
+
+        outcomes = await handle_message(
+            _deps(RealPool(db), FakeProducer()),
+            _envelope([item], retry=4, errors=_three_failures()).model_dump_json().encode(),
+        )
+
+        assert outcomes == [ItemOutcome.INVALID]
+        assert await _row_count(db, "REQ-INVALID-CEIL") == 0
+
+    async def it_leaves_the_valid_items_beside_it_unaffected(self) -> None:
+        items = [valid_reimbursement_item("REQ-GOOD"), _invalid_item()]
+        pool, producer = FakePool(), FakeProducer()
+
+        outcomes = await handle_message(
+            _deps(pool, producer), _envelope(items).model_dump_json().encode()
+        )
+
+        assert outcomes == [ItemOutcome.PUBLISHED, ItemOutcome.INVALID]
+        assert [row[0] for row in pool.inserted] == ["REQ-GOOD"]
+
+
+class DescribeAnEmptyPayload:
+    async def it_is_dropped_as_a_logged_no_op(self, caplog: pytest.LogCaptureFixture) -> None:
+        pool, producer = FakePool(), FakeProducer()
+
+        with caplog.at_level(logging.INFO, logger=processing.__name__):
+            outcomes = await handle_message(
+                _deps(pool, producer), _envelope([], retry=1).model_dump_json().encode()
+            )
+
+        assert outcomes == []
+        assert _events(caplog, logging.INFO) == [{"event": EMPTY_PAYLOAD_EVENT, "retry": 1}]
+        assert pool.acquisitions == 0
+        assert producer.produced == []
+
+    async def it_is_not_treated_as_an_error(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level(logging.CRITICAL, logger=load_config().failure_log.logger_name):
+            await handle_message(
+                _deps(FakePool(), FakeProducer()), _envelope([]).model_dump_json().encode()
+            )
+
+        assert _failures(caplog) == []
+        assert [record for record in caplog.records if record.levelno >= logging.ERROR] == []
