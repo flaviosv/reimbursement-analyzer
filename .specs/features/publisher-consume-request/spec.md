@@ -97,6 +97,8 @@ Every ambiguity is resolved or recorded here — nothing is left silently unclea
 | Broker disconnect handling | Rely on librdkafka's built-in reconnect/retry behavior | Consistent with `api-post-reimbursement`'s reliance on librdkafka's own semantics rather than a hand-rolled equivalent | y |
 | PII in error text | Full error detail (which may include DB-supplied column values) goes to the envelope, the row, and the failure file — all of which already hold the payload. **stdout logs get a sanitized form**: error type and constraint name, never the driver's `DETAIL` line | Postgres constraint errors embed offending values (e.g. the submitter's email) in `DETAIL`. The envelope/row/file are inside the same trust boundary as the payload; stdout is not | y |
 | Failure-log destination/format | A **dedicated named logger** at critical level, one structured JSON record per failure — not a file written by application code | User decision (2026-08-08). A container-local file is destroyed by the restart it is meant to survive, so it would lose exactly the records it exists to preserve. `SCOPE.md:216-217`'s "log the error in a file" is satisfied at the layer that owns it: ops attach a `FileHandler` or shipper to the logger name, with no code change. Also removes the volume, path config, rotation, and off-loop file I/O | y |
+| Termination-signal semantics | **Graceful drain**: the message in hand finishes and commits its offset, then the loop exits between messages | Amendment (2026-08-08) — this **reverses PUB-33's original wording**, which required the in-flight transaction to roll back with its offset uncommitted. `design.md` already described the drain and the code implements it; the AC was the artefact left behind. Draining is the safer default: it avoids discarding work that already succeeded, and correctness on an *abrupt* kill (SIGKILL, OOM, node loss) is unchanged either way — it still rests on redelivery plus the duplicate path, exactly as **R-001** describes | y |
+| Consumer fetch sizing vs. a single ceiling-sized message | Fetch limits sized from `KAFKA_MAX_MESSAGE_BYTES`, but **not** claimed to be what makes an oversized record readable | Amendment (2026-08-08) — **KIP-74 makes `fetch.max.bytes` a soft limit**: the broker always returns at least one record per partition regardless of the setting, so a consumer can never stall on a single oversized record and a ceiling-sized round trip proves the *broker's* behaviour, not the consumer's sizing. The settings stay because they bound the memory of a **multi-message** fetch; PUB-34 asserts them structurally and PUB-35 now claims only end-to-end processing. Recorded so the disproven premise is not re-added | y |
 
 **Open questions:** none — the six rows marked **n** are recorded
 assumptions with a chosen default and rationale. Each is independently
@@ -289,9 +291,9 @@ bad message never blocks every request behind it.
    as a dropped no-op and SHALL NOT treat it as an error.
 4. WHEN any case above occurs THEN the consumer loop SHALL continue
    processing subsequent messages without interruption.
-5. WHEN the process receives a termination signal mid-transaction THEN the
-   in-flight transaction SHALL roll back and the offset SHALL NOT be
-   committed for the message being processed.
+5. WHEN the process receives a termination signal THEN the message currently
+   being processed SHALL complete and commit its offset, and the loop SHALL
+   then exit without consuming another message.
 
 **Independent Test**: Feed the consumer a non-JSON body, a schema-violating
 envelope, an item missing `request_id`, and an empty `payload` array; assert
@@ -306,10 +308,13 @@ processed normally.
 largest message the API is allowed to write, so that the size contract the
 API advertises is deliverable end to end rather than only writable.
 
-**Why P1**: `api-post-reimbursement/spec.md` flagged this explicitly as a
-downstream dependency: raising broker `message.max.bytes` lets ceiling-sized
-messages be *written*, but a consumer at librdkafka's default fetch sizes
-cannot *read* them. This feature is where that lands.
+**Why P1**: `api-post-reimbursement/spec.md` flagged this as a downstream
+dependency: raising broker `message.max.bytes` makes ceiling-sized messages
+*writable*, and the publisher is where they have to land. The consumer's
+fetch limits are sized from the same constant so that a **multi-message**
+fetch is bounded by the ceiling rather than by librdkafka's smaller default —
+not because a single oversized record would otherwise be unreadable (see the
+KIP-74 row in Assumptions).
 
 **Acceptance Criteria**:
 
@@ -317,7 +322,8 @@ cannot *read* them. This feature is where that lands.
    the same `KAFKA_MAX_MESSAGE_BYTES` constant the API's producer and the
    compose broker already use — the number SHALL NOT be retyped.
 2. WHEN a `Request` message at the size ceiling is produced THEN the
-   publisher SHALL consume and process it without a fetch-size error.
+   publisher SHALL consume it and process it end to end — its row committed
+   and its `Reimbursement` message published.
 
 **Independent Test**: Against a real broker sized from
 `KAFKA_MAX_MESSAGE_BYTES`, produce a ceiling-sized `Request` message and
@@ -355,8 +361,13 @@ It recovers only by thrashing. See **AD-013** and **R-005**.
 6. WHEN the service starts THEN the DB connection pool SHALL be sized at or
    above the concurrency limit, since each in-flight item holds a
    transaction open across a Kafka round-trip.
-7. WHEN a batch at the API's 500-item cap is processed THEN it SHALL
-   complete well within `max.poll.interval.ms`.
+7. WHEN the consumer is configured THEN `max.poll.interval.ms` SHALL be set
+   explicitly rather than inherited from the client library, and a message's
+   items SHALL be processed concurrently up to the configured limit rather
+   than one at a time. AD-013's `500 ÷ 10 × ~15ms ≈ 0.75s` against a 300 s
+   interval is the **rationale** for those two values, not an asserted
+   runtime — a wall-clock promise is not observable without a load test
+   (**R-005**).
 
 **Independent Test**: Feed a 500-item message with an instrumented fake
 producer that records maximum observed in-flight count; assert it never
@@ -432,16 +443,16 @@ and assert the other 499 are unaffected.
 | PUB-30 | P1: Bad input (invalid item logged, never retried) | Design | Pending |
 | PUB-31 | P1: Bad input (empty payload dropped as a no-op) | Design | Pending |
 | PUB-32 | P1: Bad input (consumer loop survives) | Design | Pending |
-| PUB-33 | P1: Bad input (termination signal rolls back, offset uncommitted) | Design | Pending |
+| PUB-33 | P1: Bad input (termination signal drains the message in hand, then exits) | Design | Pending |
 | PUB-34 | P1: Ceiling-sized messages (fetch limits derived from the shared constant) | Design | Pending |
-| PUB-35 | P1: Ceiling-sized messages (a `KAFKA_MAX_MESSAGE_BYTES` message consumed and processed) | Design | Pending |
+| PUB-35 | P1: Ceiling-sized messages (a `KAFKA_MAX_MESSAGE_BYTES` message consumed and processed end to end) | Design | Pending |
 | PUB-36 | P1: Concurrency (at most 10 items in flight) | Design | Pending |
 | PUB-37 | P1: Concurrency (excess items wait for a slot, never dropped) | Design | Pending |
 | PUB-38 | P1: Concurrency (per-item independence preserved under concurrency) | Design | Pending |
 | PUB-39 | P1: Concurrency (completion and publish order non-deterministic) | Design | Pending |
 | PUB-40 | P1: Concurrency (offset committed once, after the last item settles) | Design | Pending |
 | PUB-41 | P1: Concurrency (connection pool sized at or above the limit) | Design | Pending |
-| PUB-42 | P1: Concurrency (500-item batch completes inside the poll interval) | Design | Pending |
+| PUB-42 | P1: Concurrency (`max.poll.interval.ms` set explicitly; fan-out genuinely concurrent) | Design | Pending |
 
 **Coverage:** 42 total, 0 mapped to tasks, 42 unmapped ⚠️ (Tasks phase
 pending)

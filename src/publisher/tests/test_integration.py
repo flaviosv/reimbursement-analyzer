@@ -219,8 +219,10 @@ class DescribeTheEndToEndRoundTrip:
         item["padding"] = "x" * (target - len(_envelope([item])))
         raw = _envelope([item])
         assert len(raw) == target
-        # Beyond librdkafka's 1 MiB default fetch: without the consumer's own
-        # sizing this message is writable but unreadable.
+        # Genuinely past librdkafka's 1 MiB default fetch, so the round trip is
+        # at the ceiling and not merely near it. It does not prove the fetch
+        # sizing: KIP-74 makes fetch.max.bytes a soft limit and the broker
+        # returns one record regardless — see PUB-35's Assumptions row.
         assert len(raw) > 1_048_576
 
         await _produce_request(config, raw)
