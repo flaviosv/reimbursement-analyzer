@@ -18,7 +18,7 @@ from processing import (
     handle_message,
     process_item,
 )
-from shared.config import REIMBURSEMENT_TOPIC, REQUEST_TOPIC, load_config
+from shared.config import MAX_RETRY, REIMBURSEMENT_TOPIC, REQUEST_TOPIC, load_config
 from shared.models import AttemptError, RequestEnvelope, Stage
 from shared.reimbursement.repository import insert_pending
 
@@ -400,6 +400,43 @@ def _three_failures() -> list[AttemptError]:
             (3, "db-insert", "CheckViolationError", "submitted_at is in the future"),
         )
     ]
+
+
+class DescribeTheRetryCeilingBoundary:
+    """`retry > 3`, not `>= 3`. The two neighbouring values are the whole
+    difference between a fourth attempt and escalating one attempt early."""
+
+    async def it_takes_the_normal_path_at_the_ceiling_itself(self) -> None:
+        item = valid_reimbursement_item("REQ-AT-CEILING")
+        pool, producer = FakePool(), FakeProducer()
+
+        outcomes = await handle_message(
+            _deps(pool, producer),
+            _envelope([item], retry=MAX_RETRY, errors=_three_failures()).model_dump_json().encode(),
+        )
+
+        assert MAX_RETRY == 3
+        assert outcomes == [ItemOutcome.PUBLISHED]
+        assert [row[0] for row in pool.inserted] == ["REQ-AT-CEILING"]
+        assert len(producer.messages(REIMBURSEMENT_TOPIC)) == 1
+
+    async def it_escalates_one_attempt_later(self, db: asyncpg.Connection) -> None:
+        item = valid_reimbursement_item("REQ-PAST-CEILING")
+        producer = FakeProducer()
+
+        outcomes = await handle_message(
+            _deps(RealPool(db), producer),
+            _envelope([item], retry=MAX_RETRY + 1, errors=_three_failures())
+            .model_dump_json()
+            .encode(),
+        )
+
+        assert outcomes == [ItemOutcome.ESCALATED]
+        status = await db.fetchval(
+            "SELECT status FROM reimbursement WHERE request_id = $1", "REQ-PAST-CEILING"
+        )
+        assert status == "human-review"
+        assert producer.produced == []
 
 
 class DescribeAMessagePastTheRetryCeiling:
