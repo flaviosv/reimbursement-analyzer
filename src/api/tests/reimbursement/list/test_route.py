@@ -132,6 +132,13 @@ class DescribeGetReimbursement:
         assert response.status_code == 400
         assert "msg" in response.json()
 
+    async def it_returns_400_when_limit_is_negative(self, db: asyncpg.Connection) -> None:
+        async with _build_client(FakePool(db)) as client:
+            response = await client.get("/api/v1/reimbursement", params={"limit": -1})
+
+        assert response.status_code == 400
+        assert "msg" in response.json()
+
     async def it_returns_400_when_limit_is_not_an_integer(self, db: asyncpg.Connection) -> None:
         async with _build_client(FakePool(db)) as client:
             response = await client.get("/api/v1/reimbursement", params={"limit": "abc"})
