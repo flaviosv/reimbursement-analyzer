@@ -68,13 +68,13 @@ No coverage tool or enforced target exists. Coverage is a byproduct of the `Desc
 | --------- | -------------- | ----------------- | -------- |
 | Postgres-backed (schema, migrations, repository) | Yes, across processes | Each run creates its own uniquely-named database (`reimbursementanalyzer_<pid>_<random>_test`) on a session-scoped server, dropped `WITH (FORCE)` afterward. The fixture was promoted to a workspace-level conftest so `api` and `shared`/`publisher` tests share it | `src/api/tests/helpers.py::disposable_database_name`, workspace-level `conftest.py::disposable_database` |
 | Kafka integration (`api`) | Not verified for concurrent runs | One session-scoped `KafkaContainer` fixture shared by every test in `reimbursement/create/`; each test drains from a fresh consumer group and matches on its own marker string, but the container itself is not per-test | `src/api/tests/reimbursement/create/conftest.py::kafka_bootstrap_server` |
-| Kafka integration (`publisher`) | Not verified for concurrent runs | Same pattern as `api`'s, publisher-local because pytest resolves conftest fixtures per directory: one session-scoped `KafkaContainer` sized from `KAFKA_MAX_MESSAGE_BYTES` | `src/publisher/tests/conftest.py::kafka_bootstrap_server` |
+| Kafka integration (`publisher`) | Not verified for concurrent runs | Same pattern as `api`'s, publisher-local: one session-scoped `KafkaContainer` sized from `KAFKA_MAX_MESSAGE_BYTES`. Not hoisted to the root conftest like Postgres was — the real reason is a topic-name collision between `api`'s and `publisher`'s fixtures, not conftest resolution scoping (I8, 2026-08-08 — the previous rationale here was checked and found factually wrong: pytest conftest fixtures *do* fan out workspace-wide, which is exactly how the root-level Postgres fixture below reaches both) | `src/publisher/tests/conftest.py::kafka_bootstrap_server` |
 | Unit tests (fakes only) | Yes | No shared external state; `shared.config.load_config()`'s process-wide `lru_cache` is explicitly cleared by an autouse fixture before every test | `src/shared/tests/conftest.py`, `src/api/tests/conftest.py` |
 
 ## Gate Check Commands
 
 | Gate Level | When to Use | Command |
 | ---------- | ----------- | ------- |
-| Quick | After changes with no DB/Kafka dependency | `uv run pytest -m "not integration"` |
+| Quick | After changes with no *Kafka* dependency | `uv run pytest -m "not integration"` — still needs Docker: the `integration` marker means "needs a container *beyond* the suite's own Postgres default" (`pyproject.toml`'s marker text), not "needs no container" (corrected 2026-08-08 — V8/M2/P4/I2, 4-way corroborated: this row previously said "no DB/Kafka dependency," contradicted by line 37 above and by dozens of Postgres-backed tests in this same gate) |
 | Full | Before considering a task/PR done | `uv run pytest` |
 | Lint (ad hoc) | Optional sanity check, not gated | `uv run ruff check <path>` |
