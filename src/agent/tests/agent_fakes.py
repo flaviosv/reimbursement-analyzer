@@ -16,36 +16,20 @@ feature has no per-message fan-out to observe. No RealPool: agent's
 validation.py wraps no `conn.transaction()`, so there is no transaction
 semantics a fake could approximate imperfectly — the real-Postgres proof
 lives entirely in the integration test.
+
+`FakeProducer` itself is re-exported from `shared.testing`, not redefined
+here: it doubles a contract (`AIOProducer.produce()`) `shared.producer`
+already owns, reachable by a normal package import with no bare-name
+collision risk — unlike `FakePool`/`FakeConnection`, which are genuinely
+agent-specific.
 """
 
-import asyncio
-import json
 from typing import Any
 from uuid import UUID
 
+from shared.testing import FakeProducer
 
-class FakeProducer:
-    """Records every produced message. `errors` maps a topic to the
-    exception its delivery future carries, so a requeue failure can be
-    injected independently of everything else."""
-
-    def __init__(self, *, errors: dict[str, Exception] | None = None) -> None:
-        self.errors = errors or {}
-        self.produced: list[tuple[str, bytes]] = []
-
-    async def produce(self, topic: str, value: bytes, **kwargs: object) -> asyncio.Future:
-        await asyncio.sleep(0)
-        self.produced.append((topic, value))
-        future = asyncio.get_running_loop().create_future()
-        error = self.errors.get(topic)
-        if error is not None:
-            future.set_exception(error)
-        else:
-            future.set_result(object())
-        return future
-
-    def messages(self, topic: str) -> list[dict[str, Any]]:
-        return [json.loads(value) for produced, value in self.produced if produced == topic]
+__all__ = ["FakeProducer", "FakePool", "FakeConnection"]
 
 
 class _FakeAcquisition:
