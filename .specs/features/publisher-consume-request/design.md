@@ -314,10 +314,13 @@ every test (`TESTING.md:63`), so new config values need no new fixture.
   `repository.is_duplicate(exc)` on the driver's own exception, so no
   dedicated exception type is defined.
 - **Note**: Postgres embeds offending column values in `DETAIL` — a unique
-  violation quotes the submitter's email. Full detail is fine in the
-  envelope, the row, and the failure file (all already inside the payload's
-  trust boundary); stdout is not. Two renderings that must be hard to
-  confuse, hence a named function.
+  violation quotes the submitter's email, so routine logging must not echo it.
+  The failure log deliberately carries the payload; `sanitize` is for
+  everything else. Both reach stdout (the failure logger propagates to the
+  root handler, which is how fluentd collects it), so the separation is about
+  *what routine logs say*, not about two isolated sinks — stdout is a
+  privileged sink either way. Two renderings that must be hard to confuse,
+  hence a named function.
 
 ### `publisher/src/consumer.py`
 

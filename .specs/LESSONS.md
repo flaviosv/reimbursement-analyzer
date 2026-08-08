@@ -8,7 +8,11 @@
 
 Corroborated across multiple features. Safe to apply as guidance.
 
-_none_
+### L-003 — A spec acceptance criterion claiming a memory or performance property should also state the observable proxy to test it by, or validation can only prove it by code inspection rather than by assertion.
+- signal: `spec_precision_gap` · recurrence: 2 feature(s) · scope: `spec-writing` · harmful: 0
+- features: api-post-reimbursement, publisher-consume-request
+- evidence: spec.md P1 '25 MB ceiling enforced end to end' AC2 / test_validation.py:47-52 (spec-writing) (+1 more)
+- last seen: 2026-08-08T17:20:19Z
 
 ## Candidates (under observation — do NOT load as guidance yet)
 
@@ -26,17 +30,47 @@ Seen once or not yet corroborated. Tracked, not trusted.
 - evidence: spec.md P1 'Publish failure is never silently accepted' AC4 (spec-writing)
 - last seen: 2026-08-07T23:06:24Z
 
-### L-003 — A spec acceptance criterion claiming a memory or performance property should also state the observable proxy to test it by, or validation can only prove it by code inspection rather than by assertion.
-- signal: `spec_precision_gap` · recurrence: 1 feature(s) · scope: `spec-writing` · harmful: 0
-- features: api-post-reimbursement
-- evidence: spec.md P1 '25 MB ceiling enforced end to end' AC2 / test_validation.py:47-52 (spec-writing)
-- last seen: 2026-08-07T23:06:24Z
-
 ### L-004 — testcontainers' KafkaContainer.with_kraft() enforces Confluent Platform's own version numbering and rejects tags below 7.0.0, so it cannot be pinned to a non-Confluent broker image (e.g. apache/kafka) regardless of that image's real Kafka version -- verify testcontainers image compatibility empirically before assuming a project's real broker image can be reused in an integration test.
 - signal: `spec_deviation` · recurrence: 1 feature(s) · scope: `testing,kafka` · harmful: 0
 - features: api-post-reimbursement
 - evidence: src/api/tests/reimbursement/create/conftest.py:7 (testing,kafka)
 - last seen: 2026-08-07T23:06:30Z
+
+### L-005 — When an acceptance criterion requires a log record to carry a specific identifier, assert that identifier is present, not only that forbidden content is absent.
+- signal: `ac_gap` · recurrence: 1 feature(s) · scope: `logging` · harmful: 0
+- features: publisher-consume-request
+- evidence: PUB-15 / src/publisher/src/processing.py:216 (logging)
+- last seen: 2026-08-08T17:20:18Z
+
+### L-006 — When the design deliberately inverts an acceptance criterion, amend that criterion in the spec in the same change, or spec and code disagree in writing at validation time.
+- signal: `spec_deviation` · recurrence: 1 feature(s) · scope: `spec-writing` · harmful: 0
+- features: publisher-consume-request
+- evidence: PUB-33 / design.md:388,448 vs spec.md P1 bad-input AC5 (spec-writing)
+- last seen: 2026-08-08T17:20:18Z
+
+### L-007 — Process-lifecycle wiring such as signal handlers and startup hooks needs a test asserting it was armed, because no functional test exercises it.
+- signal: `surviving_mutant` · recurrence: 1 feature(s) · scope: `testing` · harmful: 0
+- features: publisher-consume-request
+- evidence: mutant M9 / src/publisher/src/consumer.py:87-90 (testing)
+- last seen: 2026-08-08T17:20:18Z
+
+### L-008 — Test both sides of every numeric threshold an acceptance criterion names, the last passing value and the first failing one, or an off-by-one in the comparison survives.
+- signal: `surviving_mutant` · recurrence: 1 feature(s) · scope: `testing` · harmful: 0
+- features: publisher-consume-request
+- evidence: mutant M10 / src/publisher/src/processing.py:90 (testing)
+- last seen: 2026-08-08T17:20:18Z
+
+### L-009 — An integration test claiming a configuration value is load-bearing must be shown to fail when that value is reverted to its default, or it proves only that the scenario works.
+- signal: `surviving_mutant` · recurrence: 1 feature(s) · scope: `testing` · harmful: 0
+- features: publisher-consume-request
+- evidence: mutant M8 / src/publisher/tests/test_integration.py:211-232 (testing)
+- last seen: 2026-08-08T17:20:19Z
+
+### L-010 — An acceptance criterion phrased as a negative universal such as no behaviour shall depend on X gives no test to write, so restate it as a concrete observation that can be asserted.
+- signal: `spec_precision_gap` · recurrence: 1 feature(s) · scope: `spec-writing` · harmful: 0
+- features: publisher-consume-request
+- evidence: PUB-39 / spec.md P1 concurrency AC4 (spec-writing)
+- last seen: 2026-08-08T17:20:19Z
 
 ## Quarantined (failed when applied — ignore)
 

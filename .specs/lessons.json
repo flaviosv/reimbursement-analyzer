@@ -3,7 +3,7 @@
   "promote_threshold": 2,
   "window_days": 45,
   "quarantine_threshold": 2,
-  "next_id": 5,
+  "next_id": 11,
   "lessons": [
     {
       "id": "L-001",
@@ -47,17 +47,19 @@
       "text": "A spec acceptance criterion claiming a memory or performance property should also state the observable proxy to test it by, or validation can only prove it by code inspection rather than by assertion.",
       "signal": "spec_precision_gap",
       "scope": "spec-writing",
-      "status": "candidate",
+      "status": "confirmed",
       "features": [
-        "api-post-reimbursement"
+        "api-post-reimbursement",
+        "publisher-consume-request"
       ],
-      "recurrence": 1,
+      "recurrence": 2,
       "harmful": 0,
       "evidence": [
-        "spec.md P1 '25 MB ceiling enforced end to end' AC2 / test_validation.py:47-52 (spec-writing)"
+        "spec.md P1 '25 MB ceiling enforced end to end' AC2 / test_validation.py:47-52 (spec-writing)",
+        "PUB-42 / spec.md P1 concurrency AC7 (spec-writing)"
       ],
       "created": "2026-08-07T23:06:24Z",
-      "last_seen": "2026-08-07T23:06:24Z"
+      "last_seen": "2026-08-08T17:20:19Z"
     },
     {
       "id": "L-004",
@@ -76,6 +78,114 @@
       ],
       "created": "2026-08-07T23:06:30Z",
       "last_seen": "2026-08-07T23:06:30Z"
+    },
+    {
+      "id": "L-005",
+      "key": "ac_gap::when an acceptance criterion requires a log record to carry a specific identifier assert that identifier is present not only that forbidden content is absent",
+      "text": "When an acceptance criterion requires a log record to carry a specific identifier, assert that identifier is present, not only that forbidden content is absent.",
+      "signal": "ac_gap",
+      "scope": "logging",
+      "status": "candidate",
+      "features": [
+        "publisher-consume-request"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "PUB-15 / src/publisher/src/processing.py:216 (logging)"
+      ],
+      "created": "2026-08-08T17:20:18Z",
+      "last_seen": "2026-08-08T17:20:18Z"
+    },
+    {
+      "id": "L-006",
+      "key": "spec_deviation::when the design deliberately inverts an acceptance criterion amend that criterion in the spec in the same change or spec and code disagree in writing at validation time",
+      "text": "When the design deliberately inverts an acceptance criterion, amend that criterion in the spec in the same change, or spec and code disagree in writing at validation time.",
+      "signal": "spec_deviation",
+      "scope": "spec-writing",
+      "status": "candidate",
+      "features": [
+        "publisher-consume-request"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "PUB-33 / design.md:388,448 vs spec.md P1 bad-input AC5 (spec-writing)"
+      ],
+      "created": "2026-08-08T17:20:18Z",
+      "last_seen": "2026-08-08T17:20:18Z"
+    },
+    {
+      "id": "L-007",
+      "key": "surviving_mutant::process lifecycle wiring such as signal handlers and startup hooks needs a test asserting it was armed because no functional test exercises it",
+      "text": "Process-lifecycle wiring such as signal handlers and startup hooks needs a test asserting it was armed, because no functional test exercises it.",
+      "signal": "surviving_mutant",
+      "scope": "testing",
+      "status": "candidate",
+      "features": [
+        "publisher-consume-request"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "mutant M9 / src/publisher/src/consumer.py:87-90 (testing)"
+      ],
+      "created": "2026-08-08T17:20:18Z",
+      "last_seen": "2026-08-08T17:20:18Z"
+    },
+    {
+      "id": "L-008",
+      "key": "surviving_mutant::test both sides of every numeric threshold an acceptance criterion names the last passing value and the first failing one or an off by one in the comparison survives",
+      "text": "Test both sides of every numeric threshold an acceptance criterion names, the last passing value and the first failing one, or an off-by-one in the comparison survives.",
+      "signal": "surviving_mutant",
+      "scope": "testing",
+      "status": "candidate",
+      "features": [
+        "publisher-consume-request"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "mutant M10 / src/publisher/src/processing.py:90 (testing)"
+      ],
+      "created": "2026-08-08T17:20:18Z",
+      "last_seen": "2026-08-08T17:20:18Z"
+    },
+    {
+      "id": "L-009",
+      "key": "surviving_mutant::an integration test claiming a configuration value is load bearing must be shown to fail when that value is reverted to its default or it proves only that the scenario works",
+      "text": "An integration test claiming a configuration value is load-bearing must be shown to fail when that value is reverted to its default, or it proves only that the scenario works.",
+      "signal": "surviving_mutant",
+      "scope": "testing",
+      "status": "candidate",
+      "features": [
+        "publisher-consume-request"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "mutant M8 / src/publisher/tests/test_integration.py:211-232 (testing)"
+      ],
+      "created": "2026-08-08T17:20:19Z",
+      "last_seen": "2026-08-08T17:20:19Z"
+    },
+    {
+      "id": "L-010",
+      "key": "spec_precision_gap::an acceptance criterion phrased as a negative universal such as no behaviour shall depend on x gives no test to write so restate it as a concrete observation that can be asserted",
+      "text": "An acceptance criterion phrased as a negative universal such as no behaviour shall depend on X gives no test to write, so restate it as a concrete observation that can be asserted.",
+      "signal": "spec_precision_gap",
+      "scope": "spec-writing",
+      "status": "candidate",
+      "features": [
+        "publisher-consume-request"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "PUB-39 / spec.md P1 concurrency AC4 (spec-writing)"
+      ],
+      "created": "2026-08-08T17:20:19Z",
+      "last_seen": "2026-08-08T17:20:19Z"
     }
   ]
 }
