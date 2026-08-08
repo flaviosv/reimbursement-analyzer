@@ -704,31 +704,49 @@ file path or import from the original `api-post-reimbursement` spec/design
 docs is still accurate — several are now stale (see below).
 
 **In flight:** `publisher-consume-request` — spec (42 requirements), context,
-and `design.md` drafted. Awaiting design approval before Tasks. No code yet.
+and `design.md` **v3** complete. v3 was rewritten against the `docs/codebase/`
+context set (`1ea1eba`) and AD-018 … AD-024; the staleness this section
+previously warned about is resolved. Awaiting design approval before Tasks.
+No code yet.
 
-AD-013 / AD-014 / AD-015 were ratified in the prior session, and
-`.specs/RISKS.md` was created (R-001 … R-005) to hold what is knowingly
-deferred. `design.md` proposes **AD-016** (single centralised config in
-`shared`, frozen `Settings` models + `from_env()`) and **AD-017** (`asyncpg`
-pool + implicit-transaction pattern) — **still reserved, not appended**,
-pending approval. AD-018 through AD-024 above deliberately did not claim
-these numbers.
+**ADR numbering reconciled 2026-08-08.** design.md v2 proposed AD-023/AD-024,
+which `0c6d35f` and `7da0697` claimed in the meantime. v3 now proposes:
+**AD-016 vacated** (reserved for a frozen-`Settings`/`from_env()` config that
+was actually taken, in a different shape, as AD-022 + AD-023 — release it so
+the gap in the log is explained); **AD-017 claimed as reserved** (`asyncpg`
+pool + implicit-transaction pattern — still unclaimed and exactly this
+design's DB decision); **AD-025** (`shared` owns cross-service persistence —
+`repository`, `failure_log`, `usecases` — and gains `asyncpg`); **AD-026**
+(`publisher` flattens to `src/publisher/src`, virtual `package = false`).
+None appended yet. AD-017 and AD-025 bind the Agent feature.
 
-**`design.md` is now partially stale — read before approving or starting
-Tasks:** its "Prerequisites" table listed four changes to already-merged
-`api-post-reimbursement` code: `RequestEnvelope.errors` + `AttemptError`
-model (**P1 — still not done**), the `build_envelope` prefix (**P2 — still
-not done**), the 500-item cap (**P3 — done**, `shared.config.MAX_BATCH_ITEMS`),
-and the config move to `shared` (**P4 — done**, `shared/config.py`). P3 and
-P4 are functionally satisfied but **not in the shape `design.md` drafted** —
-`shared/config.py` today is plain module-level constants + functions, not
-the frozen pydantic `Settings`/`from_env()` model `design.md`'s
-"Configuration" section specifies for AD-016. `design.md`'s "P4 blast
-radius" note (9 files importing `api.config`) and its File Structure
-section's `api/src/api/config.py` path are both stale — `api.config` no
-longer exists in any form, and the `api/src/api/` path itself no longer
-exists (AD-018). Revisit `design.md`'s Configuration, Prerequisites, and
-File Structure sections against current `main`/this branch before Tasks.
+**Remaining prerequisite — one, not four.** Only the envelope change
+survives: `AttemptError` + `RequestEnvelope.errors` in `shared/models.py`,
+and the `"errors":[],` splice prefix in
+`api/src/reimbursement/create/producer.py`. It amends shipped, passing code —
+`test_producer.py` and `test_integration.py` assert envelope bytes. The
+500-item cap (`shared.config.MAX_BATCH_ITEMS`) and the centralised config
+(`shared/config.py`) have both since shipped.
+
+**Structural direction taken 2026-08-08** (user): `publisher` flattens to
+`src/publisher/src`; `repository.py`, `failure_log.py`, and a new
+`shared/usecases/send_human_review.py` go to `shared` for Agent reuse; the
+publisher gets no `producer.py` (`shared.producer.publish` is already
+generic) and no `reporting.py`; consumer lifecycle stays publisher-local
+because a consumer's `group.id`/subscription/offset semantics are
+layer-specific, unlike a stateless `publish()`.
+
+**Open task-level questions:** where the Postgres testcontainer fixture lives
+once `src/shared/tests/` needs it (it currently sits in
+`src/api/tests/conftest.py`), and whether `helpers.py` is promoted out of
+`src/api/tests/` rather than cross-imported via `pythonpath`.
+
+**Deferred, decide before the Agent feature:** flat-module names share one
+pytest `sys.path` (`src/api/src` is already on it; `src/publisher/src` joins
+it). Publisher's `consumer.py`/`processing.py` are clear of `api`'s
+`{dependencies, errors, main, migrate}`, so nothing is needed now — but
+`agent` is namespaced only while it stays an installable package. Flattening
+it would collide its `consumer.py` with the publisher's.
 
 **Repo-wide note:** `.specs/` was untracked by git until the prior session —
 a `.gitignore` pattern bug (`!.spec`/`!.spec**`, which doesn't match

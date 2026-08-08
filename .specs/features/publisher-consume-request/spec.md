@@ -6,7 +6,7 @@
 whole system: `POST /api/v1/reimbursement` (`api-post-reimbursement`,
 implementation in progress) durably hands every accepted batch to the
 `Request` Kafka topic and returns. Nothing downstream exists yet — the
-`publisher` service (`src/publisher/src/publisher/consumer.py`) is still the
+`publisher` service (`src/publisher/src/consumer.py`, flattened per AD-018) is still the
 bootstrap placeholder that logs a `SampleMessage` from a `sample-queue`
 topic. Until it consumes `Request`, creates the `reimbursement` row, and
 publishes to `Reimbursement`, every accepted request is durably stored in
@@ -26,13 +26,19 @@ pipeline.
       does — `SCOPE.md:219-220`'s rollback requirement is real, not
       best-effort.
 - [ ] Any failure short of the retry ceiling is retried by republishing the
-      failed item to `Request` with its retry counter incremented — never
-      silently dropped, never silently duplicated.
+      failed item to `Request` with its retry counter incremented **and its
+      accumulated error history attached** — never silently dropped, never
+      silently duplicated.
 - [ ] Past the retry ceiling (`retry > 3`), the item is preserved as a
-      `human-review` row rather than lost, with a file-log fallback if even
-      that fails (`SCOPE.md:216-217`).
+      `human-review` row whose `decision_reason` spells out **every failure
+      that led there**, so a reviewer can act without reading server logs
+      (`SCOPE.md:216-217`).
 - [ ] A resubmitted duplicate is recognized and dropped without exhausting
-      retries on a condition retrying can never fix.
+      retries on a condition retrying can never fix — and the drop is
+      emitted as a countable event, not a silent no-op.
+- [ ] A full batch completes far inside `max.poll.interval.ms`, so processing
+      time never causes a consumer eviction or a group rebalance
+      (**AD-013**).
 
 ## Out of Scope
 
@@ -42,14 +48,19 @@ Explicitly excluded. Documented to prevent scope creep.
 | ------- | ------ |
 | Agent decision logic (deterministic/probabilistic layers, 90-day/200/2000 rules) | `SCOPE.md:223-274` — a separate service and feature; the publisher makes no approval decisions |
 | Consumption of the `Reimbursement` topic | Owned by the Agent feature |
-| `GET` / `PUT /api/v1/reimbursement/:uuid` | Separate endpoints (`SCOPE.md:146-204`), owned by the API, not the publisher |
+| `GET` / `PUT /api/v1/reimbursement/:uuid` | Separate endpoints (`SCOPE.md:146-204`), owned by the API |
 | Database schema or migrations | Owned by `db-schema-migrations`, already merged; this feature writes into the existing `reimbursement` table and does not alter it |
-| `UPDATE`ing an existing `reimbursement` row | The publisher only ever `INSERT`s. Status transitions after creation (`auto-approved`, etc.) belong to the Agent |
-| Fixing `reimbursement_submitted_at_check`'s mismatch with the POST endpoint's declined-to-bound decision | Belongs to a `db-schema-migrations` follow-up; this feature inherits the gap and routes it through the standard DB-failure path — see Assumptions |
+| `UPDATE`ing an existing `reimbursement` row | The publisher only ever `INSERT`s. Status transitions after creation belong to the Agent |
+| Closing the dual-write window (transactional outbox) | Recorded as **R-001** in `.specs/RISKS.md`; deferred by explicit decision. The Agent-side mitigation (tolerate a `uuid` with no row) belongs to the Agent's spec |
+| Fixing `reimbursement_submitted_at_check`'s mismatch with the POST endpoint's declined-to-bound decision | Recorded as **R-002**; this feature inherits the gap and routes it through the standard DB-failure path |
+| Kafka topic retention / audit-retention policy | Recorded as **R-003** — the byte-exact original now lives only in the `Request` log |
+| Metrics infrastructure, counters, alerting rules | Recorded as **R-004**. This feature emits structured, countable log events; it does not introduce a metrics stack (`SCOPE.md:300-303` defers monitoring to assumed external tooling) |
+| Enforcing the 500-item batch cap | **AD-013** places it at the API edge. **Already shipped** — `BATCH_ADAPTER` applies `Field(max_length=MAX_BATCH_ITEMS)`; this feature depends on the cap and asserts its own behaviour at that batch size |
+| Tuning the 500 / 10 throughput parameters | Starting values with no load test behind them — recorded as **R-005** for revisit with production data |
 | Authentication / authorization | Deliberate project decision (`SCOPE.md:295-297`); the publisher is an internal consumer with no external surface |
-| LangFuse tracing | `SCOPE.md:276-280` scopes LangFuse to the Agent's LLM steps; the publisher does no LLM work, so it uses the existing stdout logging convention plus the file-log fallback this feature adds |
-| Kafka topic pre-creation, consumer-side `fetch.max.bytes` sizing | Flagged as a downstream dependency in `api-post-reimbursement/spec.md`; this feature is where it lands — the publisher's consumer config is in scope, broker-level topic creation is not (`SCOPE.md:54` bootstrap concern) |
-| Multi-instance / partition-count tuning | Kafka consumer-group partitioning plus the existing unique constraint already provide cross-instance idempotency for free; no new coordination mechanism is added |
+| LangFuse tracing | `SCOPE.md:276-280` scopes LangFuse to the Agent's LLM steps; the publisher does no LLM work |
+| Kafka topic pre-creation at bootstrap | `SCOPE.md:54` bootstrap concern. The publisher's own **consumer** sizing is in scope (see P1: ceiling-sized messages) |
+| Multi-instance / partition-count tuning | Kafka consumer-group partitioning plus the existing unique constraint already provide cross-instance idempotency; no new coordination mechanism is added |
 
 ---
 
@@ -59,28 +70,38 @@ Every ambiguity is resolved or recorded here — nothing is left silently unclea
 
 | Assumption / decision | Chosen default | Rationale | Confirmed? |
 | --------------------- | --------------- | --------- | ---------- |
-| Unit of work | Per-item, not per-message | `SCOPE.md:208-211`'s "iterate over each item... in a single transaction" read as one transaction per item. Confirmed with the user | y |
-| DB↔Kafka atomicity | Hold the DB transaction open across the publish call; commit on delivery ack, rollback on failure/timeout | Matches `SCOPE.md:219-220` literally. Confirmed with the user | y |
-| Retry mechanism | Republish the failed item alone, as a new `RequestEnvelope` with `retry` incremented, back onto `Request` | No second topic is named anywhere in scope; composes cleanly with per-item units of work. Confirmed with the user | y |
-| `Reimbursement`-topic message shape | `{uuid, retry, published_at, payload}`, one message per item, `payload` byte-spliced from the consumed item (not re-serialized through the DB) | Mirrors `RequestEnvelope`; `retry` resets to `0` because it now tracks the Agent's own failures, a separate counter. Confirmed with the user | y |
-| Duplicate handling | A unique-constraint violation on insert is detected by Postgres error code and dropped with an informational log — no retry, no human-review fallback, no failure-file entry | A duplicate can never succeed on retry; applying the generic failure path burns 3 round-trips and a doomed fallback insert for nothing. Confirmed with the user as an explicit deviation from `SCOPE.md`'s undifferentiated "DB insert fails" wording | y |
-| Fields set on insert | `request_id`, `submitted_by`, `submitted_at`, `original_payload` (plus DB-default `uuid`, `status='pending'`) | `SCOPE.md:210` lists only `UUID` and `Original Payload`, but the unique index `reimbursement_request_submitter_key` is defined on `(request_id, lower(submitted_by))` — without populating those two, the duplicate-detection decision above has nothing to key on. Correction in the same spirit as `STATE.md` AD-005 | y |
-| `retry > 3` check granularity | Once per consumed envelope, before iterating items — `retry` is envelope-level, not per item | The schema (`RequestEnvelope.retry: int`) has no per-item retry field | y |
-| `retry > 3` fallback scope | Applies independently to every item in that envelope; each gets its own `human-review` insert attempt and its own file-log fallback if that fails | `SCOPE.md:214-217` describes the fallback per failing unit; per-item units of work make this the natural granularity | y |
-| `retry > 3` fallback stops further action | No publish to `Reimbursement`, no further republish, regardless of whether the fallback insert succeeds | `SCOPE.md:218` — "No other action below must be done" | y |
-| `human-review` fallback insert content | Same fields as the normal path, `status='human-review'`, `decision_reason` set to a fixed string identifying repeated-failure as the cause | Consistent with AD-005's rationale for `decision_reason` existing — an auto-decided-adjacent row records why | y |
-| Malformed / undecodable `Request` message | Logged to the failure file immediately; no DB attempt, no republish | A message that can't be parsed as `RequestEnvelope` carries no readable `retry` to increment and no items to iterate | **n** |
-| Empty `payload` array in an otherwise-valid envelope | Dropped and logged as a no-op, not an error | The POST endpoint already rejects `[]` at ingress (`api-post-reimbursement/spec.md` RCV-12); this can only arise from a bug or a hand-crafted message, so it fails safe rather than crashing the consumer loop | **n** |
-| Item processing order within one message | Sequential | No throughput requirement is stated in scope; sequential is the simpler default. Agent's discretion, confirmed as such | y |
-| Consumer offset commit | Committed once every item in the original message has been handled (committed to DB+published, or re-queued as its own new message) — never before, and the original message is never re-read | At-least-once delivery without ever reprocessing an already-handled batch; matches Kafka's standard manual-commit pattern | y |
-| Broker disconnect handling (consumer side) | Rely on librdkafka's built-in reconnect/retry behavior; no custom app-level reconnect logic | Consistent with `api-post-reimbursement`'s reliance on librdkafka's own retry/timeout semantics rather than a hand-rolled equivalent | y |
-| `submitted_at` CHECK-constraint gap (`+1 hour` cap vs. the POST endpoint's declined-to-bound decision) | Inherited as-is; routes through the standard "DB insert fails" retry → human-review → file-log path like any other non-duplicate DB error | Fixing the constraint is out of this feature's scope (schema owned by `db-schema-migrations`). Flagged, not silently absorbed | y |
-| Failure-log file location/format | A local file path (env-configurable, sane default), one JSON line per failure | No persistent-volume infrastructure is added by this feature — matches "Minimal Impact"; retrieval/rotation is a deferred operational concern | **n** |
+| Unit of work | Per-item, not per-message | `SCOPE.md:208-211`'s "iterate over each item... in a single transaction" read as one transaction per item | y |
+| DB↔Kafka atomicity | Hold the DB transaction open across the publish; commit on delivery ack, rollback on failure/timeout | Matches `SCOPE.md:219-220` literally. Residual crash window accepted and recorded as **R-001** | y |
+| Retry mechanism | Republish the failed item alone, as a new `RequestEnvelope` with `retry` incremented, back onto `Request` | No second topic is named anywhere in scope; composes cleanly with per-item units of work | y |
+| Error context across retries | `RequestEnvelope` gains `errors: list[AttemptError]`, appended to on every failure and carried through each republish | **Without this the feature is not implementable.** The consumer that sees `retry = 4` is a different poll, possibly a different process — it has no other way to know what went wrong on attempts 1-3. `api-post-reimbursement` has since shipped, so this is now an amendment to working code: one model field in `shared/models.py` plus the `"errors":[],` splice prefix in `create/producer.py`, with the envelope-byte assertions in `test_producer.py` / `test_integration.py` updated alongside | y |
+| Error history depth | Full history, one `AttemptError` per failed attempt, naturally bounded at 4 | A reviewer needs to distinguish the same error 4 times (permanently bad data — fix it) from 4 different errors (flaky infrastructure — just replay it). `retry > 3` ends the loop, so the list cannot exceed 4 entries | y |
+| `Reimbursement` message contents | `{uuid, retry, published_at, errors}` — **the `uuid` only, no payload** | User decision: the row already holds `original_payload`, so re-propagating it would duplicate the whole body again for no gain. The Agent reads the payload back from the DB by `uuid` | y |
+| `Reimbursement` envelope carries `errors` too | Yes, empty on first publish | The Agent has the identical `retry > 3` → human-review requirement (`SCOPE.md:271-273`) and would hit the identical missing-context gap. Defining it once here prevents rediscovering the same problem. Reversible — the Agent feature may drop the field if it solves this differently | **n** |
+| Byte-verbatim payload downstream | **Abandoned as a guarantee** | `original_payload` is `JSONB`, which normalizes key order, whitespace, numeric literals, and unicode escapes on write; and the payload no longer travels on `Reimbursement` at all. The byte-exact original survives only in the retained `Request` log. Recorded as **R-003** rather than restated as a promise the system cannot keep | y |
+| Republished item fidelity | Semantic equivalence — same keys, same values, key order preserved by Python's ordered dicts | Extracting one item's exact original bytes from a batch would need a span-tracking JSON parser. Since byte-identity is already lost at the JSONB boundary, the added complexity buys nothing | y |
+| Duplicate handling | A unique-constraint violation on insert is detected by Postgres error code and dropped with a structured informational event — no retry, no human-review fallback, no failure-file entry | A duplicate can never succeed on retry; the generic path would burn 3 round-trips and a doomed fallback insert. Explicit deviation from `SCOPE.md`'s undifferentiated "DB insert fails" wording | y |
+| Duplicate observability | Every drop emits a structured log record with a stable event name, the `request_id`, the constraint name, and the envelope's `retry` | Otherwise a system discarding thousands of requests looks identical to one discarding none. Interim measure — the proper metric is **R-004** | y |
+| Fields set on insert | `request_id`, `submitted_by`, `submitted_at`, `original_payload` (plus DB-default `uuid`, `status='pending'`) | `SCOPE.md:210` lists only `UUID` and `Original Payload`, but the unique index is on `(request_id, lower(submitted_by))` — without those two columns the duplicate detection above has nothing to key on. Correction in the spirit of `STATE.md` AD-005 | y |
+| `retry > 3` check granularity | Once per consumed envelope, before iterating items | `retry` is envelope-level; `RequestEnvelope` has no per-item counter | y |
+| `retry > 3` fallback scope | Applies independently to every item in that envelope | Per-item units of work make this the natural granularity | y |
+| `retry > 3` stops further action | No publish to `Reimbursement`, no further republish, regardless of whether the fallback insert succeeds | `SCOPE.md:218` — "No other action below must be done" | y |
+| Where the error detail lands on the row | **`decision_reason`**, carrying the full rendered history | User decision. Keeps one column authoritative for "why is this row in this state" rather than splitting operational detail across two | y |
+| Republish itself fails | The item is written to the failure log with its error history, then treated as handled | The failure log is the design's universal last resort. Not committing the offset instead would redeliver the whole message and hot-loop while the broker is down | y |
+| Item fails `ReimbursementRequest` validation | Failure log immediately; no retry, no human-review row | `RequestEnvelope.payload` is `list[dict[str, Any]]` — items are not schema-checked on the way in, and a hand-crafted or corrupted item can lack `request_id`, which is `NOT NULL`. A human-review row is impossible without it, and retrying cannot fix bad data | **n** |
+| Malformed / undecodable `Request` message | Failure log immediately; no DB attempt, no republish | A message that cannot be parsed as `RequestEnvelope` carries no readable `retry` to increment and no items to iterate | **n** |
+| Empty `payload` array in a valid envelope | Dropped and logged as a no-op, not an error | The POST endpoint already rejects `[]` at ingress; this can only arise from a bug or a hand-crafted message, so it fails safe rather than crashing the loop | **n** |
+| Item processing order within one message | **Bounded concurrency: at most 10 items in flight**, order of completion non-deterministic | Sequential processing of a large batch would exceed `max.poll.interval.ms` and trigger rebalance thrashing. 10 is a starting value paired with the API's 500-item cap: `500 ÷ 10 × ~15ms ≈ 0.75s` against a 300s interval. Both are provisional — recorded as **R-005** | y |
+| Upper bound on items per message | 500, enforced at the API edge (already shipped) — **not by this feature** | A byte ceiling alone does not bound item count — minimal items are ~90 bytes, so even the reduced 1 MiB ceiling (AD-020) admits ~11,600 of them, well past what any fixed concurrency processes inside the poll interval. The cap belongs at ingress where a client can be told; this feature depends on it and asserts its own behaviour at that size. Requires an amendment to `api-post-reimbursement` | y |
+| Concurrency vs. connection pool | The DB pool SHALL be sized at or above the concurrency limit | Each in-flight item holds a transaction open across a Kafka round-trip, so concurrency N pins N connections. A pool smaller than N starves under load rather than failing loudly | y |
+| Consumer offset commit | Committed once every item in the message has been handled (committed, re-queued, dropped, or written to the failure log) | At-least-once delivery. A crash before the commit redelivers the message, and already-committed items are absorbed by the duplicate path — which is why that path is crash-recovery machinery, not just an optimization | y |
+| Broker disconnect handling | Rely on librdkafka's built-in reconnect/retry behavior | Consistent with `api-post-reimbursement`'s reliance on librdkafka's own semantics rather than a hand-rolled equivalent | y |
+| PII in error text | Full error detail (which may include DB-supplied column values) goes to the envelope, the row, and the failure file — all of which already hold the payload. **stdout logs get a sanitized form**: error type and constraint name, never the driver's `DETAIL` line | Postgres constraint errors embed offending values (e.g. the submitter's email) in `DETAIL`. The envelope/row/file are inside the same trust boundary as the payload; stdout is not | y |
+| Failure-log destination/format | A **dedicated named logger** at critical level, one structured JSON record per failure — not a file written by application code | User decision (2026-08-08). A container-local file is destroyed by the restart it is meant to survive, so it would lose exactly the records it exists to preserve. `SCOPE.md:216-217`'s "log the error in a file" is satisfied at the layer that owns it: ops attach a `FileHandler` or shipper to the logger name, with no code change. Also removes the volume, path config, rotation, and off-loop file I/O | y |
 
-**Open questions:** none — the four rows marked **n** are recorded
+**Open questions:** none — the six rows marked **n** are recorded
 assumptions with a chosen default and rationale. Each is independently
-reversible (a code path, a file path, or a boundary check) and none reshapes
-the spec.
+reversible (a code path, a file path, a boundary check, or one optional
+model field) and none reshapes the spec.
 
 ---
 
@@ -102,41 +123,38 @@ accepted requests sit in `Request` forever.
    items THEN it SHALL process each item as an independent unit of work —
    one DB transaction, one insert, one publish attempt per item.
 2. WHEN an item's insert and publish both succeed THEN the system SHALL have
-   committed exactly one `reimbursement` row for that item, with `status`
-   left at its DB default (`pending`), and published exactly one message to
-   `Reimbursement` carrying that row's `uuid`.
+   committed exactly one `reimbursement` row for that item with `status` at
+   its DB default (`pending`), and published exactly one message to
+   `Reimbursement`.
 3. WHEN a `reimbursement` row is inserted THEN its `request_id`,
    `submitted_by`, `submitted_at`, and `original_payload` SHALL be populated
    from the item — not left null.
-4. WHEN the `Reimbursement` message is built THEN its `payload` member SHALL
-   be byte-for-byte identical to the item as it arrived in the consumed
-   `Request` message, including key order and unicode escaping.
-5. WHEN the `Reimbursement` message is built THEN its `retry` member SHALL
-   be the integer `0`, and its `published_at` member SHALL be an RFC 3339
-   UTC timestamp recorded at the moment of this publish.
+4. WHEN a `Reimbursement` message is published THEN it SHALL contain the
+   `uuid` of the row just inserted, `retry` as the integer `0`, and
+   `published_at` as an RFC 3339 UTC timestamp recorded at that publish.
+5. WHEN a `Reimbursement` message is published THEN it SHALL NOT contain the
+   request payload — the Agent resolves it from the DB by `uuid`.
 6. WHEN a message carries N items and item *i* fails THEN the outcome of
-   items other than *i* SHALL be unaffected — their commits and publishes
-   proceed independently.
-7. WHEN every item in a consumed message has been handled (committed, or
-   re-queued as its own new message) THEN the system SHALL commit that
-   message's consumer offset, and SHALL NOT re-read that message again.
+   items other than *i* SHALL be unaffected.
+7. WHEN every item in a consumed message has been handled THEN the system
+   SHALL commit that message's consumer offset exactly once.
 
 **Independent Test**: Publish a 3-item `Request` message where the DB write
 for item 2 is made to fail; assert items 1 and 3 land as committed rows with
-matching `Reimbursement` messages, item 2 does not, and the original
-message's offset still advances exactly once.
+matching `Reimbursement` messages carrying their uuids and no payload, item
+2 does not, and the offset advances exactly once.
 
 ---
 
-### P1: Publish or DB failure rolls back and retries via `Request` ⭐ MVP
+### P1: Failure rolls back and retries via `Request`, carrying its error history ⭐ MVP
 
-**User Story**: As the system owner, I want a failed insert or a failed
-publish to leave no partial state and to retry automatically, so that a
-transient failure never becomes a lost request.
+**User Story**: As the system owner, I want a failed insert or publish to
+leave no partial state, to retry automatically, and to accumulate a record
+of what went wrong on every attempt, so that a transient failure never
+becomes a lost request and a persistent one arrives explained.
 
-**Why P1**: `SCOPE.md:219-221` — insert failure blocks publish, publish
-failure rolls back the insert, and any error republishes with an
-incremented retry.
+**Why P1**: `SCOPE.md:219-221`. The error history is what makes the
+`retry > 3` human-review story actionable rather than a dead end.
 
 **Acceptance Criteria**:
 
@@ -147,125 +165,234 @@ incremented retry.
    row SHALL remain committed for it.
 3. WHEN an item fails for either reason in AC1/AC2 THEN the system SHALL
    publish a new `Request` message containing only that item, with `retry`
-   set to the original message's `retry + 1`.
-4. WHEN the republished item is later consumed again THEN it SHALL be
-   processed exactly like any other `Request` message — no special-casing
-   beyond the `retry` value being non-zero.
-5. WHEN a failure occurs THEN the system SHALL log the item's `request_id`
-   and the underlying error, and SHALL NOT log the item's payload body or
-   the batch's other items.
+   set to the consumed envelope's `retry + 1`.
+4. WHEN that republished message is built THEN its `errors` list SHALL equal
+   the consumed envelope's `errors` with **one new entry appended**,
+   recording the attempt number, an RFC 3339 UTC timestamp, the stage that
+   failed (`db-insert` or `publish`), the error type, and the error message.
+5. WHEN an item has failed on multiple attempts THEN every prior entry SHALL
+   still be present — entries are appended, never overwritten or truncated.
+6. WHEN an item is republished THEN its content SHALL be semantically
+   identical to the item consumed — same keys in the same order, same values.
+7. WHEN the republished item is later consumed THEN it SHALL be processed
+   exactly like any other `Request` message, with no special-casing beyond
+   the `retry` value being non-zero.
+8. WHEN a failure is logged to stdout THEN the record SHALL carry the item's
+   `request_id` and the error type, and SHALL NOT carry the item's payload
+   or the driver's value-bearing `DETAIL` text.
+9. WHEN the republish itself fails THEN the system SHALL write the item and
+   its error history to the failure log rather than losing it, and
+   SHALL treat the item as handled.
 
-**Independent Test**: Inject a fake producer whose delivery callback
-reports an error for one item; assert the DB row for that item does not
-exist after the attempt, and assert a new single-item `Request` message
-was published with `retry` incremented by one.
+**Independent Test**: Inject a fake producer whose delivery callback reports
+an error; assert no row remains, and a new single-item `Request` message was
+published with `retry` incremented and exactly one `errors` entry naming the
+`publish` stage. Feed that message back in with a failing insert and assert
+the second message carries **two** entries in order.
 
 ---
 
-### P1: A resubmitted duplicate is dropped, not retried ⭐ MVP
+### P1: A resubmitted duplicate is dropped, counted, and never retried ⭐ MVP
 
-**User Story**: As the system owner, I want a duplicate submission
-recognized and dropped immediately, so that a condition retrying can never
-fix doesn't burn three retry cycles and a doomed human-review attempt.
+**User Story**: As the system owner, I want a duplicate recognized and
+dropped immediately but visibly, so that a condition retrying can never fix
+doesn't burn three cycles, and so that a flood of duplicates is detectable
+rather than silent.
 
 **Why P1**: Confirmed as a deviation from `SCOPE.md`'s undifferentiated
-failure handling — see Assumptions.
+failure handling. It is also the mechanism that makes crash recovery safe —
+see AC4.
 
 **Acceptance Criteria**:
 
 1. WHEN an item's insert fails specifically on the
    `reimbursement_request_submitter_key` unique constraint THEN the system
-   SHALL log it as informational (not as an error) and drop the item.
+   SHALL drop the item.
 2. WHEN a duplicate is dropped THEN the system SHALL NOT republish it, SHALL
-   NOT attempt a human-review fallback insert for it, and SHALL NOT write it
-   to the failure-log file.
-3. WHEN a duplicate is dropped THEN the already-committed row it collided
+   NOT attempt a human-review fallback insert, and SHALL NOT write it to the
+   failure log.
+3. WHEN a duplicate is dropped THEN the system SHALL emit a structured log
+   record at informational level carrying a stable event name, the item's
+   `request_id`, the constraint name, and the envelope's `retry` — so an
+   external monitor can count occurrences without parsing prose (**R-004**).
+4. WHEN a message is redelivered after a crash that occurred between
+   committing a row and committing the offset THEN the already-committed
+   items SHALL be absorbed by this duplicate path, producing no second row
+   and no second `Reimbursement` message.
+5. WHEN a duplicate is dropped THEN the already-committed row it collided
    with SHALL be unaffected.
 
 **Independent Test**: Insert a row directly, then feed the publisher a
-`Request` message whose item has the same `request_id` and `submitted_by`
-(case-varied); assert the item is dropped with no new row, no republish, and
-no failure-log entry.
+`Request` message whose item has the same `request_id` and a case-varied
+`submitted_by`; assert the item is dropped, no new row exists, no republish
+occurred, no failure-log entry was written, and the structured event was
+emitted with the constraint name.
 
 ---
 
-### P1: `retry > 3` preserves the item as `human-review`, never loses it ⭐ MVP
+### P1: `retry > 3` preserves the item as `human-review`, explained ⭐ MVP
 
-**User Story**: As the system owner, I want an item that has failed
-repeatedly to land as a `human-review` row instead of being lost, and to
-degrade to a file log only if even that fails, so that persistent failures
-are still recoverable by a human.
+**User Story**: As a human reviewer, I want an item that failed repeatedly
+to arrive as a `human-review` row that tells me exactly what went wrong on
+each attempt, so that I can decide what to do without access to server logs.
 
-**Why P1**: `SCOPE.md:214-217` — the mission-critical, no-loss requirement's
-last line of defense.
+**Why P1**: `SCOPE.md:214-217` is the no-loss requirement's last line of
+defense — and a preserved row with no explanation is not reviewable.
 
 **Acceptance Criteria**:
 
 1. WHEN a consumed `Request` message has `retry > 3` THEN the system SHALL
    NOT attempt the normal insert-then-publish flow for any item in it.
 2. WHEN `retry > 3`, for each item THEN the system SHALL attempt to insert a
-   `reimbursement` row with `status = 'human-review'` and a
-   `decision_reason` identifying repeated failure as the cause.
-3. WHEN that fallback insert succeeds THEN the system SHALL take no further
-   action for that item — no publish to `Reimbursement`, no republish to
-   `Request`.
-4. WHEN that fallback insert also fails THEN the system SHALL log the item
-   to the failure-log file, and SHALL take no further action.
-5. WHEN the fallback insert fails specifically on the unique constraint
-   THEN the system SHALL follow the duplicate path (P1 story above), not the
-   file-log fallback.
+   `reimbursement` row with `status = 'human-review'`.
+3. WHEN that fallback row is inserted THEN its `decision_reason` SHALL
+   contain a human-readable rendering of **every** entry in the envelope's
+   `errors` list — each attempt's number, timestamp, failing stage, error
+   type, and message — not merely a count or a summary.
+4. WHEN the envelope's `errors` list is empty or absent despite
+   `retry > 3` THEN `decision_reason` SHALL still state that the retry
+   ceiling was reached and that no error detail was carried, rather than
+   being left null.
+5. WHEN the fallback insert succeeds THEN the system SHALL take no further
+   action for that item — no publish to `Reimbursement`, no republish.
+6. WHEN the fallback insert fails THEN the system SHALL write the item and
+   its full error history to the failure log, and take no further action.
+7. WHEN the fallback insert fails specifically on the unique constraint THEN
+   the system SHALL follow the duplicate path, not the failure-log fallback.
 
-**Independent Test**: Publish a `Request` message with `retry = 4`; assert
-no publish to `Reimbursement` occurs, and a `human-review` row is created.
-Repeat with the DB unavailable; assert a failure-log entry is written and no
-exception escapes the consumer loop.
+**Independent Test**: Feed a `Request` message with `retry = 4` and three
+distinct `errors` entries; assert no `Reimbursement` publish occurs, a
+`human-review` row exists, and its `decision_reason` contains all three
+error messages and all three stage names. Repeat with the DB unavailable and
+assert a failure-log entry carries the same three entries.
 
 ---
 
-### P1: A malformed message never crashes the consumer ⭐ MVP
+### P1: Bad input never stops the consumer ⭐ MVP
 
-**User Story**: As the system owner, I want an unparseable `Request` message
-to be logged and skipped rather than stopping the whole consumer, so that
-one bad message never blocks every request behind it.
+**User Story**: As the system owner, I want an unparseable or invalid
+message logged and skipped rather than crashing the consumer, so that one
+bad message never blocks every request behind it.
 
-**Why P1**: Mission-critical means the consumer loop itself must never die
-on bad input — `SCOPE.md:19-21`.
+**Why P1**: Mission-critical means the consumer loop must survive bad input
+(`SCOPE.md:19-21`).
 
 **Acceptance Criteria**:
 
 1. WHEN a consumed message is not valid JSON, or does not match the
-   `RequestEnvelope` schema THEN the system SHALL log it to the failure-log
-   file and SHALL NOT attempt a DB insert or a republish.
-2. WHEN a message's `payload` is an empty array THEN the system SHALL log it
+   `RequestEnvelope` schema THEN the system SHALL write it to the
+   failure log and SHALL NOT attempt a DB insert or a republish.
+2. WHEN an item within a valid envelope fails `ReimbursementRequest`
+   validation THEN the system SHALL write that item to the failure log
+   and SHALL NOT retry it, publish it, or attempt a human-review row for it.
+3. WHEN a message's `payload` is an empty array THEN the system SHALL log it
    as a dropped no-op and SHALL NOT treat it as an error.
-3. WHEN either case in AC1/AC2 occurs THEN the consumer loop SHALL continue
+4. WHEN any case above occurs THEN the consumer loop SHALL continue
    processing subsequent messages without interruption.
+5. WHEN the process receives a termination signal mid-transaction THEN the
+   in-flight transaction SHALL roll back and the offset SHALL NOT be
+   committed for the message being processed.
 
-**Independent Test**: Feed the consumer a message body that is not valid
-JSON, and separately one that is valid JSON but violates the schema; assert
-both are logged and the consumer keeps polling afterward.
+**Independent Test**: Feed the consumer a non-JSON body, a schema-violating
+envelope, an item missing `request_id`, and an empty `payload` array; assert
+each is handled as specified and that a subsequent valid message is still
+processed normally.
+
+---
+
+### P1: The consumer can read ceiling-sized `Request` messages ⭐ MVP
+
+**User Story**: As an operator, I want the publisher able to read the
+largest message the API is allowed to write, so that the size contract the
+API advertises is deliverable end to end rather than only writable.
+
+**Why P1**: `api-post-reimbursement/spec.md` flagged this explicitly as a
+downstream dependency: raising broker `message.max.bytes` lets ceiling-sized
+messages be *written*, but a consumer at librdkafka's default fetch sizes
+cannot *read* them. This feature is where that lands.
+
+**Acceptance Criteria**:
+
+1. WHEN the consumer is configured THEN its fetch limits SHALL be sized from
+   the same `KAFKA_MAX_MESSAGE_BYTES` constant the API's producer and the
+   compose broker already use — the number SHALL NOT be retyped.
+2. WHEN a `Request` message at the size ceiling is produced THEN the
+   publisher SHALL consume and process it without a fetch-size error.
+
+**Independent Test**: Against a real broker sized from
+`KAFKA_MAX_MESSAGE_BYTES`, produce a ceiling-sized `Request` message and
+assert the publisher consumes it and creates the corresponding rows.
+
+---
+
+### P1: Items are processed with bounded concurrency ⭐ MVP
+
+**User Story**: As an operator, I want a message's items processed
+concurrently under a fixed ceiling, so that a full batch completes far
+inside the consumer's poll interval and the group never rebalances because
+of processing time.
+
+**Why P1**: Sequential processing is not merely slower — it is a liveness
+defect. Each item costs an `INSERT` plus an awaited `acks=all` round-trip
+(~15ms), so a large batch exceeds `max.poll.interval.ms`, the broker revokes
+the consumer's partitions, the offset commit fails, and the group rebalances.
+It recovers only by thrashing. See **AD-013** and **R-005**.
+
+**Acceptance Criteria**:
+
+1. WHEN a message's items are processed THEN at most **10** items SHALL be
+   in flight at any moment.
+2. WHEN the concurrency limit is reached THEN further items SHALL wait for a
+   slot rather than being started, dropped, or failed.
+3. WHEN items are processed concurrently THEN each SHALL retain its own
+   transaction, its own publish, and its own outcome — one item's failure
+   SHALL NOT affect another's, exactly as under sequential processing.
+4. WHEN items complete THEN their completion order and their
+   `Reimbursement` publish order SHALL be treated as non-deterministic; no
+   behaviour SHALL depend on either.
+5. WHEN every item has been handled THEN the offset SHALL be committed once,
+   after the last item settles — never while items are still in flight.
+6. WHEN the service starts THEN the DB connection pool SHALL be sized at or
+   above the concurrency limit, since each in-flight item holds a
+   transaction open across a Kafka round-trip.
+7. WHEN a batch at the API's 500-item cap is processed THEN it SHALL
+   complete well within `max.poll.interval.ms`.
+
+**Independent Test**: Feed a 500-item message with an instrumented fake
+producer that records maximum observed in-flight count; assert it never
+exceeds 10, that all 500 rows are committed, and that the offset is
+committed exactly once after the last item. Separately, make one item fail
+and assert the other 499 are unaffected.
 
 ---
 
 ## Edge Cases
 
-- WHEN two publisher instances consume from different partitions of
-  `Request` concurrently THEN correctness SHALL rely on Kafka's
-  consumer-group partition assignment (no cross-instance coordination is
-  added) and the DB unique constraint (no new locking is added).
-- WHEN an item's `submitted_at` is more than one hour in the future (passes
-  the POST endpoint's validation but violates
-  `reimbursement_submitted_at_check`) THEN the system SHALL treat it as a
-  standard non-duplicate DB failure — retried, then human-reviewed, then
-  file-logged like any other CHECK violation. This is an inherited gap
-  between two already-shipped pieces, not resolved by this feature.
+- WHEN two publisher instances consume different partitions of `Request`
+  concurrently THEN correctness SHALL rely on Kafka's consumer-group
+  partition assignment and the DB unique constraint — no cross-instance
+  coordination is added.
+- WHEN an item's `submitted_at` is more than one hour in the future (accepted
+  by the API but rejected by `reimbursement_submitted_at_check`) THEN the
+  system SHALL treat it as a standard non-duplicate DB failure. Inherited
+  inconsistency, recorded as **R-002**.
+- WHEN the process dies between the broker's ack and the DB commit THEN a
+  `Reimbursement` message may exist whose `uuid` has no row, and redelivery
+  will create a second message with a different `uuid`. Accepted and
+  recorded as **R-001**; the Agent-side mitigation belongs to the Agent's spec.
 - WHEN the broker is unreachable at consume time THEN the system SHALL rely
-  on librdkafka's built-in reconnect behavior; no message is considered
-  lost because none was ever successfully polled and committed.
-- WHEN the broker is unreachable at publish time for an item whose insert
-  already ran THEN the system SHALL roll back that insert per the standard
-  publish-failure path — never leave a committed row with no corresponding
-  publish attempt having been made.
+  on librdkafka's reconnect behavior; nothing is lost because nothing was
+  polled and committed.
+- WHEN the same error recurs on all four attempts THEN the resulting
+  `decision_reason` SHALL show four entries rather than collapsing them, so a
+  reviewer can tell a permanent fault from a flapping one.
+- WHEN processing a message would exceed `max.poll.interval.ms` THEN the
+  system does not fail cleanly — the broker revokes partitions, the offset
+  commit fails, and the group rebalances. It converges (redelivered
+  already-committed items are absorbed by the duplicate path) but only by
+  thrashing. The 500-item cap and concurrency of 10 exist to keep this
+  unreachable by a ~400× margin; it is a bound to preserve, not a condition
+  to handle at runtime.
 
 ---
 
@@ -273,31 +400,50 @@ both are logged and the consumer keeps polling afterward.
 
 | Requirement ID | Story | Phase | Status |
 | -------------- | ----- | ------ | ------- |
-| PUB-01 | P1: Atomic item → row + message (per-item unit of work) | Design | Pending |
-| PUB-02 | P1: Atomic item → row + message (row committed, message published) | Design | Pending |
-| PUB-03 | P1: Atomic item → row + message (row fields populated) | Design | Pending |
-| PUB-04 | P1: Atomic item → row + message (payload byte-verbatim) | Design | Pending |
-| PUB-05 | P1: Atomic item → row + message (retry=0, published_at stamp) | Design | Pending |
-| PUB-06 | P1: Atomic item → row + message (item independence within a batch) | Design | Pending |
-| PUB-07 | P1: Atomic item → row + message (offset committed once, never replayed) | Design | Pending |
-| PUB-08 | P1: Rollback + retry (insert failure blocks publish) | Design | Pending |
-| PUB-09 | P1: Rollback + retry (publish failure rolls back insert) | Design | Pending |
-| PUB-10 | P1: Rollback + retry (republish with retry+1) | Design | Pending |
-| PUB-11 | P1: Rollback + retry (republished item processed normally) | Design | Pending |
-| PUB-12 | P1: Rollback + retry (failure logged without payload) | Design | Pending |
-| PUB-13 | P1: Duplicate dropped (unique-violation detection) | Design | Pending |
-| PUB-14 | P1: Duplicate dropped (no retry, no fallback, no file log) | Design | Pending |
-| PUB-15 | P1: Duplicate dropped (existing row unaffected) | Design | Pending |
-| PUB-16 | P1: `retry > 3` fallback (skip normal flow) | Design | Pending |
-| PUB-17 | P1: `retry > 3` fallback (human-review insert with reason) | Design | Pending |
-| PUB-18 | P1: `retry > 3` fallback (stop on success) | Design | Pending |
-| PUB-19 | P1: `retry > 3` fallback (file log on double failure) | Design | Pending |
-| PUB-20 | P1: `retry > 3` fallback (unique violation still short-circuits) | Design | Pending |
-| PUB-21 | P1: Malformed message (schema/JSON failure logged, no side effect) | Design | Pending |
-| PUB-22 | P1: Malformed message (empty payload dropped as no-op) | Design | Pending |
-| PUB-23 | P1: Malformed message (consumer loop survives) | Design | Pending |
+| PUB-01 | P1: Atomic item→row+message (per-item unit of work) | Design | Pending |
+| PUB-02 | P1: Atomic item→row+message (row committed at `pending`, one message) | Design | Pending |
+| PUB-03 | P1: Atomic item→row+message (row identity fields populated) | Design | Pending |
+| PUB-04 | P1: Atomic item→row+message (message carries uuid, retry=0, published_at) | Design | Pending |
+| PUB-05 | P1: Atomic item→row+message (message carries no payload) | Design | Pending |
+| PUB-06 | P1: Atomic item→row+message (item independence within a batch) | Design | Pending |
+| PUB-07 | P1: Atomic item→row+message (offset committed exactly once) | Design | Pending |
+| PUB-08 | P1: Rollback+retry (insert failure blocks publish) | Design | Pending |
+| PUB-09 | P1: Rollback+retry (publish failure rolls back the insert) | Design | Pending |
+| PUB-10 | P1: Rollback+retry (republish single item with retry+1) | Design | Pending |
+| PUB-11 | P1: Rollback+retry (error entry appended with stage, type, message) | Design | Pending |
+| PUB-12 | P1: Rollback+retry (prior entries preserved, never truncated) | Design | Pending |
+| PUB-13 | P1: Rollback+retry (republished item semantically identical) | Design | Pending |
+| PUB-14 | P1: Rollback+retry (republished item processed normally) | Design | Pending |
+| PUB-15 | P1: Rollback+retry (stdout log omits payload and DETAIL values) | Design | Pending |
+| PUB-16 | P1: Rollback+retry (republish failure falls back to the file log) | Design | Pending |
+| PUB-17 | P1: Duplicate (unique-violation detection and drop) | Design | Pending |
+| PUB-18 | P1: Duplicate (no retry, no fallback, no file log) | Design | Pending |
+| PUB-19 | P1: Duplicate (structured countable event emitted) | Design | Pending |
+| PUB-20 | P1: Duplicate (absorbs post-crash redelivery) | Design | Pending |
+| PUB-21 | P1: Duplicate (existing row unaffected) | Design | Pending |
+| PUB-22 | P1: `retry > 3` (skip the normal flow) | Design | Pending |
+| PUB-23 | P1: `retry > 3` (human-review row inserted) | Design | Pending |
+| PUB-24 | P1: `retry > 3` (`decision_reason` renders the full error history) | Design | Pending |
+| PUB-25 | P1: `retry > 3` (`decision_reason` non-null even with no history) | Design | Pending |
+| PUB-26 | P1: `retry > 3` (stop on success — no publish, no republish) | Design | Pending |
+| PUB-27 | P1: `retry > 3` (failure-log fallback carries the history) | Design | Pending |
+| PUB-28 | P1: `retry > 3` (unique violation still short-circuits) | Design | Pending |
+| PUB-29 | P1: Bad input (malformed message logged, no side effect) | Design | Pending |
+| PUB-30 | P1: Bad input (invalid item logged, never retried) | Design | Pending |
+| PUB-31 | P1: Bad input (empty payload dropped as a no-op) | Design | Pending |
+| PUB-32 | P1: Bad input (consumer loop survives) | Design | Pending |
+| PUB-33 | P1: Bad input (termination signal rolls back, offset uncommitted) | Design | Pending |
+| PUB-34 | P1: Ceiling-sized messages (fetch limits derived from the shared constant) | Design | Pending |
+| PUB-35 | P1: Ceiling-sized messages (a `KAFKA_MAX_MESSAGE_BYTES` message consumed and processed) | Design | Pending |
+| PUB-36 | P1: Concurrency (at most 10 items in flight) | Design | Pending |
+| PUB-37 | P1: Concurrency (excess items wait for a slot, never dropped) | Design | Pending |
+| PUB-38 | P1: Concurrency (per-item independence preserved under concurrency) | Design | Pending |
+| PUB-39 | P1: Concurrency (completion and publish order non-deterministic) | Design | Pending |
+| PUB-40 | P1: Concurrency (offset committed once, after the last item settles) | Design | Pending |
+| PUB-41 | P1: Concurrency (connection pool sized at or above the limit) | Design | Pending |
+| PUB-42 | P1: Concurrency (500-item batch completes inside the poll interval) | Design | Pending |
 
-**Coverage:** 23 total, 0 mapped to tasks, 23 unmapped ⚠️ (Tasks phase
+**Coverage:** 42 total, 0 mapped to tasks, 42 unmapped ⚠️ (Tasks phase
 pending)
 
 ---
@@ -306,13 +452,13 @@ pending)
 
 - [ ] A `docs/original/sample.json`-shaped batch, published through the real
       `POST /api/v1/reimbursement` → `Request` → publisher path, produces
-      exactly one `reimbursement` row and one `Reimbursement`-topic message
-      per item, with the payload byte-verbatim in both.
-- [ ] Killing the DB mid-publish leaves zero orphaned rows — every committed
-      row has a corresponding successful publish.
-- [ ] A resubmitted duplicate never appears twice on `Request` and never
-      produces a second row.
-- [ ] An item retried past `retry > 3` is recoverable as a `human-review`
-      row, or as a file-log entry if even that fails — never silently gone.
-- [ ] A malformed message never stops the consumer from processing the next
-      one.
+      exactly one `reimbursement` row and one `Reimbursement` message per
+      item, each message carrying only the row's `uuid`.
+- [ ] Killing the DB mid-publish leaves zero orphaned rows.
+- [ ] A resubmitted duplicate never produces a second row, and its drop is
+      visible as a countable structured event.
+- [ ] An item that failed four times arrives as a `human-review` row whose
+      `decision_reason` names all four failures — readable without opening a
+      server log.
+- [ ] A malformed message never stops the consumer from processing the next.
+- [ ] A `Request` message at `KAFKA_MAX_MESSAGE_BYTES` is consumed and processed end to end.
