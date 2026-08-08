@@ -259,6 +259,64 @@ class DescribePutReimbursement:
         finally:
             await pool.close()
 
+    async def it_lets_two_concurrent_reject_puts_both_succeed_without_corruption(
+        self, migrated_db: str
+    ) -> None:
+        # NOT a mirror of it_lets_exactly_one_of_two_concurrent_puts_win
+        # above: unlike approve's destination status ("human-approved",
+        # excluded from ELIGIBLE_STATUSES), reject's own destination
+        # ("human-rejected") is itself a member of ELIGIBLE_STATUSES —
+        # re-rejecting an already-rejected row is intentional (AD-027 §1,
+        # it_re_rejects_an_already_human_rejected_row above). So two
+        # concurrent reject PUTs on the same row are not a winner-take-all
+        # race; both are legitimately eligible and both succeed. What this
+        # proves instead: the two requests still serialize through
+        # Postgres's row lock (no deadlock) and each independently commits
+        # its own atomic two-write transaction, with neither write lost,
+        # torn, or duplicated by the other's concurrent request.
+        #
+        # No cleanup in `finally`, and deliberately so: both PUTs commit a
+        # real human_review row, and 0002.create-human-review.sql makes that
+        # table append-only (BEFORE UPDATE OR DELETE trigger) with its
+        # reimbursement_uuid FK set ON DELETE RESTRICT — so neither a
+        # human_review row nor its parent reimbursement row can be deleted
+        # afterward (confirmed: DELETE raises RestrictViolationError). Same
+        # unavoidable trade-off the approve version above accepts.
+        pool = await asyncpg.create_pool(dsn=migrated_db, min_size=2, max_size=2)
+        try:
+            uuid = uuid4()
+            await pool.execute(
+                _SEED_REIMBURSEMENT_WITH_RECEIPTS,
+                uuid,
+                "REQ-PUT-CONCURRENT-REJECT",
+                "human-review",
+                Decimal("100.00"),
+                date(2026, 1, 1),
+                "BRL",
+            )
+            app = FastAPI()
+            register_handlers(app)
+            app.include_router(router)
+            app.dependency_overrides[get_pool] = lambda: pool
+            transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                responses = await asyncio.gather(
+                    client.put(f"/api/v1/reimbursement/{uuid}", json={**_REJECT_PAYLOAD, "reason": "a"}),
+                    client.put(f"/api/v1/reimbursement/{uuid}", json={**_REJECT_PAYLOAD, "reason": "b"}),
+                )
+
+            statuses = sorted(response.status_code for response in responses)
+            assert statuses == [200, 200]
+            status = await pool.fetchval("SELECT status FROM reimbursement WHERE uuid = $1", uuid)
+            assert status == "human-rejected"
+            count = await pool.fetchval(
+                "SELECT count(*) FROM human_review WHERE reimbursement_uuid = $1", uuid
+            )
+            assert count == 2
+        finally:
+            await pool.close()
+
 
 class DescribeTheRealApp:
     def it_serves_the_route_through_the_apps_actual_lifespan_and_wiring(

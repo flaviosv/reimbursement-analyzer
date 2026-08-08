@@ -188,8 +188,15 @@ class DescribeGetReimbursement:
         async with _build_client(FakePool(db)) as client:
             response = await client.get("/api/v1/reimbursement")
 
+        # Subset, not exact-set: the update-route and use-case concurrency
+        # tests (REVIEW-09) commit real, undeletable rows to this same
+        # session-scoped migrated_db — human_review is append-only (DB
+        # trigger) and FK-RESTRICTs deleting its parent reimbursement row,
+        # so a no-filter query can legitimately see extra rows depending on
+        # test order. Scoped to what this test itself seeded, like the
+        # concurrency tests' own count(*) assertions are scoped to their uuid.
         request_ids = {item["request_id"] for item in response.json()["data"]}
-        assert {"REQ-ALL-PENDING", "REQ-ALL-APPROVED"} == request_ids
+        assert {"REQ-ALL-PENDING", "REQ-ALL-APPROVED"} <= request_ids
 
     async def it_returns_400_for_pending_status_excluded_from_the_client_facing_whitelist(
         self, db: asyncpg.Connection

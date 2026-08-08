@@ -293,3 +293,61 @@ class DescribeReviewReimbursementConcurrency:
         finally:
             await conn_a.close()
             await conn_b.close()
+
+    async def it_lets_two_concurrent_rejects_both_succeed_without_corruption(
+        self, migrated_db: str
+    ) -> None:
+        # NOT a mirror of it_lets_exactly_one_of_two_concurrent_decisions_win
+        # above: unlike approve_reimbursement's destination status
+        # ("human-approved", excluded from ELIGIBLE_STATUSES), reject's own
+        # destination ("human-rejected") is itself a member of
+        # ELIGIBLE_STATUSES — re-rejecting an already-rejected row is
+        # intentional (AD-027 §1, it_re_rejects_an_already_rejected_row
+        # above). So two concurrent rejects on the same row are not a
+        # winner-take-all race; both are legitimately eligible and both
+        # succeed. What the shared "async with conn.transaction(): ... rely
+        # on Postgres's own write serialization" design actually buys here
+        # is proven instead: the two decisions still serialize through the
+        # row lock (no deadlock) and each independently completes its own
+        # atomic two-write transaction — a reimbursement update plus its own
+        # human_review audit row — with neither write lost, torn, or
+        # duplicated by the other's concurrent transaction.
+        #
+        # No cleanup in `finally`, and deliberately so: both calls commit a
+        # real human_review row, and 0002.create-human-review.sql makes that
+        # table append-only (BEFORE UPDATE OR DELETE trigger) with its
+        # reimbursement_uuid FK set ON DELETE RESTRICT — so neither a
+        # human_review row nor its parent reimbursement row can be deleted
+        # afterward (confirmed: DELETE raises RestrictViolationError). Same
+        # unavoidable trade-off the approve version above accepts.
+        # Downstream assertions must stay scoped to this uuid rather than
+        # assume exclusive ownership of the whole table.
+        conn_a = await asyncpg.connect(migrated_db)
+        conn_b = await asyncpg.connect(migrated_db)
+        try:
+            uuid = uuid4()
+            await conn_a.execute(
+                _SEED_REIMBURSEMENT_WITH_RECEIPTS,
+                uuid,
+                "REQ-UC-CONCURRENT-REJECT",
+                "human-review",
+                Decimal("100.00"),
+                date(2026, 1, 1),
+                "BRL",
+            )
+
+            results = await asyncio.gather(
+                reject_reimbursement(conn_a, uuid, reason="a", approved_by="a@example.com"),
+                reject_reimbursement(conn_b, uuid, reason="b", approved_by="b@example.com"),
+            )
+
+            assert [row["status"] for row in results] == ["human-rejected", "human-rejected"]
+            status = await conn_a.fetchval("SELECT status FROM reimbursement WHERE uuid = $1", uuid)
+            assert status == "human-rejected"
+            count = await conn_a.fetchval(
+                "SELECT count(*) FROM human_review WHERE reimbursement_uuid = $1", uuid
+            )
+            assert count == 2
+        finally:
+            await conn_a.close()
+            await conn_b.close()
