@@ -13,6 +13,7 @@ path. Confirmed with user (2026-08-08).
 
 from datetime import date
 from decimal import Decimal
+from typing import NoReturn
 from uuid import UUID
 
 import asyncpg
@@ -28,7 +29,7 @@ from shared.reimbursement.repository import (
 ELIGIBLE_STATUSES = ["human-review", "auto-rejected", "human-rejected"]
 
 
-async def _disambiguate(conn: asyncpg.Connection, uuid: UUID) -> None:
+async def _disambiguate(conn: asyncpg.Connection, uuid: UUID) -> NoReturn:
     """Called only on the 0-rows-affected path: distinguishes "no such
     row" (404) from "row exists, but ineligible/incomplete" (400) — always
     raises, never returns."""
