@@ -356,9 +356,13 @@ def _failure_record(
     **extra: Any,
 ) -> dict[str, Any]:
     """The shape every last-resort record shares. Unlike the stdout logs
-    above it carries the item verbatim — the failure log exists precisely so
-    an unhandleable item is not lost, and it sits inside the payload's own
-    trust boundary."""
+    above it carries the item in full, not sanitized down to type/constraint —
+    the failure log exists precisely so an unhandleable item is not lost, and
+    it sits inside the payload's own trust boundary. "In full" bounded by
+    max_message_chars per field/key like everything else `failure_log.write`
+    emits (Q7) — not byte-exact for a field longer than that, which is why
+    `_malformed_message_record` logs items individually rather than as one
+    blob (R1): truncation then trims each item, not the whole batch."""
     return {
         "event": event,
         "item_index": index,
