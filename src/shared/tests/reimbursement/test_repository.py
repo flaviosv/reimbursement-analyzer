@@ -23,7 +23,7 @@ _RAW_INSERT = """
 
 
 async def _rows_for(db: asyncpg.Connection, request_id: str) -> list[asyncpg.Record]:
-    return await db.fetch("SELECT uuid FROM reimbursement WHERE request_id = $1", request_id)
+    return await db.fetch("SELECT * FROM reimbursement WHERE request_id = $1", request_id)
 
 
 class DescribeManagedPool:
@@ -74,14 +74,21 @@ class DescribeInsertPending:
     async def it_stores_no_second_row_for_a_repeated_request_and_submitter(
         self, db: asyncpg.Connection
     ) -> None:
-        item = valid_reimbursement_item("REQ-DUP")
+        item = valid_reimbursement_item("REQ-DUP", amount=10.0)
         first_uuid = await insert_pending(db, item)
+        resubmitted = valid_reimbursement_item("REQ-DUP", amount=999.0)
 
         with pytest.raises(asyncpg.UniqueViolationError):
             async with db.transaction():
-                await insert_pending(db, item)
+                await insert_pending(db, resubmitted)
 
-        assert [row["uuid"] for row in await _rows_for(db, "REQ-DUP")] == [first_uuid]
+        rows = await _rows_for(db, "REQ-DUP")
+        assert [row["uuid"] for row in rows] == [first_uuid]
+        # The rejected insert leaves the row it collided with untouched — it is
+        # still the first submission, not a silent overwrite by the second.
+        assert json.loads(rows[0]["original_payload"]) == item
+        assert rows[0]["status"] == "pending"
+        assert rows[0]["decision_reason"] is None
 
     async def it_stores_no_second_row_when_only_the_submitter_case_differs(
         self, db: asyncpg.Connection
@@ -98,7 +105,9 @@ class DescribeInsertPending:
                     db, valid_reimbursement_item("REQ-CASE", submitted_by="ANA@Company.com")
                 )
 
-        assert [row["uuid"] for row in await _rows_for(db, "REQ-CASE")] == [first_uuid]
+        rows = await _rows_for(db, "REQ-CASE")
+        assert [row["uuid"] for row in rows] == [first_uuid]
+        assert rows[0]["submitted_by"] == "ana@company.com"
 
 
 class DescribeInsertHumanReview:

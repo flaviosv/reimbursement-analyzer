@@ -205,8 +205,11 @@ class DescribeTheItemTransaction:
 
 class DescribeADuplicateItem:
     async def it_drops_the_item_without_storing_a_second_row(self, db: asyncpg.Connection) -> None:
-        await insert_pending(db, valid_reimbursement_item("REQ-DUP", submitted_by="ana@company.com"))
-        resubmitted = valid_reimbursement_item("REQ-DUP", submitted_by="ANA@Company.com")
+        stored = valid_reimbursement_item("REQ-DUP", submitted_by="ana@company.com", amount=10.0)
+        await insert_pending(db, stored)
+        resubmitted = valid_reimbursement_item(
+            "REQ-DUP", submitted_by="ANA@Company.com", amount=999.0
+        )
         producer = FakeProducer()
 
         outcome = await process_item(
@@ -215,6 +218,11 @@ class DescribeADuplicateItem:
 
         assert outcome is ItemOutcome.DUPLICATE
         assert await _row_count(db, "REQ-DUP") == 1
+        # The surviving row is the one already committed, unchanged (PUB-21).
+        row = await db.fetchrow("SELECT * FROM reimbursement WHERE request_id = $1", "REQ-DUP")
+        assert json.loads(row["original_payload"]) == stored
+        assert row["submitted_by"] == "ana@company.com"
+        assert row["status"] == "pending"
 
     async def it_neither_republishes_it_nor_publishes_a_reimbursement_message(
         self, db: asyncpg.Connection
