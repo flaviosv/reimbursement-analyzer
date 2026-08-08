@@ -205,6 +205,17 @@ class DescribePutReimbursement:
         assert response.status_code == 400
         assert response.json() == {"msg": "body uuid does not match the path uuid"}
 
+    async def it_approves_when_the_body_uuid_matches_the_path_uuid(self, db: asyncpg.Connection) -> None:
+        uuid = await _seed(db, "REQ-PUT-UUID-MATCH")
+        payload = {**_APPROVE_PAYLOAD, "uuid": str(uuid)}
+
+        async with _build_client(FakePool(db)) as client:
+            response = await client.put(f"/api/v1/reimbursement/{uuid}", json=payload)
+
+        assert response.status_code == 200
+        status = await db.fetchval("SELECT status FROM reimbursement WHERE uuid = $1", uuid)
+        assert status == "human-approved"
+
     async def it_returns_500_on_a_simulated_pool_failure(
         self, db: asyncpg.Connection, caplog: pytest.LogCaptureFixture
     ) -> None:
