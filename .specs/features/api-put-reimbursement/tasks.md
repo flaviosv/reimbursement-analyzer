@@ -78,9 +78,9 @@ T4 → T5
 - Skill: NONE
 
 **Done when**:
-- [ ] All three classes added with docstrings stating what each signals
-- [ ] No dedicated test — exercised indirectly by T3/T5 per the coverage matrix's "none" entry
-- [ ] Gate check passes: `uv run pytest -m "not integration"`
+- [x] All three classes added with docstrings stating what each signals
+- [x] No dedicated test — exercised indirectly by T3/T5 per the coverage matrix's "none" entry
+- [x] Gate check passes: `uv run pytest -m "not integration"`
 
 **Tests**: none
 **Gate**: quick
@@ -100,14 +100,14 @@ T4 → T5
 - Skill: NONE
 
 **Done when**:
-- [ ] `approve(conn, uuid, *, eligible_statuses, receipts_value, receipts_date, receipts_currency, reason) -> Record | None` — atomic `UPDATE ... RETURNING`
-- [ ] `reject(conn, uuid, *, eligible_statuses, reason) -> Record | None` — atomic `UPDATE ... WHERE ... AND receipts_value/date/currency IS NOT NULL RETURNING`
-- [ ] `find_reimbursement_state(conn, uuid) -> Record | None`
-- [ ] `record_human_review_decision(conn, reimbursement_uuid, status, reviewed_by, reason) -> UUID`
-- [ ] `insert_human_review`'s docstring gains a one-line note distinguishing it from `record_human_review_decision`
-- [ ] `DescribeApprove`/`DescribeReject`/`DescribeFindReimbursementState`/`DescribeRecordHumanReviewDecision` in `test_repository.py` cover: `approve` succeeds on an eligible row and returns the updated row (REVIEW-01), `approve` returns `None` on an ineligible status (REVIEW-04), `reject` succeeds when all three receipt fields are already set (REVIEW-05), `reject` returns `None` when any receipt field is `NULL` even on an eligible status (REVIEW-10), `find_reimbursement_state` returns `None` for an unknown uuid / the row for a known one, `record_human_review_decision` inserts exactly one `human_review` row with the given fields
-- [ ] Gate check passes: `uv run pytest`
-- [ ] Test count: +8
+- [x] `approve(conn, uuid, *, eligible_statuses, receipts_value, receipts_date, receipts_currency, reason) -> Record | None` — atomic `UPDATE ... RETURNING`
+- [x] `reject(conn, uuid, *, eligible_statuses, reason) -> Record | None` — atomic `UPDATE ... WHERE ... AND receipts_value/date/currency IS NOT NULL RETURNING`
+- [x] `find_reimbursement_state(conn, uuid) -> Record | None`
+- [x] `record_human_review_decision(conn, reimbursement_uuid, status, reviewed_by, reason) -> UUID`
+- [x] `insert_human_review`'s docstring gains a one-line note distinguishing it from `record_human_review_decision`
+- [x] `DescribeApprove`/`DescribeReject`/`DescribeFindReimbursementState`/`DescribeRecordHumanReviewDecision` in `test_repository.py` cover: `approve` succeeds on an eligible row and returns the updated row (REVIEW-01), `approve` returns `None` on an ineligible status (REVIEW-04), `reject` succeeds when all three receipt fields are already set (REVIEW-05), `reject` returns `None` when any receipt field is `NULL` even on an eligible status (REVIEW-10), `find_reimbursement_state` returns `None` for an unknown uuid / the row for a known one, `record_human_review_decision` inserts exactly one `human_review` row with the given fields
+- [x] Gate check passes: `uv run pytest`
+- [x] Test count: +8
 
 **Tests**: integration
 **Gate**: full
@@ -127,12 +127,12 @@ T4 → T5
 - Skill: NONE
 
 **Done when**:
-- [ ] `approve_reimbursement(conn, uuid, *, receipts_value, receipts_date, receipts_currency, reason, approved_by) -> Record` implemented: calls `repository.approve`, on success calls `record_human_review_decision` in the same transaction and returns the row; on `None`, calls `find_reimbursement_state` and raises `ReimbursementNotFound` or `ReimbursementNotEligible`
-- [ ] `reject_reimbursement(conn, uuid, *, reason, approved_by) -> Record` — same shape via `repository.reject`
-- [ ] Integration tests: approve happy path (REVIEW-01), reject happy path (REVIEW-05), unknown uuid → `ReimbursementNotFound` for both actions (REVIEW-07), ineligible status → `ReimbursementNotEligible` for both actions (REVIEW-04, REVIEW-08), reject with an incomplete entity → `ReimbursementNotEligible` (REVIEW-10), exactly one new `human_review` row per successful call, no `human_review` row and no status change on any raised path
-- [ ] Concurrency integration test (REVIEW-09): two concurrent `asyncio.gather`'d calls against the same eligible row — assert exactly one succeeds (returns a row) and the other raises `ReimbursementNotEligible`, and exactly one `human_review` row exists afterward
-- [ ] Gate check passes: `uv run pytest`
-- [ ] Test count: +8
+- [x] `approve_reimbursement(conn, uuid, *, receipts_value, receipts_date, receipts_currency, reason, approved_by) -> Record` implemented: calls `repository.approve`, on success calls `record_human_review_decision` in the same transaction and returns the row; on `None`, calls `find_reimbursement_state` and raises `ReimbursementNotFound` or `ReimbursementNotEligible`
+- [x] `reject_reimbursement(conn, uuid, *, reason, approved_by) -> Record` — same shape via `repository.reject`
+- [x] Integration tests: approve happy path (REVIEW-01), reject happy path (REVIEW-05), unknown uuid → `ReimbursementNotFound` for both actions (REVIEW-07), ineligible status → `ReimbursementNotEligible` for both actions (REVIEW-04, REVIEW-08), reject with an incomplete entity → `ReimbursementNotEligible` (REVIEW-10), exactly one new `human_review` row per successful call, no `human_review` row and no status change on any raised path
+- [x] Concurrency integration test (REVIEW-09): two concurrent `asyncio.gather`'d calls against the same eligible row — assert exactly one succeeds (returns a row) and the other raises `ReimbursementNotEligible`, and exactly one `human_review` row exists afterward
+- [x] Gate check passes: `uv run pytest`
+- [x] Test count: +8
 
 **Tests**: unit + integration (mixed — this module has no pure-unit-only branch since both gates require a DB round trip to know the row's state, unlike `list_reimbursements`'s pre-DB gates; classified "mixed" per the matrix, all cases here run under the full gate)
 **Gate**: full
@@ -152,11 +152,11 @@ T4 → T5
 - Skill: NONE
 
 **Done when**:
-- [ ] `ApproveReview`/`RejectReview` models per the design's field list, `ReviewRequest` discriminated union, `REVIEW_ADAPTER`
-- [ ] `validate_review(raw: bytes) -> ApproveReview | RejectReview` catches `ValidationError`, raises `ReviewInvalid` naming the offending field
-- [ ] Unit tests: valid approve payload parses to `ApproveReview`, valid reject payload parses to `RejectReview`, missing required approve field raises `ReviewInvalid` (REVIEW-02), malformed `receipts_date`/`receipts_currency`/`receipts_value` each raise `ReviewInvalid` (REVIEW-03), missing `reason`/`approved_by` on reject raises `ReviewInvalid` (REVIEW-06), unknown `status` value raises `ReviewInvalid`
-- [ ] Gate check passes: `uv run pytest -m "not integration"`
-- [ ] Test count: +7
+- [x] `ApproveReview`/`RejectReview` models per the design's field list, `ReviewRequest` discriminated union, `REVIEW_ADAPTER`
+- [x] `validate_review(raw: bytes) -> ApproveReview | RejectReview` catches `ValidationError`, raises `ReviewInvalid` naming the offending field
+- [x] Unit tests: valid approve payload parses to `ApproveReview`, valid reject payload parses to `RejectReview`, missing required approve field raises `ReviewInvalid` (REVIEW-02), malformed `receipts_date`/`receipts_currency`/`receipts_value` each raise `ReviewInvalid` (REVIEW-03), missing `reason`/`approved_by` on reject raises `ReviewInvalid` (REVIEW-06), unknown `status` value raises `ReviewInvalid`
+- [x] Gate check passes: `uv run pytest -m "not integration"`
+- [x] Test count: +7
 
 **Tests**: unit
 **Gate**: quick
@@ -177,13 +177,13 @@ T4 → T5
 - Skill: NONE
 
 **Done when**:
-- [ ] `PUT /api/v1/reimbursement/{uuid}` registered, `Depends(get_pool)`
-- [ ] Body/path `uuid` mismatch → `400`, before the use case is ever called
-- [ ] Three handlers registered in `register_handlers()`
-- [ ] `DescribePutReimbursement` in `test_route.py` covers: approve happy path → `200` (REVIEW-01), missing approve field → `422` (REVIEW-02), malformed `receipts_*` → `422` (REVIEW-03), approve on ineligible status → `400` (REVIEW-04), reject happy path → `200` (REVIEW-05), missing `reason`/`approved_by` on reject → `422` (REVIEW-06), unknown uuid → `404` (REVIEW-07), reject on ineligible status → `400` (REVIEW-08), concurrent PUTs — one `200`, one `400` (REVIEW-09), reject blocked on incomplete entity → `400` (REVIEW-10), body/path uuid mismatch → `400`, `500` on a simulated pool failure
-- [ ] `DescribeTheRealApp` proves `main.app`'s real wiring serves this route (second proof point for the pool wiring, alongside GET's)
-- [ ] Gate check passes: `uv run pytest`
-- [ ] Test count: +13
+- [x] `PUT /api/v1/reimbursement/{uuid}` registered, `Depends(get_pool)`
+- [x] Body/path `uuid` mismatch → `400`, before the use case is ever called
+- [x] Three handlers registered in `register_handlers()`
+- [x] `DescribePutReimbursement` in `test_route.py` covers: approve happy path → `200` (REVIEW-01), missing approve field → `422` (REVIEW-02), malformed `receipts_*` → `422` (REVIEW-03), approve on ineligible status → `400` (REVIEW-04), reject happy path → `200` (REVIEW-05), missing `reason`/`approved_by` on reject → `422` (REVIEW-06), unknown uuid → `404` (REVIEW-07), reject on ineligible status → `400` (REVIEW-08), concurrent PUTs — one `200`, one `400` (REVIEW-09), reject blocked on incomplete entity → `400` (REVIEW-10), body/path uuid mismatch → `400`, `500` on a simulated pool failure
+- [x] `DescribeTheRealApp` proves `main.app`'s real wiring serves this route (second proof point for the pool wiring, alongside GET's)
+- [x] Gate check passes: `uv run pytest`
+- [x] Test count: +13
 
 **Tests**: route-level
 **Gate**: full
