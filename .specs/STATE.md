@@ -349,6 +349,49 @@ an operational one, and no retention policy has been set — recorded as
 **R-003**. The Agent must also tolerate a `uuid` with no matching row, which
 the dual-write window of **R-001** makes possible.
 
+### AD-016 — Vacated (never adopted)
+
+**Date:** 2026-08-08
+**Status:** Vacated — superseded before adoption by AD-022 + AD-023
+
+Reserved by `api-post-reimbursement`'s design for "a single centralised
+config in `shared`, as frozen `Settings` models with `from_env()`
+classmethods." Never appended, and the shape was never built.
+
+**Why vacated:** the decision it reserved was genuinely taken, in a
+different form: AD-022 introduced the `KafkaConfig` frozen dataclass and
+AD-023 replaced per-class `from_env()` with one `@lru_cache`'d
+`load_config()`. Recording the vacancy explicitly so the 016/017 gap in this
+log reads as a deliberate release rather than a lost entry.
+
+### AD-017 — `asyncpg` pool + implicit-transaction as the project's async DB pattern
+
+**Date:** 2026-08-08
+**Status:** Active
+
+Every service reaching Postgres at runtime does so through an `asyncpg` pool
+opened by a `managed_pool()` async context manager, and wraps any
+write-plus-side-effect unit of work in `async with conn.transaction():` —
+placing the side effect *inside* the context manager so a failure rolls back
+without an explicit rollback call.
+
+**Why:** the publisher must not leave a committed `reimbursement` row whose
+`Reimbursement` publish never happened (`SCOPE.md:219-220`). Putting the
+publish inside `conn.transaction()` makes that guarantee structural rather
+than a discipline the next author has to remember. `managed_pool` mirrors
+`shared.producer.managed_producer`'s construct/yield/close shape, so the two
+resources compose identically in a service's startup.
+
+Pool sizing is set explicitly, never left at `create_pool`'s `min_size=10,
+max_size=10` default — which happens to equal the publisher's item
+concurrency and would leave zero headroom.
+
+**Implication:** this is the project's first runtime database access
+(`CONCERNS.md:21` records `asyncpg` as declared-but-unused). The Agent
+inherits the pattern. Any service whose concurrency pins a connection per
+in-flight unit must assert `pool_max_size >= concurrency` at startup —
+otherwise it starves under load instead of failing loudly (**R-005**).
+
 ### AD-018 — Flat `api` layout: `src/api/src/*.py`, `api` is a virtual (uninstalled) workspace member
 
 **Date:** 2026-08-08
@@ -672,6 +715,61 @@ justification (`get_producer`) doesn't match its old name once
 `get_kafka_config` — the thing that made "producer" sound right — was
 gone. Renaming and dropping the dead wrapper together avoids leaving a
 misleadingly-named file with only accidental content in it.
+
+### AD-025 — `shared` owns cross-service persistence, sliced by domain
+
+**Date:** 2026-08-08
+**Status:** Active
+
+`shared` gains `asyncpg` and a domain-sliced persistence layer:
+`shared/reimbursement/repository.py` (pool lifecycle + statements) and
+`shared/reimbursement/use_cases/send_human_review.py`, plus a cross-domain
+`shared/failure_log.py`. `shared/review/` follows when the `human_review`
+table gets a consumer. Cross-domain infrastructure (`config`, `errors`,
+`models`, `producer`, `failure_log`) stays at the `shared` root.
+
+**Why:** AD-018's `package = false` makes flattened services uninstallable,
+so `agent` cannot import from `publisher` — anything both need must live in
+`shared` or be copy-pasted later. `SCOPE.md` names both consumers explicitly:
+the last-resort log is mandated twice (`:216-217`, `:272-273`), as is the
+`retry > 3` escalation.
+
+**Tension, accepted knowingly:** `CONVENTIONS.md:17` scopes `shared` to code
+with *more than one real consumer*, and the Agent is still a stub. The
+precedent for placing infrastructure there ahead of its second consumer is
+`shared/producer.py`, which today has exactly one (`api`). Slicing by domain
+rather than by flat module keeps the future `review` slice from landing
+beside reimbursement statements in one file.
+
+**Implication:** if the Agent never materialises as a second caller,
+`use_cases/` should collapse back into the slice's `repository.py` — a
+one-member abstraction layer is ceremony, and this is a tracked bet.
+
+### AD-026 — `publisher` flattens to `src/publisher/src`, a virtual workspace member
+
+**Date:** 2026-08-08
+**Status:** Active
+**Follows:** AD-018 (same mechanism, applied to a second service)
+
+`src/publisher/src/publisher/` collapses to loose modules under
+`src/publisher/src/`. `[tool.uv] package = false`, `[build-system]` dropped,
+`ENV PYTHONPATH=/app/src/publisher/src` in the Dockerfile, and both CMDs move
+from `python -m publisher.consumer` to `python -m consumer`.
+
+**Why:** user decision, matching AD-018's shape for `api`. uv_build's
+`find_roots` requires a package directory, so `package = false` is the only
+mechanism that permits loose modules while still resolving dependencies
+through the workspace.
+
+**Implication — a real constraint this creates:** flat services expose bare
+top-level module names, and the pytest `sys.path` carries every flattened
+service at once (`pythonpath` gains `src/publisher/src` alongside
+`src/api/src`). Bare names resolve first-match-wins, so publisher's modules
+must not collide with `api`'s `{dependencies, errors, main, migrate}`.
+`consumer` and `processing` are clear. **`agent` is namespaced and immune
+only while it stays an installable package** — flattening it would collide
+its natural `consumer.py` with the publisher's. Decide before that feature
+starts.
 
 ---
 
