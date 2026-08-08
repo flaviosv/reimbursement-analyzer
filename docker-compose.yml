@@ -77,6 +77,13 @@ services:
       KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR: 1
       KAFKA_LOG_DIRS: "/var/lib/kafka/data"
+      # 2 MiB: 1 MiB above the API's 1 MiB request ceiling, covering the
+      # envelope prefix and protocol framing. message.max.bytes doubles as
+      # the topic-level default for topics that don't override it.
+      # KAFKA_SOCKET_REQUEST_MAX_BYTES is untouched -- its 100 MB default
+      # already clears this.
+      KAFKA_MESSAGE_MAX_BYTES: 2097152
+      KAFKA_REPLICA_FETCH_MAX_BYTES: 2097152
     volumes:
       - kafka_data:/var/lib/kafka/data
     healthcheck:
@@ -293,6 +300,14 @@ services:
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:19092
       DATABASE_URL: postgresql://reimbursementanalyzer:${POSTGRES_PASSWORD}@postgres:5432/reimbursementanalyzer
+      # Unset (PLAINTEXT) by default, matching the kafka service above; set
+      # these together in .env to switch to authenticated/encrypted
+      # transport without touching this file. See shared.config.kafka_security_config.
+      KAFKA_SECURITY_PROTOCOL: ${KAFKA_SECURITY_PROTOCOL:-}
+      KAFKA_SASL_MECHANISM: ${KAFKA_SASL_MECHANISM:-}
+      KAFKA_SASL_USERNAME: ${KAFKA_SASL_USERNAME:-}
+      KAFKA_SASL_PASSWORD: ${KAFKA_SASL_PASSWORD:-}
+      KAFKA_SSL_CA_LOCATION: ${KAFKA_SSL_CA_LOCATION:-}
     volumes:
       - ./src/api:/app/src/api
       - ./src/shared:/app/src/shared

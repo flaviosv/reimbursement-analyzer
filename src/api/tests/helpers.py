@@ -40,3 +40,17 @@ def guard_is_test_database(url: str) -> None:
             f"refusing to run against database {name!r}: the test suite drops "
             "and recreates its database, so the name must end in '_test'"
         )
+
+
+def valid_reimbursement_item(request_id: str = "REQ-0001", **extra: object) -> dict:
+    """The canonical minimal-valid POST /api/v1/reimbursement item shape —
+    a single source of truth for test_validation.py, test_route.py, and
+    test_integration.py, which each need a slightly different usage pattern
+    (a fixed dict vs. a request_id-keyed factory) but were previously
+    maintaining three independently hand-copied versions of this shape."""
+    return {
+        "request_id": request_id,
+        "submitted_by": "person@example.com",
+        "submitted_at": "2026-01-01T12:00:00Z",
+        **extra,
+    }

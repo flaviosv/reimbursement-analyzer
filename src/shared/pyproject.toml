@@ -7,7 +7,9 @@ authors = [
 ]
 requires-python = ">=3.14.7"
 dependencies = [
-    "pydantic>=2.13.4",
+    "confluent-kafka>=2.15.0",
+    # [email] pulls email-validator, which EmailStr requires at import time.
+    "pydantic[email]>=2.13.4",
 ]
 
 [build-system]

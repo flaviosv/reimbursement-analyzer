@@ -25,9 +25,13 @@ migrations = [
     "yoyo-migrations>=9.0.0",
 ]
 
-[build-system]
-requires = ["uv_build>=0.12.2,<0.13.0"]
-build-backend = "uv_build"
+[tool.uv]
+# No [build-system]: api's own modules sit directly in src/api/src (no
+# wrapping package directory uv_build could build a wheel around) — a
+# virtual, non-installed workspace member. Its dependencies still resolve
+# into the shared venv; api itself runs straight from source via PYTHONPATH
+# (see Dockerfile), not an installed import.
+package = false
 
 [tool.uv.sources]
 shared = { workspace = true }

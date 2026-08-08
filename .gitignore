@@ -1,4 +1,6 @@
 *
+!.specs
+!.specs/**
 !docs
 !docs/**
 !src

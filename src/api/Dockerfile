@@ -27,22 +27,26 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY src/api src/api
 COPY src/shared src/shared
 
-# Editable: the venv links back to /app/src/api instead of baking the code
-# in, so the dev stage below can bind-mount live source over it.
+# api is a virtual workspace member (package = false in its pyproject.toml —
+# src/api/src holds loose modules, not a package uv_build can wheel up), so
+# there is nothing to (re-)install here beyond its already-synced
+# dependencies; every stage below runs api straight from source via
+# PYTHONPATH instead of an installed import.
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --package api
 
-# --- dev: editable install, hot reload, meant to run with src/ bind-mounted ---
+# --- dev: hot reload, meant to run with src/ bind-mounted ---
 FROM python:3.14.7-slim AS dev
 RUN groupadd --system app && useradd --system --gid app --home /app app
 WORKDIR /app
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
 COPY --from=builder --chown=app:app /app/src /app/src
 USER app
-ENV PATH="/app/.venv/bin:$PATH"
+ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONPATH="/app/src/api/src"
 
 EXPOSE 8000
-CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/src"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/src"]
 
 # --- migrate: the only image that gets the DDL tooling, runs once and exits ---
 FROM builder AS migrate-builder
@@ -53,25 +57,28 @@ FROM python:3.14.7-slim AS migrate
 RUN groupadd --system app && useradd --system --gid app --home /app app
 WORKDIR /app
 COPY --from=migrate-builder --chown=app:app /app/.venv /app/.venv
-# Editable like the dev stage, so a newly added .sql is picked up from the
-# bind mount without rebuilding the image.
+# So a newly added .sql is picked up from the bind mount without rebuilding
+# the image.
 COPY --from=migrate-builder --chown=app:app /app/src /app/src
 USER app
-ENV PATH="/app/.venv/bin:$PATH"
+ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONPATH="/app/src/api/src"
 
-CMD ["python", "-m", "api.migrate"]
+CMD ["python", "-m", "migrate"]
 
-# --- prod: code baked in non-editable, no reload, runs standalone ---
+# --- prod: same source, no reload, runs standalone ---
 FROM builder AS prod-builder
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-editable --package api
+    uv sync --locked --package api
 
 FROM python:3.14.7-slim AS prod
 RUN groupadd --system app && useradd --system --gid app --home /app app
 WORKDIR /app
 COPY --from=prod-builder --chown=app:app /app/.venv /app/.venv
+COPY --from=prod-builder --chown=app:app /app/src /app/src
 USER app
-ENV PATH="/app/.venv/bin:$PATH"
+ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONPATH="/app/src/api/src"
 
 EXPOSE 8000
-CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
