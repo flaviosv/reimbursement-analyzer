@@ -434,6 +434,70 @@ The Agent feature is not yet specified and will need schema of its own (at
 minimum, the columns behind the decision and staleness rules). Deciding
 placement **before** that feature is specified avoids a second layer's
 migrations landing inside the api package and hardening the coupling.
+
+---
+
+## R-007 — `retry > 3` escalates to `human-review` regardless of cause, mixing infra failures with genuine data problems
+
+**Raised:** 2026-08-08
+**Status:** Open, needs evaluation — owner: Flavio
+**Affects:** `publisher-consume-request`, `agent-consume-reimbursement`
+**Severity:** Medium — no runtime failure; a review-queue data-quality problem that grows with volume and with the length of any infra incident
+
+### What breaks
+
+Both the publisher's and the Agent's `retry > 3` fallback escalate
+unconditionally to `human-review` once the ceiling is hit, regardless of
+*why* every attempt failed. Each `AttemptError` entry already records an
+`error type` and the failing `stage`, so the distinction between causes is
+present in the data — but nothing acts on it before the row lands in
+review. A request that failed four times purely because the DB or the
+broker was flapping (`ConnectionError`/`TimeoutError` at a
+`db-insert`/`publish`/resolve stage) lands in the exact same queue, with
+the exact same `status`, as a request that failed because its data was
+genuinely unprocessable. A human reviewer sees "this row needs a
+decision," not "this row failed for infrastructure reasons and would very
+likely have succeeded on a fifth attempt."
+
+### Why it matters more as the system grows
+
+The failure mode is correlated, not independent: a single infra incident
+(a few minutes of DB connection exhaustion, a broker outage) can push many
+concurrently-retrying items over the `retry > 3` ceiling at once, flooding
+`human-review` with rows that have nothing wrong with their underlying
+data. That noise can bury the genuinely-bad rows a reviewer actually needs
+to judge, and burns review capacity on items that infra recovery alone
+would have resolved for free had the retry ceiling been higher or the
+classification been cause-aware.
+
+### Options
+
+1. **Classify at escalation time.** Split `AttemptError`'s causes into
+   infra/transient (connection, timeout, broker unavailable) vs.
+   permanent/data (validation, constraint violation) and only escalate the
+   latter to `human-review`; an all-infra failure chain gets a different
+   treatment instead (extended backoff, a distinct "infra-stalled" status)
+   rather than consuming a review slot. Cost: a classification layer plus
+   a new intermediate state or retry policy on both the publisher and the
+   Agent.
+2. **Keep escalating everything, but tag the cause.** `decision_reason`
+   already renders the full error history in prose; add a coarse
+   machine-readable category alongside it (or a `human_review` column) so
+   a reviewer or a dashboard filter can deprioritize infra-caused rows
+   without reading prose first. Cheaper than option 1, doesn't stop the
+   pollution, only makes it filterable.
+3. **Accept and keep as-is.** Defensible at current, unmeasured volume
+   (mirrors **R-005**'s starting-values caveat) — no load or incident data
+   yet shows this is a real problem in practice, only that it's a real gap
+   in the design.
+
+### Not resolved by either feature
+
+Both `publisher-consume-request` and `agent-consume-reimbursement` keep
+the current undifferentiated `retry > 3` → `human-review` escalation
+as-is, per explicit user decision (2026-08-08) — recorded here for future
+evaluation, not acted on now.
+
 ---
 
 ## R-008 — The API applies no cross-item uniqueness check within one batch

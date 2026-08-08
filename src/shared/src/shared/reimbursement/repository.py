@@ -30,6 +30,14 @@ _INSERT_HUMAN_REVIEW = """
     RETURNING uuid
 """
 
+_SELECT_BY_UUID = "SELECT * FROM reimbursement WHERE uuid = $1"
+
+_UPDATE_HUMAN_REVIEW = """
+    UPDATE reimbursement
+    SET status = 'human-review', decision_reason = $2, updated_at = now()
+    WHERE uuid = $1
+"""
+
 
 def _columns(item: dict[str, Any]) -> tuple[Any, ...]:
     # The three identity columns come from the *validated* model, not the
@@ -57,7 +65,10 @@ async def managed_pool(config: DatabaseConfig) -> AsyncIterator[asyncpg.Pool]:
 
     Both sizes are always passed: create_pool defaults to min_size=10,
     max_size=10, which exactly equals the publisher's item concurrency and so
-    would leave the pool zero headroom (AD-017).
+    would leave the pool zero headroom (AD-017). command_timeout bounds every
+    query issued through this pool — without it, a stuck connection (broker
+    failover, network partition, lock contention) hangs the caller forever,
+    since neither service's consume loop has its own per-call timeout.
     """
     pool = await asyncpg.create_pool(
         dsn=config.dsn,
@@ -81,6 +92,24 @@ async def insert_pending(conn: asyncpg.Connection, item: dict[str, Any]) -> UUID
 
 async def insert_human_review(conn: asyncpg.Connection, item: dict[str, Any], reason: str) -> UUID:
     return await conn.fetchval(_INSERT_HUMAN_REVIEW, *_columns(item), reason)
+
+
+async def get_by_uuid(conn: asyncpg.Connection, uuid: UUID) -> asyncpg.Record | None:
+    """Full row, not a column subset: `updated_at` drives the Agent's
+    staleness check and `original_payload` is what the future processing
+    feature needs, so there is no projection narrower than * that serves
+    every caller. None on no match (via fetchrow) — the ghost case (R-001)
+    maps directly onto this, no exception handling needed to detect it."""
+    return await conn.fetchrow(_SELECT_BY_UUID, uuid)
+
+
+async def update_human_review(conn: asyncpg.Connection, uuid: UUID, reason: str) -> bool:
+    """Escalate an existing row to human-review. Returns whether exactly one
+    row was affected, parsed from asyncpg's `UPDATE n` status string — the
+    False branch is what a ghost uuid past the retry ceiling needs, to route
+    to the failure log instead of treating the update as having succeeded."""
+    status = await conn.execute(_UPDATE_HUMAN_REVIEW, uuid, reason)
+    return status == "UPDATE 1"
 
 
 def is_duplicate(exc: BaseException) -> bool:

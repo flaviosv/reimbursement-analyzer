@@ -1,12 +1,17 @@
 from datetime import UTC, datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import asyncpg
 import pytest
 from helpers import valid_reimbursement_item
 from shared.config import load_config
 from shared.models import AttemptError, Stage
-from shared.reimbursement.use_cases.send_human_review import render_history, send_human_review
+from shared.reimbursement.repository import insert_pending
+from shared.reimbursement.use_cases.send_human_review import (
+    escalate_existing,
+    render_history,
+    send_human_review,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -120,3 +125,48 @@ class DescribeSendHumanReview:
         reason = await db.fetchval("SELECT decision_reason FROM reimbursement WHERE uuid = $1", uuid)
         assert reason is not None
         assert "ceiling" in reason.lower()
+
+
+class DescribeEscalateExisting:
+    """The UPDATE-based sibling to send_human_review's INSERT-based
+    fallback — the Agent's own retry>3 path, where the publisher already
+    created the row."""
+
+    async def it_updates_the_existing_row_to_human_review(self, db: asyncpg.Connection) -> None:
+        uuid = await insert_pending(db, valid_reimbursement_item("REQ-AGENT-ESCALATED"))
+
+        result = await escalate_existing(db, uuid, _three_distinct(), _LIMIT)
+
+        assert result == uuid
+        row = await db.fetchrow("SELECT status, request_id FROM reimbursement WHERE uuid = $1", uuid)
+        assert row["status"] == "human-review"
+        assert row["request_id"] == "REQ-AGENT-ESCALATED"
+
+    async def it_records_every_failure_in_the_decision_reason(self, db: asyncpg.Connection) -> None:
+        uuid = await insert_pending(db, valid_reimbursement_item("REQ-AGENT-WHY"))
+
+        await escalate_existing(db, uuid, _three_distinct(), _LIMIT)
+
+        reason = await db.fetchval("SELECT decision_reason FROM reimbursement WHERE uuid = $1", uuid)
+        assert "connection reset by peer" in reason
+        assert "broker unreachable" in reason
+        assert "submitted_at is in the future" in reason
+        assert "[db-insert]" in reason
+        assert "[publish]" in reason
+
+    async def it_leaves_the_decision_reason_non_null_when_no_history_was_carried(
+        self, db: asyncpg.Connection
+    ) -> None:
+        uuid = await insert_pending(db, valid_reimbursement_item("REQ-AGENT-NO-HISTORY"))
+
+        await escalate_existing(db, uuid, [], _LIMIT)
+
+        reason = await db.fetchval("SELECT decision_reason FROM reimbursement WHERE uuid = $1", uuid)
+        assert reason is not None
+        assert "ceiling" in reason.lower()
+
+    async def it_returns_none_for_a_uuid_matching_no_row(self, db: asyncpg.Connection) -> None:
+        # The compound ghost + retry>3 case (AGT-18): nothing to escalate.
+        result = await escalate_existing(db, uuid4(), _three_distinct(), _LIMIT)
+
+        assert result is None

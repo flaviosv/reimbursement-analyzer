@@ -3,12 +3,21 @@ failure nothing else could handle."""
 
 import json
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from shared.config import FailureLogConfig
 
+if TYPE_CHECKING:
+    from shared.models import AttemptError
+
 _MAX_DEPTH = 10
 _FALLBACK_LOGGER_NAME = "reimbursementanalyzer.failures.fallback"
+
+
+def render_errors(errors: "list[AttemptError]") -> list[dict[str, Any]]:
+    """Each `AttemptError` as a JSON-safe dict, in order — the one
+    sub-expression every service's own failure-record shape shares."""
+    return [error.model_dump(mode="json") for error in errors]
 
 
 def _truncated(value: Any, limit: int, depth: int = 0) -> Any:

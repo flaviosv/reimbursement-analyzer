@@ -75,13 +75,14 @@ class FailureLogConfig:
 
 @dataclass(frozen=True)
 class Config:
-    """Process-wide settings both `api` and `publisher` construct.
+    """Process-wide settings every service constructs.
 
     Deliberately holds only what a second service could plausibly need too
-    (`database`/`failure_log` are already claimed by the future Agent, per
-    AD-025). Single-service tuning — e.g. the publisher's own consumer group
-    and concurrency — lives in that service's own package instead; see
-    `src/publisher/src/config.py`."""
+    (`database`/`failure_log` are claimed by both `publisher` and `agent`,
+    per AD-025). Single-service tuning — e.g. the publisher's own consumer
+    group/concurrency, or the agent's own — lives in that service's own
+    package instead; see `src/publisher/src/config.py` and
+    `src/agent/src/agent/config.py`."""
 
     kafka: KafkaConfig
     database: DatabaseConfig
@@ -105,8 +106,8 @@ def load_config() -> Config:
         ),
         # os.getenv, never os.environ[...]: this loader is process-wide and
         # cached, so an unconditional read would make DATABASE_URL mandatory
-        # for api too, which never touches Postgres. The publisher validates
-        # presence at its own startup.
+        # for api too, which never touches Postgres. The publisher/agent
+        # validate presence at their own startup.
         database=DatabaseConfig(
             dsn=os.getenv("DATABASE_URL"),
             pool_min_size=2,

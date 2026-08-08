@@ -14,7 +14,7 @@ from pydantic import (
 
 from shared.config import MAX_BATCH_ITEMS
 
-Stage = Literal["db-insert", "publish"]
+Stage = Literal["db-insert", "publish", "resolve"]
 
 
 def _require_str(value: object) -> object:
