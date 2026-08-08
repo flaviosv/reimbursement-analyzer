@@ -2,6 +2,7 @@ from uuid import UUID
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
+from shared.config import load_config
 
 from dependencies import get_pool
 from errors import MessageResponse
@@ -33,7 +34,7 @@ async def put_reimbursement(
     if review.uuid is not None and review.uuid != uuid:
         raise HTTPException(status_code=400, detail="body uuid does not match the path uuid")
 
-    async with pool.acquire() as conn:
+    async with pool.acquire(timeout=load_config().database.acquire_timeout_seconds) as conn:
         if isinstance(review, ApproveReview):
             await approve_reimbursement(
                 conn,

@@ -1,5 +1,6 @@
 import asyncpg
 from fastapi import APIRouter, Depends, Request
+from shared.config import load_config
 
 from dependencies import get_pool
 from errors import MessageResponse
@@ -41,7 +42,7 @@ async def get_reimbursements(
     is still a raise from one of the collaborators, caught by the app-wide
     handlers registered in errors.py."""
     statuses = parse_status_filter(_single_status_param(request))
-    async with pool.acquire() as conn:
+    async with pool.acquire(timeout=load_config().database.acquire_timeout_seconds) as conn:
         rows = await list_reimbursements(conn, statuses=statuses, limit=limit, offset=offset)
     return ReimbursementListResponse(
         msg=f"{len(rows)} reimbursement(s) found",
