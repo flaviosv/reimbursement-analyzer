@@ -8,10 +8,12 @@ import pytest
 from helpers import valid_reimbursement_item
 from shared.config import load_config
 from shared.reimbursement.repository import (
+    get_by_uuid,
     insert_human_review,
     insert_pending,
     is_duplicate,
     managed_pool,
+    update_human_review,
 )
 
 pytestmark = pytest.mark.anyio
@@ -166,3 +168,46 @@ class DescribeIsDuplicate:
 
     async def it_does_not_classify_an_unrelated_error_as_a_duplicate(self) -> None:
         assert is_duplicate(RuntimeError("connection reset by peer")) is False
+
+
+class DescribeGetByUuid:
+    async def it_returns_the_full_row_for_a_real_uuid(self, db: asyncpg.Connection) -> None:
+        item = valid_reimbursement_item("REQ-GET", amount=42.0)
+        uuid = await insert_pending(db, item)
+
+        row = await get_by_uuid(db, uuid)
+
+        assert row is not None
+        assert row["uuid"] == uuid
+        assert row["request_id"] == "REQ-GET"
+        assert row["status"] == "pending"
+        assert row["updated_at"] is not None
+        assert json.loads(row["original_payload"]) == item
+
+    async def it_returns_none_for_a_uuid_matching_no_row(self, db: asyncpg.Connection) -> None:
+        # The ghost case (R-001): a uuid with no row must resolve to None, not
+        # an exception — the Agent's own tolerance for this depends on it.
+        row = await get_by_uuid(db, uuid4())
+
+        assert row is None
+
+
+class DescribeUpdateHumanReview:
+    async def it_returns_true_and_updates_the_existing_row(self, db: asyncpg.Connection) -> None:
+        uuid = await insert_pending(db, valid_reimbursement_item("REQ-ESCALATE"))
+
+        result = await update_human_review(db, uuid, "attempt 4 [resolve] RuntimeError: db down")
+
+        assert result is True
+        row = await db.fetchrow("SELECT * FROM reimbursement WHERE uuid = $1", uuid)
+        assert row["status"] == "human-review"
+        assert row["decision_reason"] == "attempt 4 [resolve] RuntimeError: db down"
+        assert row["updated_at"] is not None
+
+    async def it_returns_false_for_a_uuid_matching_no_row(self, db: asyncpg.Connection) -> None:
+        # The compound ghost + retry>3 case (AGT-18): nothing to update, and
+        # the caller must be able to tell "0 rows" from "1 row" to route to
+        # the failure log instead of treating this as success.
+        result = await update_human_review(db, uuid4(), "unreachable reason")
+
+        assert result is False
