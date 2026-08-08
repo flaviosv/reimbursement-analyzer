@@ -7,7 +7,7 @@ import asyncpg
 
 from shared.config import load_config
 from shared.models import AttemptError
-from shared.reimbursement.repository import insert_human_review
+from shared.reimbursement.repository import insert_human_review, update_human_review
 
 _NO_HISTORY = "Retry ceiling reached, but the message carried no error detail."
 
@@ -35,3 +35,14 @@ async def send_human_review(
     conn: asyncpg.Connection, item: dict[str, Any], errors: list[AttemptError]
 ) -> UUID:
     return await insert_human_review(conn, item, render_history(errors))
+
+
+async def escalate_existing(
+    conn: asyncpg.Connection, uuid: UUID, errors: list[AttemptError]
+) -> UUID | None:
+    """The Agent's own retry>3 fallback: the row already exists (the
+    publisher inserted it), so escalation is an UPDATE, not a fresh INSERT
+    like send_human_review's. Returns None when the uuid is a ghost (R-001)
+    — nothing to escalate, the caller routes to the failure log instead."""
+    updated = await update_human_review(conn, uuid, render_history(errors))
+    return uuid if updated else None
