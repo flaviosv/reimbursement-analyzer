@@ -1,15 +1,20 @@
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from uuid import UUID, uuid4
 
 import asyncpg
 import pytest
 from helpers import valid_reimbursement_item
 from shared.reimbursement.repository import (
+    approve,
     fetch_reimbursement_page,
+    find_reimbursement_state,
     insert_human_review,
     insert_pending,
     is_duplicate,
+    record_human_review_decision,
+    reject,
 )
 
 pytestmark = pytest.mark.anyio
@@ -28,6 +33,15 @@ _SEED_HUMAN_REVIEW = """
     INSERT INTO human_review (uuid, reimbursement_uuid, status, reviewed_by, reason, created_at)
     VALUES ($1, $2, $3, $4, $5, $6)
 """
+
+_SEED_REIMBURSEMENT_WITH_RECEIPTS = """
+    INSERT INTO reimbursement (
+        uuid, request_id, original_payload, status, receipts_value, receipts_date, currency
+    )
+    VALUES ($1, $2, '{}'::jsonb, $3, $4, $5, $6)
+"""
+
+_ELIGIBLE_STATUSES = ["human-review", "auto-rejected", "human-rejected"]
 
 
 async def _rows_for(db: asyncpg.Connection, request_id: str) -> list[asyncpg.Record]:
@@ -60,6 +74,22 @@ async def _seed_human_review(
         reason,
         created_at or datetime.now(UTC),
     )
+
+
+async def _seed_reimbursement_with_receipts(
+    db: asyncpg.Connection,
+    request_id: str,
+    *,
+    status: str = "human-review",
+    receipts_value: Decimal = Decimal("100.00"),
+    receipts_date: date = date(2026, 1, 1),
+    currency: str = "BRL",
+) -> UUID:
+    uuid = uuid4()
+    await db.execute(
+        _SEED_REIMBURSEMENT_WITH_RECEIPTS, uuid, request_id, status, receipts_value, receipts_date, currency
+    )
+    return uuid
 
 
 class DescribeInsertPending:
@@ -295,3 +325,96 @@ class DescribeFetchReimbursementPage:
         page = await fetch_reimbursement_page(db, statuses=["auto-approved"], limit=100, offset=0)
 
         assert [row["uuid"] for row in page] == [newest, middle, oldest]
+
+
+class DescribeApprove:
+    async def it_succeeds_on_an_eligible_row_and_returns_the_updated_row(
+        self, db: asyncpg.Connection
+    ) -> None:
+        uuid = await _seed_reimbursement(db, "REQ-APPROVE-ELIGIBLE", status="human-review")
+
+        row = await approve(
+            db,
+            uuid,
+            eligible_statuses=_ELIGIBLE_STATUSES,
+            receipts_value=Decimal("50.00"),
+            receipts_date=date(2026, 1, 5),
+            receipts_currency="BRL",
+            reason="looks good",
+        )
+
+        assert row["status"] == "human-approved"
+        assert row["receipts_value"] == Decimal("50.00")
+        assert row["receipts_date"] == date(2026, 1, 5)
+        assert row["currency"] == "BRL"
+        assert row["decision_reason"] == "looks good"
+
+    async def it_returns_none_on_an_ineligible_status(self, db: asyncpg.Connection) -> None:
+        uuid = await _seed_reimbursement(db, "REQ-APPROVE-INELIGIBLE", status="human-approved")
+
+        row = await approve(
+            db,
+            uuid,
+            eligible_statuses=_ELIGIBLE_STATUSES,
+            receipts_value=Decimal("50.00"),
+            receipts_date=date(2026, 1, 5),
+            receipts_currency="BRL",
+            reason="looks good",
+        )
+
+        assert row is None
+        status = await db.fetchval("SELECT status FROM reimbursement WHERE uuid = $1", uuid)
+        assert status == "human-approved"
+
+
+class DescribeReject:
+    async def it_succeeds_when_all_three_receipt_fields_are_already_set(
+        self, db: asyncpg.Connection
+    ) -> None:
+        uuid = await _seed_reimbursement_with_receipts(db, "REQ-REJECT-COMPLETE", status="human-review")
+
+        row = await reject(db, uuid, eligible_statuses=_ELIGIBLE_STATUSES, reason="bad receipt")
+
+        assert row["status"] == "human-rejected"
+        assert row["decision_reason"] == "bad receipt"
+
+    async def it_returns_none_when_any_receipt_field_is_null_even_on_an_eligible_status(
+        self, db: asyncpg.Connection
+    ) -> None:
+        uuid = await _seed_reimbursement(db, "REQ-REJECT-INCOMPLETE", status="human-review")
+
+        row = await reject(db, uuid, eligible_statuses=_ELIGIBLE_STATUSES, reason="bad receipt")
+
+        assert row is None
+        status = await db.fetchval("SELECT status FROM reimbursement WHERE uuid = $1", uuid)
+        assert status == "human-review"
+
+
+class DescribeFindReimbursementState:
+    async def it_returns_none_for_an_unknown_uuid(self, db: asyncpg.Connection) -> None:
+        state = await find_reimbursement_state(db, uuid4())
+
+        assert state is None
+
+    async def it_returns_the_row_for_a_known_uuid(self, db: asyncpg.Connection) -> None:
+        uuid = await _seed_reimbursement(db, "REQ-FIND-STATE", status="auto-rejected")
+
+        state = await find_reimbursement_state(db, uuid)
+
+        assert state["uuid"] == uuid
+        assert state["status"] == "auto-rejected"
+
+
+class DescribeRecordHumanReviewDecision:
+    async def it_inserts_exactly_one_human_review_row_with_the_given_fields(
+        self, db: asyncpg.Connection
+    ) -> None:
+        uuid = await _seed_reimbursement(db, "REQ-RECORD-DECISION", status="human-review")
+
+        await record_human_review_decision(db, uuid, "approved", "reviewer@example.com", "all good")
+
+        rows = await db.fetch("SELECT * FROM human_review WHERE reimbursement_uuid = $1", uuid)
+        assert len(rows) == 1
+        assert rows[0]["status"] == "approved"
+        assert rows[0]["reviewed_by"] == "reviewer@example.com"
+        assert rows[0]["reason"] == "all good"

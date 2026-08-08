@@ -1,6 +1,8 @@
 """Every SQL statement against the `reimbursement` table."""
 
 import json
+from datetime import date
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -51,6 +53,45 @@ _FETCH_REIMBURSEMENT_PAGE = """
     LIMIT $2 OFFSET $3
 """
 
+# Column is `currency`, not `receipts_currency` — the parameter/keyword stays
+# `receipts_currency` to match the payload field name (SCOPE.md/spec.md), the
+# repository maps it onto the real column here.
+_APPROVE = """
+    UPDATE reimbursement
+    SET status = 'human-approved',
+        receipts_value = $3,
+        receipts_date = $4,
+        currency = $5,
+        decision_reason = $6,
+        updated_at = now()
+    WHERE uuid = $1 AND status = ANY($2::text[])
+    RETURNING *
+"""
+
+_REJECT = """
+    UPDATE reimbursement
+    SET status = 'human-rejected',
+        decision_reason = $3,
+        updated_at = now()
+    WHERE uuid = $1 AND status = ANY($2::text[])
+        AND receipts_value IS NOT NULL
+        AND receipts_date IS NOT NULL
+        AND currency IS NOT NULL
+    RETURNING *
+"""
+
+_FIND_REIMBURSEMENT_STATE = """
+    SELECT uuid, status, receipts_value, receipts_date, currency
+    FROM reimbursement
+    WHERE uuid = $1
+"""
+
+_RECORD_HUMAN_REVIEW_DECISION = """
+    INSERT INTO human_review (reimbursement_uuid, status, reviewed_by, reason)
+    VALUES ($1, $2, $3, $4)
+    RETURNING uuid
+"""
+
 
 def _columns(item: dict[str, Any]) -> tuple[Any, ...]:
     # The three identity columns come from the *validated* model, not the
@@ -80,6 +121,9 @@ async def insert_pending(conn: asyncpg.Connection, item: dict[str, Any]) -> UUID
 
 
 async def insert_human_review(conn: asyncpg.Connection, item: dict[str, Any], reason: str) -> UUID:
+    """Inserts into `reimbursement` at status='human-review' — despite the
+    name, this never touches the `human_review` table. To insert a
+    `human_review` row, use record_human_review_decision()."""
     return await conn.fetchval(_INSERT_HUMAN_REVIEW, *_columns(item), reason)
 
 
@@ -91,6 +135,48 @@ async def fetch_reimbursement_page(
     `human_review` (if any) via a LATERAL join. Pure SQL, no validation —
     trusts its caller to have already gated `statuses`/`limit`/`offset`."""
     return await conn.fetch(_FETCH_REIMBURSEMENT_PAGE, statuses, limit, offset)
+
+
+async def approve(
+    conn: asyncpg.Connection,
+    uuid: UUID,
+    *,
+    eligible_statuses: list[str],
+    receipts_value: Decimal,
+    receipts_date: date,
+    receipts_currency: str,
+    reason: str,
+) -> asyncpg.Record | None:
+    """Atomic UPDATE ... WHERE ... RETURNING: None means the uuid doesn't
+    exist or its current status isn't in `eligible_statuses` — this
+    function does not distinguish the two, that's the use case's job."""
+    return await conn.fetchrow(
+        _APPROVE, uuid, eligible_statuses, receipts_value, receipts_date, receipts_currency, reason
+    )
+
+
+async def reject(
+    conn: asyncpg.Connection, uuid: UUID, *, eligible_statuses: list[str], reason: str
+) -> asyncpg.Record | None:
+    """Atomic UPDATE ... WHERE ... RETURNING, gated on the receipts_* fields
+    already being non-null: None means the uuid doesn't exist, its status
+    isn't eligible, or the entity is incomplete — again, not distinguished
+    here."""
+    return await conn.fetchrow(_REJECT, uuid, eligible_statuses, reason)
+
+
+async def find_reimbursement_state(conn: asyncpg.Connection, uuid: UUID) -> asyncpg.Record | None:
+    """Called only on the 0-rows-affected path of approve()/reject(), to
+    disambiguate 404 (no row) from 400 (row exists, ineligible/incomplete)."""
+    return await conn.fetchrow(_FIND_REIMBURSEMENT_STATE, uuid)
+
+
+async def record_human_review_decision(
+    conn: asyncpg.Connection, reimbursement_uuid: UUID, status: str, reviewed_by: str, reason: str
+) -> UUID:
+    return await conn.fetchval(
+        _RECORD_HUMAN_REVIEW_DECISION, reimbursement_uuid, status, reviewed_by, reason
+    )
 
 
 def is_duplicate(exc: BaseException) -> bool:
