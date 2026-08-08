@@ -30,10 +30,13 @@ python_functions = ["it_*"]
 # like test_route.py; default import-mode collides on the module name, and
 # without pythonpath each nested test file's own dir — not src/api/tests —
 # lands on sys.path, breaking `from helpers import ...`.
-# src/api/src is api's own module root: api is a virtual (uninstalled)
-# workspace member (see src/api/pyproject.toml), so its modules are only
-# importable via this explicit path, not via a normal package install.
-pythonpath = ["src/api/tests", "src/api/src"]
+# src/api/src and src/publisher/src are those services' own module roots:
+# both are virtual (uninstalled) workspace members (see their pyproject.toml
+# files), so their modules are only importable via these explicit paths, not
+# via a normal package install. Both sit on one sys.path and expose bare
+# module names, so publisher's must stay clear of api's
+# {dependencies, errors, main, migrate} — AD-026.
+pythonpath = ["src/api/tests", "src/api/src", "src/publisher/src"]
 addopts = "--import-mode=importlib"
 markers = [
     "integration: requires a container beyond the suite's own Postgres default",

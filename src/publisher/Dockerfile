@@ -27,34 +27,40 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY src/publisher src/publisher
 COPY src/shared src/shared
 
-# Editable: the venv links back to /app/src/publisher instead of baking the
-# code in, so the dev stage below can bind-mount live source over it.
+# publisher is a virtual workspace member (package = false in its
+# pyproject.toml — src/publisher/src holds loose modules, not a package
+# uv_build can wheel up), so there is nothing to (re-)install here beyond its
+# already-synced dependencies; every stage below runs publisher straight from
+# source via PYTHONPATH instead of an installed import.
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --package publisher
 
-# --- dev: editable install, hot reload, meant to run with src/ bind-mounted ---
+# --- dev: hot reload, meant to run with src/ bind-mounted ---
 FROM python:3.14.7-slim AS dev
 RUN groupadd --system app && useradd --system --gid app --home /app app
 WORKDIR /app
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
 COPY --from=builder --chown=app:app /app/src /app/src
 USER app
-ENV PATH="/app/.venv/bin:$PATH"
+ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONPATH="/app/src/publisher/src"
 
-# publisher.consumer is a plain script (no framework-level reload like
-# uvicorn), so watchfiles restarts the process on any change under /app/src.
-CMD ["watchfiles", "python -m publisher.consumer", "/app/src"]
+# consumer is a plain script (no framework-level reload like uvicorn), so
+# watchfiles restarts the process on any change under /app/src.
+CMD ["watchfiles", "python -m consumer", "/app/src"]
 
-# --- prod: code baked in non-editable, no reload, runs standalone ---
+# --- prod: same source, no reload, runs standalone ---
 FROM builder AS prod-builder
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-editable --package publisher
+    uv sync --locked --package publisher
 
 FROM python:3.14.7-slim AS prod
 RUN groupadd --system app && useradd --system --gid app --home /app app
 WORKDIR /app
 COPY --from=prod-builder --chown=app:app /app/.venv /app/.venv
+COPY --from=prod-builder --chown=app:app /app/src /app/src
 USER app
-ENV PATH="/app/.venv/bin:$PATH"
+ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONPATH="/app/src/publisher/src"
 
-CMD ["python", "-m", "publisher.consumer"]
+CMD ["python", "-m", "consumer"]
