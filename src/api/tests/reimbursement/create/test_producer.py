@@ -30,7 +30,7 @@ class DescribeBuildEnvelope:
         envelope = build_envelope(raw, published_at)
 
         stamp = published_at.isoformat().encode()
-        expected = b'{"retry":0,"published_at":"' + stamp + b'","payload":' + raw + b"}"
+        expected = b'{"retry":0,"published_at":"' + stamp + b'","errors":[],"payload":' + raw + b"}"
         assert envelope == expected
 
     def it_publishes_a_payload_byte_for_byte_identical_to_sample_json(self) -> None:
@@ -60,6 +60,13 @@ class DescribeBuildEnvelope:
 
         assert model.published_at == published_at
         assert model.published_at.tzinfo is not None
+
+    def it_starts_the_error_history_empty(self) -> None:
+        envelope = build_envelope(b"[]", datetime.now(UTC))
+
+        model = RequestEnvelope.model_validate_json(envelope)
+
+        assert model.errors == []
 
     def it_parses_cleanly_and_the_payload_matches_the_input_structurally(self) -> None:
         raw = SAMPLE_JSON_PATH.read_bytes()
