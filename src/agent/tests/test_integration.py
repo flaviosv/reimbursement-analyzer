@@ -8,7 +8,12 @@ from uuid import UUID, uuid4
 import asyncpg
 import pytest
 from agent.consumer import managed_consumer, run
-from agent.validation import Dependencies
+from agent.validation import (
+    GHOST_DROPPED_EVENT,
+    RESOLVED_EVENT,
+    STALE_IGNORED_EVENT,
+    Dependencies,
+)
 from confluent_kafka import KafkaException, TopicPartition
 from helpers import valid_reimbursement_item
 from shared.config import REIMBURSEMENT_TOPIC, Config, load_config
@@ -91,13 +96,15 @@ async def _run_agent(
         task = asyncio.create_task(run(deps, kafka_consumer, stopping))
         deadline = time.monotonic() + timeout
         try:
-            while await _committed_offset(kafka_consumer) - before < expected_advance:
+            # A short per-tick timeout (not the default 30s): a stuck
+            # coordinator would otherwise eat up to 30s inside one tick,
+            # during which the outer deadline below never gets checked.
+            advanced = await _committed_offset(kafka_consumer, timeout=2.0) - before
+            while advanced < expected_advance:
                 if time.monotonic() >= deadline:
-                    raise AssertionError(
-                        f"offset advanced by only "
-                        f"{await _committed_offset(kafka_consumer) - before} of {expected_advance}"
-                    )
+                    raise AssertionError(f"offset advanced by only {advanced} of {expected_advance}")
                 await asyncio.sleep(0.2)
+                advanced = await _committed_offset(kafka_consumer, timeout=2.0) - before
         finally:
             stopping.set()
             await task
@@ -105,21 +112,34 @@ async def _run_agent(
 
 class DescribeTheEndToEndRoundTrip:
     async def it_resolves_a_fresh_message_for_a_real_row(
-        self, kafka_bootstrap_server: str, migrated_db: str, monkeypatch: pytest.MonkeyPatch
+        self,
+        kafka_bootstrap_server: str,
+        migrated_db: str,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         monkeypatch.setenv("KAFKA_BOOTSTRAP_SERVERS", kafka_bootstrap_server)
         config = _config()
-        uuid = await _insert_row(migrated_db, "REQ-E2E-RESOLVED")
+        uuid = await _insert_row(migrated_db, "AGENT-E2E-RESOLVED")
         envelope = ReimbursementEnvelope(uuid=uuid, retry=0, published_at=datetime.now(UTC))
         await _produce(config, envelope)
 
-        await _run_agent(config, migrated_db, expected_advance=1)
+        with caplog.at_level("INFO"):
+            await _run_agent(config, migrated_db, expected_advance=1)
 
         row = await _row(migrated_db, uuid)
         assert row["status"] == "pending"  # unchanged — no side effect beyond the log
+        # Distinguishes this branch from the ghost/stale ones below, which
+        # leave the row equally untouched -- without this, a swapped branch
+        # would pass all three tests.
+        assert any(RESOLVED_EVENT in record.message for record in caplog.records)
 
     async def it_drops_a_message_whose_uuid_matches_no_row(
-        self, kafka_bootstrap_server: str, migrated_db: str, monkeypatch: pytest.MonkeyPatch
+        self,
+        kafka_bootstrap_server: str,
+        migrated_db: str,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         monkeypatch.setenv("KAFKA_BOOTSTRAP_SERVERS", kafka_bootstrap_server)
         config = _config()
@@ -128,31 +148,40 @@ class DescribeTheEndToEndRoundTrip:
         await _produce(config, envelope)
 
         # No exception, no hang — the offset still advances for a ghost.
-        await _run_agent(config, migrated_db, expected_advance=1)
+        with caplog.at_level("INFO"):
+            await _run_agent(config, migrated_db, expected_advance=1)
+
+        assert any(GHOST_DROPPED_EVENT in record.message for record in caplog.records)
 
     async def it_ignores_a_message_older_than_the_rows_last_update(
-        self, kafka_bootstrap_server: str, migrated_db: str, monkeypatch: pytest.MonkeyPatch
+        self,
+        kafka_bootstrap_server: str,
+        migrated_db: str,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         monkeypatch.setenv("KAFKA_BOOTSTRAP_SERVERS", kafka_bootstrap_server)
         config = _config()
-        uuid = await _insert_row(migrated_db, "REQ-E2E-STALE")
+        uuid = await _insert_row(migrated_db, "AGENT-E2E-STALE")
         row_before = await _row(migrated_db, uuid)
         stale_published_at = row_before["updated_at"] - timedelta(hours=1)
         envelope = ReimbursementEnvelope(uuid=uuid, retry=0, published_at=stale_published_at)
         await _produce(config, envelope)
 
-        await _run_agent(config, migrated_db, expected_advance=1)
+        with caplog.at_level("INFO"):
+            await _run_agent(config, migrated_db, expected_advance=1)
 
         row_after = await _row(migrated_db, uuid)
         assert row_after["status"] == "pending"
         assert row_after["decision_reason"] is None
+        assert any(STALE_IGNORED_EVENT in record.message for record in caplog.records)
 
     async def it_escalates_a_row_at_the_retry_ceiling_to_human_review(
         self, kafka_bootstrap_server: str, migrated_db: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("KAFKA_BOOTSTRAP_SERVERS", kafka_bootstrap_server)
         config = _config()
-        uuid = await _insert_row(migrated_db, "REQ-E2E-ESCALATED")
+        uuid = await _insert_row(migrated_db, "AGENT-E2E-ESCALATED")
         envelope = ReimbursementEnvelope(uuid=uuid, retry=4, published_at=datetime.now(UTC))
         await _produce(config, envelope)
 

@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 from agent_fakes import FakePool, FakeProducer
-from shared.config import load_config
+from shared.config import REIMBURSEMENT_TOPIC, load_config
 from shared.models import AttemptError, ReimbursementEnvelope
 from agent.validation import Dependencies, MessageOutcome, handle_message
 
@@ -49,7 +49,8 @@ class DescribeHandleMessageParsing:
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         pool = FakePool()
-        deps = _deps(pool=pool)
+        producer = FakeProducer()
+        deps = _deps(pool=pool, producer=producer)
 
         with caplog.at_level(logging.CRITICAL, logger="reimbursementanalyzer.failures"):
             outcome = await handle_message(deps, b"not json")
@@ -57,6 +58,7 @@ class DescribeHandleMessageParsing:
         assert outcome == MessageOutcome.INVALID
         assert any("reimbursement.malformed_message" in record.message for record in caplog.records)
         assert pool.acquisitions == 0  # no DB attempt was made
+        assert producer.produced == []  # AGT-20: no republish either
 
     async def it_writes_a_schema_mismatched_message_to_the_failure_log_and_returns_invalid(
         self, caplog: pytest.LogCaptureFixture
@@ -222,7 +224,7 @@ class DescribeResolveTransientFailureRequeue:
             outcome = await handle_message(deps, envelope.model_dump_json().encode())
 
         assert outcome == MessageOutcome.REQUEUED
-        [requeued] = producer.messages("Reimbursement")
+        [requeued] = producer.messages(REIMBURSEMENT_TOPIC)
         assert requeued["retry"] == 1
         assert len(requeued["errors"]) == 1
         assert requeued["errors"][0]["stage"] == "resolve"
@@ -265,7 +267,7 @@ class DescribeResolveTransientFailureRequeue:
 
         await handle_message(deps, envelope.model_dump_json().encode())
 
-        [requeued] = producer.messages("Reimbursement")
+        [requeued] = producer.messages(REIMBURSEMENT_TOPIC)
         assert requeued["retry"] == 2
         assert len(requeued["errors"]) == 2
         assert requeued["errors"][0]["attempt"] == 1
@@ -276,7 +278,7 @@ class DescribeResolveTransientFailureRequeue:
     ) -> None:
         uuid = uuid4()
         pool = FakePool(get_errors={uuid: RuntimeError("connection reset")})
-        producer = FakeProducer(errors={"Reimbursement": Exception("broker unreachable")})
+        producer = FakeProducer(errors={REIMBURSEMENT_TOPIC: Exception("broker unreachable")})
         deps = _deps(pool=pool, producer=producer)
         envelope = _envelope(uuid=uuid, retry=0)
 
