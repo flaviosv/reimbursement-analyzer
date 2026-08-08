@@ -1,4 +1,4 @@
-from shared.errors import DuplicateRequest, sanitize
+from shared.errors import sanitize
 
 
 class _DriverError(Exception):
@@ -9,14 +9,6 @@ class _DriverError(Exception):
         super().__init__(message)
         self.constraint_name = constraint_name
         self.detail = detail
-
-
-class DescribeDuplicateRequest:
-    def it_is_a_catchable_exception(self) -> None:
-        try:
-            raise DuplicateRequest("already stored")
-        except Exception as exc:
-            assert isinstance(exc, DuplicateRequest)
 
 
 class DescribeSanitize:

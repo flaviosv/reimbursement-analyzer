@@ -12,12 +12,6 @@ class PublishFailed(Exception):
     within the publish timeout."""
 
 
-class DuplicateRequest(Exception):
-    """The item collided with an already-stored request on the
-    (request_id, lower(submitted_by)) unique index. Retrying can never fix
-    it, so it is dropped rather than retried."""
-
-
 def sanitize(exc: BaseException) -> str:
     """Render an exception for stdout: its type, plus the violated
     constraint when there is one.

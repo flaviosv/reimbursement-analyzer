@@ -134,7 +134,7 @@ src/
 │   ├── src/shared/
 │   │   ├── config.py        ~ + DatabaseConfig, FailureLogConfig, PublisherConfig
 │   │   │                      + REIMBURSEMENT_TOPIC, MAX_RETRY; load_config() extended
-│   │   ├── errors.py        ~ + DuplicateRequest, sanitize()
+│   │   ├── errors.py        ~ + sanitize()
 │   │   ├── failure_log.py   +  named-logger sink — cross-domain, stays at root
 │   │   ├── models.py        ~ + AttemptError, ReimbursementEnvelope,
 │   │   │                      RequestEnvelope.errors
@@ -309,8 +309,10 @@ every test (`TESTING.md:63`), so new config values need no new fixture.
 
 ### `shared/errors.py` — extended
 
-- `DuplicateRequest`; `sanitize(exc) -> str` (exception type + constraint
-  name, **never** the driver's `DETAIL`).
+- `sanitize(exc) -> str` (exception type + constraint name, **never** the
+  driver's `DETAIL`). Duplicates are classified by
+  `repository.is_duplicate(exc)` on the driver's own exception, so no
+  dedicated exception type is defined.
 - **Note**: Postgres embeds offending column values in `DETAIL` — a unique
   violation quotes the submitter's email. Full detail is fine in the
   envelope, the row, and the failure file (all already inside the payload's
