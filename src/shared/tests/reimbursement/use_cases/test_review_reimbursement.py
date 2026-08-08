@@ -61,10 +61,12 @@ class DescribeApproveReimbursement:
         assert hr["reviewed_by"] == "reviewer@example.com"
 
     async def it_raises_reimbursement_not_found_for_an_unknown_uuid(self, db: asyncpg.Connection) -> None:
+        unknown_uuid = uuid4()
+
         with pytest.raises(ReimbursementNotFound):
             await approve_reimbursement(
                 db,
-                uuid4(),
+                unknown_uuid,
                 receipts_value=Decimal("1"),
                 receipts_date=date(2026, 1, 1),
                 receipts_currency="BRL",
@@ -72,7 +74,14 @@ class DescribeApproveReimbursement:
                 approved_by="a@example.com",
             )
 
-        count = await db.fetchval("SELECT count(*) FROM human_review")
+        # Scoped to this uuid, not the whole table: the concurrency test
+        # below (and reimbursement/update/test_route.py's own) commit real
+        # human_review rows to this same session-scoped migrated_db outside
+        # any rolled-back transaction — an exclusive-ownership assumption
+        # over the whole table would be flaky.
+        count = await db.fetchval(
+            "SELECT count(*) FROM human_review WHERE reimbursement_uuid = $1", unknown_uuid
+        )
         assert count == 0
 
     async def it_raises_reimbursement_not_eligible_for_an_ineligible_status(

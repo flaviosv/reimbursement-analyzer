@@ -12,6 +12,7 @@ from shared.producer import managed_producer
 from errors import register_handlers
 from reimbursement.create.route import router as reimbursement_router
 from reimbursement.list.route import router as list_reimbursement_router
+from reimbursement.update.route import router as update_reimbursement_router
 
 load_dotenv()
 
@@ -33,6 +34,7 @@ app = FastAPI(lifespan=lifespan)
 register_handlers(app)
 app.include_router(reimbursement_router)
 app.include_router(list_reimbursement_router)
+app.include_router(update_reimbursement_router)
 
 
 @app.get("/health", response_model=HealthStatus)
