@@ -267,6 +267,13 @@ class DescribeTheLoop:
     async def it_stops_on_a_real_sigterm_only_after_the_message_in_hand_commits(self) -> None:
         stopping = asyncio.Event()
         message = _message(retry=1)  # a get_error below forces the requeue path
+        # The second batch and stop_after=3 are a hang-prevention safety net,
+        # not part of the primary path: the real SIGTERM below should always
+        # stop the loop after the first message settles (consume_kwargs
+        # asserted at 1 below), before a second consume() is ever reached.
+        # They only matter if signal delivery itself fails in some
+        # environment — without them, that failure mode would hang forever
+        # instead of eventually stopping via stop_after.
         consumer = FakeConsumer([[message], [_message()]], stopping=stopping, stop_after=3)
         producer = SignallingProducer(stopping)
         uuid = ReimbursementEnvelope.model_validate_json(message.value()).uuid
@@ -282,6 +289,13 @@ class DescribeTheLoop:
     async def it_leaves_an_interrupted_messages_offset_uncommitted(self) -> None:
         # AGT-22: a termination signal mid-transaction rolls back and the
         # offset is never committed for the message being processed.
+        #
+        # task.cancel() here stands in for an abrupt interruption (a SIGKILL,
+        # an OOM-kill) that no graceful handler can intercept -- distinct
+        # from the real SIGTERM proven in the sibling test above, which
+        # shows graceful signals let the in-flight message finish and commit
+        # normally. This test proves the other half: if execution is halted
+        # before that point, by any means, nothing partial gets committed.
         stopping = asyncio.Event()
         message = _message(retry=1)
         consumer = FakeConsumer([[message]], stopping=stopping, stop_after=2)
