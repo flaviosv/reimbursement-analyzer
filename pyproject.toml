@@ -36,7 +36,18 @@ python_functions = ["it_*"]
 # via a normal package install. Both sit on one sys.path and expose bare
 # module names, so publisher's must stay clear of api's
 # {dependencies, errors, main, migrate} — AD-026.
-pythonpath = ["src/api/tests", "src/api/src", "src/publisher/tests", "src/publisher/src"]
+# src/agent/tests (but not src/agent/src) is on this list for the same
+# `from fakes import ...` reason as publisher's tests dir — agent itself
+# stays a real installable package (deliberately not flattened, to avoid
+# exactly the AD-026 collision risk above), so agent.consumer/agent.validation
+# are importable via the normal package install and need no path entry.
+pythonpath = [
+    "src/api/tests",
+    "src/api/src",
+    "src/publisher/tests",
+    "src/publisher/src",
+    "src/agent/tests",
+]
 addopts = "--import-mode=importlib"
 markers = [
     "integration: requires a container beyond the suite's own Postgres default",
