@@ -90,6 +90,20 @@ class DescribeInsertPending:
         assert rows[0]["status"] == "pending"
         assert rows[0]["decision_reason"] is None
 
+    async def it_stores_the_validated_request_id_not_the_raw_whitespace_padded_one(
+        self, db: asyncpg.Connection
+    ) -> None:
+        # request_id has strip_whitespace=True on the pydantic model; the raw
+        # dict does not carry that normalisation. Storing the raw form would
+        # let " REQ-PAD " and "REQ-PAD" coexist as two rows the dedup index
+        # was supposed to treat as the same request (S5).
+        item = valid_reimbursement_item(" REQ-PAD ")
+
+        uuid = await insert_pending(db, item)
+
+        row = await db.fetchrow("SELECT request_id FROM reimbursement WHERE uuid = $1", uuid)
+        assert row["request_id"] == "REQ-PAD"
+
     async def it_stores_no_second_row_when_only_the_submitter_case_differs(
         self, db: asyncpg.Connection
     ) -> None:

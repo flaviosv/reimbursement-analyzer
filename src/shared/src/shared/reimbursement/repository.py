@@ -9,6 +9,7 @@ from uuid import UUID
 import asyncpg
 
 from shared.config import DatabaseConfig
+from shared.models import ReimbursementRequest
 
 DUPLICATE_CONSTRAINT = "reimbursement_request_submitter_key"
 
@@ -31,10 +32,20 @@ _INSERT_HUMAN_REVIEW = """
 
 
 def _columns(item: dict[str, Any]) -> tuple[Any, ...]:
+    # The three identity columns come from the *validated* model, not the
+    # raw dict: ReimbursementRequest.request_id strips whitespace pydantic's
+    # own validation already lets through, so the raw dict's un-stripped
+    # form would silently split one request_id into two on-disk spellings
+    # — one of which the (request_id, lower(submitted_by)) dedup index would
+    # never catch (S5). Also resolves the previous subscript-vs-.get()
+    # inconsistency: all three are equally required by this model (Q15).
+    # Always valid in practice — the caller has already gated on this same
+    # validation (processing._accepts) before reaching here.
+    validated = ReimbursementRequest.model_validate(item)
     return (
-        item["request_id"],
-        item.get("submitted_by"),
-        item.get("submitted_at"),
+        validated.request_id,
+        validated.submitted_by,
+        validated.submitted_at.isoformat(),
         json.dumps(item),
     )
 
