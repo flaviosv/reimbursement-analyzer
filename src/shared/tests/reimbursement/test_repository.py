@@ -1,11 +1,12 @@
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import asyncpg
 import pytest
 from helpers import valid_reimbursement_item
 from shared.reimbursement.repository import (
+    fetch_reimbursement_page,
     insert_human_review,
     insert_pending,
     is_duplicate,
@@ -18,9 +19,47 @@ _RAW_INSERT = """
     VALUES ($1, $2, '{}'::jsonb)
 """
 
+_SEED_REIMBURSEMENT = """
+    INSERT INTO reimbursement (uuid, request_id, original_payload, status, created_at)
+    VALUES ($1, $2, '{}'::jsonb, $3, $4)
+"""
+
+_SEED_HUMAN_REVIEW = """
+    INSERT INTO human_review (uuid, reimbursement_uuid, status, reviewed_by, reason, created_at)
+    VALUES ($1, $2, $3, $4, $5, $6)
+"""
+
 
 async def _rows_for(db: asyncpg.Connection, request_id: str) -> list[asyncpg.Record]:
     return await db.fetch("SELECT * FROM reimbursement WHERE request_id = $1", request_id)
+
+
+async def _seed_reimbursement(
+    db: asyncpg.Connection, request_id: str, *, status: str = "pending", created_at: datetime | None = None
+) -> UUID:
+    uuid = uuid4()
+    await db.execute(_SEED_REIMBURSEMENT, uuid, request_id, status, created_at or datetime.now(UTC))
+    return uuid
+
+
+async def _seed_human_review(
+    db: asyncpg.Connection,
+    reimbursement_uuid: UUID,
+    *,
+    status: str = "approved",
+    reviewed_by: str = "reviewer@example.com",
+    reason: str = "looks good",
+    created_at: datetime | None = None,
+) -> None:
+    await db.execute(
+        _SEED_HUMAN_REVIEW,
+        uuid4(),
+        reimbursement_uuid,
+        status,
+        reviewed_by,
+        reason,
+        created_at or datetime.now(UTC),
+    )
 
 
 class DescribeInsertPending:
@@ -158,3 +197,101 @@ class DescribeIsDuplicate:
 
     async def it_does_not_classify_an_unrelated_error_as_a_duplicate(self) -> None:
         assert is_duplicate(RuntimeError("connection reset by peer")) is False
+
+
+class DescribeFetchReimbursementPage:
+    async def it_returns_the_requested_page_slice_via_limit_and_offset(self, db: asyncpg.Connection) -> None:
+        base = datetime(2026, 5, 1, tzinfo=UTC)
+        # Scoped by status: other tests in the full suite (e.g. create's real
+        # broker roundtrip) commit real, uncontrolled `pending` rows into this
+        # same shared migrated_db outside this test's rollback — an
+        # exclusive-ownership assumption over the whole table would be flaky.
+        uuids = [
+            await _seed_reimbursement(
+                db, f"REQ-PAGE-{n}", status="auto-approved", created_at=base + timedelta(minutes=n)
+            )
+            for n in range(5)
+        ]
+        # created_at DESC → newest first: [4, 3, 2, 1, 0]; offset=1, limit=2 → [3, 2]
+        expected = [uuids[3], uuids[2]]
+
+        page = await fetch_reimbursement_page(db, statuses=["auto-approved"], limit=2, offset=1)
+
+        assert [row["uuid"] for row in page] == expected
+
+    async def it_filters_to_a_single_status(self, db: asyncpg.Connection) -> None:
+        await _seed_reimbursement(db, "REQ-SINGLE-A", status="human-review")
+        await _seed_reimbursement(db, "REQ-SINGLE-B", status="auto-rejected")
+
+        page = await fetch_reimbursement_page(db, statuses=["human-review"], limit=100, offset=0)
+
+        assert [row["request_id"] for row in page] == ["REQ-SINGLE-A"]
+
+    async def it_filters_to_multiple_statuses_via_any(self, db: asyncpg.Connection) -> None:
+        await _seed_reimbursement(db, "REQ-MULTI-A", status="human-review")
+        await _seed_reimbursement(db, "REQ-MULTI-B", status="auto-rejected")
+        await _seed_reimbursement(db, "REQ-MULTI-C", status="auto-approved")
+
+        page = await fetch_reimbursement_page(
+            db, statuses=["human-review", "auto-rejected"], limit=100, offset=0
+        )
+
+        assert {row["request_id"] for row in page} == {"REQ-MULTI-A", "REQ-MULTI-B"}
+
+    async def it_returns_every_status_including_pending_when_no_filter_is_given(
+        self, db: asyncpg.Connection
+    ) -> None:
+        await _seed_reimbursement(db, "REQ-ALL-PENDING", status="pending")
+        await _seed_reimbursement(db, "REQ-ALL-APPROVED", status="human-approved")
+
+        # No filter means the whole table, so — unlike the status-scoped tests
+        # above — this can't isolate itself from other tests' committed rows
+        # via WHERE; it looks its own two rows up by request_id instead of
+        # asserting the returned set is exactly these two.
+        page = await fetch_reimbursement_page(db, statuses=None, limit=200, offset=0)
+        by_request_id = {row["request_id"]: row for row in page}
+
+        assert by_request_id["REQ-ALL-PENDING"]["status"] == "pending"
+        assert by_request_id["REQ-ALL-APPROVED"]["status"] == "human-approved"
+
+    async def it_returns_an_empty_list_when_nothing_matches(self, db: asyncpg.Connection) -> None:
+        await _seed_reimbursement(db, "REQ-EMPTY", status="pending")
+
+        page = await fetch_reimbursement_page(db, statuses=["auto-rejected"], limit=100, offset=0)
+
+        assert page == []
+
+    async def it_populates_last_human_review_when_present_and_null_when_absent(
+        self, db: asyncpg.Connection
+    ) -> None:
+        with_review = await _seed_reimbursement(db, "REQ-HR-PRESENT", status="human-approved")
+        await _seed_human_review(
+            db, with_review, reason="first look", created_at=datetime(2026, 5, 1, tzinfo=UTC)
+        )
+        await _seed_human_review(
+            db, with_review, reason="second look", created_at=datetime(2026, 5, 2, tzinfo=UTC)
+        )
+        without_review = await _seed_reimbursement(db, "REQ-HR-ABSENT", status="human-review")
+
+        page = await fetch_reimbursement_page(db, statuses=None, limit=100, offset=0)
+        by_uuid = {row["uuid"]: row for row in page}
+
+        # Most recent by created_at, never a history/count.
+        assert by_uuid[with_review]["hr_reason"] == "second look"
+        assert by_uuid[with_review]["hr_status"] == "approved"
+        assert by_uuid[without_review]["hr_status"] is None
+        assert by_uuid[without_review]["hr_reason"] is None
+
+    async def it_orders_results_by_created_at_descending(self, db: asyncpg.Connection) -> None:
+        base = datetime(2026, 5, 1, tzinfo=UTC)
+        oldest = await _seed_reimbursement(db, "REQ-ORDER-OLD", status="auto-approved", created_at=base)
+        middle = await _seed_reimbursement(
+            db, "REQ-ORDER-MID", status="auto-approved", created_at=base + timedelta(hours=12)
+        )
+        newest = await _seed_reimbursement(
+            db, "REQ-ORDER-NEW", status="auto-approved", created_at=base + timedelta(days=1)
+        )
+
+        page = await fetch_reimbursement_page(db, statuses=["auto-approved"], limit=100, offset=0)
+
+        assert [row["uuid"] for row in page] == [newest, middle, oldest]

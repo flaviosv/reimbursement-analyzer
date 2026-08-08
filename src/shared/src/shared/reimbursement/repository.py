@@ -27,6 +27,30 @@ _INSERT_HUMAN_REVIEW = """
     RETURNING uuid
 """
 
+# hr_*-prefixed columns: r.* already carries its own status/created_at, so
+# the LATERAL side needs distinct aliases to avoid a name collision on the
+# returned Record. $1::text[] IS NULL takes the no-filter path; ANY($1)
+# matches any status in the caller's whitelist-gated list, single or multi.
+_FETCH_REIMBURSEMENT_PAGE = """
+    SELECT
+        r.*,
+        hr.status AS hr_status,
+        hr.reviewed_by AS hr_reviewed_by,
+        hr.reason AS hr_reason,
+        hr.created_at AS hr_created_at
+    FROM reimbursement r
+    LEFT JOIN LATERAL (
+        SELECT status, reviewed_by, reason, created_at
+        FROM human_review
+        WHERE reimbursement_uuid = r.uuid
+        ORDER BY created_at DESC
+        LIMIT 1
+    ) hr ON true
+    WHERE ($1::text[] IS NULL OR r.status = ANY($1))
+    ORDER BY r.created_at DESC
+    LIMIT $2 OFFSET $3
+"""
+
 
 def _columns(item: dict[str, Any]) -> tuple[Any, ...]:
     # The three identity columns come from the *validated* model, not the
@@ -57,6 +81,16 @@ async def insert_pending(conn: asyncpg.Connection, item: dict[str, Any]) -> UUID
 
 async def insert_human_review(conn: asyncpg.Connection, item: dict[str, Any], reason: str) -> UUID:
     return await conn.fetchval(_INSERT_HUMAN_REVIEW, *_columns(item), reason)
+
+
+async def fetch_reimbursement_page(
+    conn: asyncpg.Connection, *, statuses: list[str] | None, limit: int, offset: int
+) -> list[asyncpg.Record]:
+    """The one read query this feature needs: a `created_at DESC` page,
+    optionally filtered to `statuses`, each row paired with its most recent
+    `human_review` (if any) via a LATERAL join. Pure SQL, no validation —
+    trusts its caller to have already gated `statuses`/`limit`/`offset`."""
+    return await conn.fetch(_FETCH_REIMBURSEMENT_PAGE, statuses, limit, offset)
 
 
 def is_duplicate(exc: BaseException) -> bool:
