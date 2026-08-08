@@ -1,6 +1,4 @@
-"""Pool lifecycle and every SQL statement against the `reimbursement` table.
-
-Nothing else in the workspace touches asyncpg."""
+"""Pool lifecycle and every SQL statement against the `reimbursement` table."""
 
 import json
 from collections.abc import AsyncIterator

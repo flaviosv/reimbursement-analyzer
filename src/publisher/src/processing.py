@@ -17,18 +17,15 @@ import asyncpg
 from confluent_kafka.aio import AIOProducer
 from pydantic import ValidationError
 from shared import failure_log
-from shared.config import MAX_RETRY, REIMBURSEMENT_TOPIC, REQUEST_TOPIC, Config
+from shared.config import MAX_RETRY, REQUEST_TOPIC, Config
 from shared.errors import PublishFailed, sanitize
-from shared.models import (
-    AttemptError,
-    ReimbursementEnvelope,
-    ReimbursementRequest,
-    RequestEnvelope,
-    Stage,
-)
+from shared.models import AttemptError, ReimbursementRequest, RequestEnvelope, Stage
 from shared.producer import publish
 from shared.reimbursement import repository
+from shared.reimbursement.use_cases.publish_pending import publish_pending
 from shared.reimbursement.use_cases.send_human_review import send_human_review
+
+from config import PublisherConfig
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +35,8 @@ ESCALATION_FAILED_EVENT = "reimbursement.escalation_failed"
 INVALID_ITEM_EVENT = "reimbursement.invalid_item"
 ITEM_FAILED_EVENT = "reimbursement.item_failed"
 MALFORMED_MESSAGE_EVENT = "reimbursement.malformed_message"
+NULL_VALUE_EVENT = "reimbursement.null_value"
+MESSAGE_HANDLED_EVENT = "reimbursement.message_handled"
 
 
 class ItemOutcome(Enum):
@@ -57,25 +56,36 @@ class ItemOutcome(Enum):
 @dataclass(frozen=True)
 class Dependencies:
     config: Config
+    publisher: PublisherConfig
     pool: asyncpg.Pool
     producer: AIOProducer
 
 
-async def handle_message(deps: Dependencies, raw: bytes) -> list[ItemOutcome]:
+async def handle_message(deps: Dependencies, raw: bytes | None) -> list[ItemOutcome]:
     """Turn one consumed `Request` message into one outcome per item. Never
-    raises, so one bad message can never stop the loop behind it (PUB-32)."""
+    raises, so one bad message can never stop the loop behind it (PUB-32).
+
+    `raw` is `None` for a tombstone/null-value record — a valid Kafka
+    message with no crash-worthy content, so it is logged and dropped the
+    same way a malformed one is, not treated as an exceptional condition."""
+    if raw is None:
+        logger.error("consumed a null-valued Request record — logged and skipped")
+        failure_log.write(
+            deps.config.failure_log,
+            {
+                "event": NULL_VALUE_EVENT,
+                "outcome": ItemOutcome.LOGGED.value,
+            },
+        )
+        return [ItemOutcome.LOGGED]
+
     try:
         envelope = RequestEnvelope.model_validate_json(raw)
     except ValidationError as exc:
         logger.error("message could not be parsed as a RequestEnvelope: %s", sanitize(exc))
         failure_log.write(
             deps.config.failure_log,
-            {
-                "event": MALFORMED_MESSAGE_EVENT,
-                "outcome": ItemOutcome.LOGGED.value,
-                "message": raw.decode("utf-8", "replace"),
-                "error": str(exc),
-            },
+            _malformed_message_record(raw, exc),
         )
         return [ItemOutcome.LOGGED]
 
@@ -91,12 +101,42 @@ async def handle_message(deps: Dependencies, raw: bytes) -> list[ItemOutcome]:
     return await _fan_out(deps, envelope, handler)
 
 
+def _malformed_message_record(raw: bytes, exc: ValidationError) -> dict[str, Any]:
+    """One failure-log entry per recoverable item, not one blob.
+
+    `failure_log.write` truncates every string to `max_message_chars`
+    independently — so a flat `{"message": <entire raw envelope>}` record
+    loses everything past the first cut for a ceiling-sized batch (R1). When
+    the bytes are still valid JSON with a `payload` list, log each item as
+    its own field instead: truncation then trims each item, not the batch.
+    Falls back to the raw bytes when even that much structure is gone."""
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        parsed = None
+
+    items = parsed.get("payload") if isinstance(parsed, dict) else None
+    if isinstance(items, list) and items:
+        return {
+            "event": MALFORMED_MESSAGE_EVENT,
+            "outcome": ItemOutcome.LOGGED.value,
+            "error": str(exc),
+            "items": items,
+        }
+    return {
+        "event": MALFORMED_MESSAGE_EVENT,
+        "outcome": ItemOutcome.LOGGED.value,
+        "error": str(exc),
+        "message": raw.decode("utf-8", "replace"),
+    }
+
+
 async def _fan_out(
     deps: Dependencies,
     envelope: RequestEnvelope,
     handler: Callable[[Dependencies, RequestEnvelope, int, dict[str, Any]], Awaitable[ItemOutcome]],
 ) -> list[ItemOutcome]:
-    semaphore = asyncio.Semaphore(deps.config.publisher.item_concurrency)
+    semaphore = asyncio.Semaphore(deps.publisher.item_concurrency)
 
     async def guarded(index: int, item: dict[str, Any]) -> ItemOutcome:
         async with semaphore:
@@ -140,7 +180,9 @@ async def escalate_item(
     try:
         async with deps.pool.acquire() as conn:
             async with conn.transaction():
-                await send_human_review(conn, item, envelope.errors)
+                await send_human_review(
+                    conn, item, envelope.errors, deps.config.failure_log.max_message_chars
+                )
     except Exception as exc:
         if repository.is_duplicate(exc):
             _log_duplicate(envelope, item, exc)
@@ -205,12 +247,11 @@ async def _insert_and_publish(
         # The publish sits *inside* the transaction, so a delivery failure
         # rolls the insert back without an explicit rollback call (PUB-09).
         async with conn.transaction():
-            uuid = await repository.insert_pending(conn, item)
-            message = ReimbursementEnvelope(uuid=uuid, retry=0, published_at=datetime.now(UTC))
-            await publish(
+            await publish_pending(
+                conn,
                 deps.producer,
-                REIMBURSEMENT_TOPIC,
-                message.model_dump_json().encode(),
+                item,
+                envelope.errors,
                 deps.config.kafka.publish_timeout_seconds,
             )
 

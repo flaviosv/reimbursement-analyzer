@@ -103,12 +103,16 @@ class DescribeDatabaseConfig:
 
         assert (config.database.pool_min_size, config.database.pool_max_size) != (10, 10)
 
-    def it_sizes_the_pool_at_or_above_the_item_concurrency(self) -> None:
-        # Each in-flight item holds a transaction open across a Kafka
-        # round-trip, so concurrency N pins N connections (R-005).
+    def it_sizes_the_pool_from_the_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Configurable, not just a literal, so a deployment that raises
+        # PUBLISHER_ITEM_CONCURRENCY without raising this in step is a
+        # startup failure (publisher's check_startup_config) rather than
+        # silent connection starvation under load (R-005 / A7).
+        monkeypatch.setenv("DATABASE_POOL_MAX_SIZE", "42")
+
         config = load_config()
 
-        assert config.database.pool_max_size >= config.publisher.item_concurrency
+        assert config.database.pool_max_size == 42
 
 
 class DescribeFailureLogConfig:
@@ -117,92 +121,6 @@ class DescribeFailureLogConfig:
 
         assert config.failure_log.logger_name == "reimbursementanalyzer.failures"
         assert config.failure_log.max_message_chars > 0
-
-
-class DescribePublisherConfig:
-    def it_bounds_items_in_flight_at_ten(self) -> None:
-        config = load_config()
-
-        assert config.publisher.item_concurrency == 10
-
-    def it_reads_the_consumer_group_from_the_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("PUBLISHER_CONSUMER_GROUP_ID", "publisher-canary")
-
-        config = load_config()
-
-        assert config.publisher.consumer_group_id == "publisher-canary"
-
-
-class DescribePublisherConfigToConsumerConfig:
-    def it_never_lets_librdkafka_commit_offsets_on_a_timer(self) -> None:
-        config = load_config()
-
-        consumer_config = config.publisher.to_consumer_config(config.kafka)
-
-        assert consumer_config["enable.auto.commit"] is False
-
-    def it_states_the_poll_interval_budget_rather_than_inheriting_it(self) -> None:
-        # AD-013's `500 ÷ 10 × ~15ms` headroom is sized against this interval.
-        # Left at librdkafka's default it is a budget no file in the repo names.
-        config = load_config()
-
-        consumer_config = config.publisher.to_consumer_config(config.kafka)
-
-        assert config.publisher.max_poll_interval_ms == 300_000
-        assert consumer_config["max.poll.interval.ms"] == 300_000
-
-    def it_sizes_both_fetch_limits_from_the_shared_message_ceiling(self) -> None:
-        config = load_config()
-
-        consumer_config = config.publisher.to_consumer_config(config.kafka)
-
-        assert consumer_config["fetch.max.bytes"] == KAFKA_MAX_MESSAGE_BYTES
-        assert consumer_config["max.partition.fetch.bytes"] == KAFKA_MAX_MESSAGE_BYTES
-
-    def it_subscribes_from_the_earliest_offset_under_the_configured_group(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv("PUBLISHER_CONSUMER_GROUP_ID", "publisher-canary")
-        monkeypatch.setenv("KAFKA_BOOTSTRAP_SERVERS", "broker:9092")
-        config = load_config()
-
-        consumer_config = config.publisher.to_consumer_config(config.kafka)
-
-        assert consumer_config["group.id"] == "publisher-canary"
-        assert consumer_config["auto.offset.reset"] == "earliest"
-        assert consumer_config["bootstrap.servers"] == "broker:9092"
-
-    def it_reuses_the_kafka_security_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("KAFKA_SECURITY_PROTOCOL", "SASL_SSL")
-        monkeypatch.setenv("KAFKA_SASL_MECHANISM", "PLAIN")
-        monkeypatch.setenv("KAFKA_SASL_USERNAME", "user")
-        monkeypatch.setenv("KAFKA_SASL_PASSWORD", "pass")
-        monkeypatch.setenv("KAFKA_SSL_CA_LOCATION", "/etc/ca.pem")
-        config = load_config()
-
-        consumer_config = config.publisher.to_consumer_config(config.kafka)
-
-        assert consumer_config["security.protocol"] == "SASL_SSL"
-        assert consumer_config["sasl.mechanism"] == "PLAIN"
-        assert consumer_config["sasl.username"] == "user"
-        assert consumer_config["sasl.password"] == "pass"
-        assert consumer_config["ssl.ca.location"] == "/etc/ca.pem"
-
-    def it_omits_the_security_settings_when_no_protocol_is_configured(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.delenv("KAFKA_SECURITY_PROTOCOL", raising=False)
-        config = load_config()
-
-        consumer_config = config.publisher.to_consumer_config(config.kafka)
-
-        assert not consumer_config.keys() & {
-            "security.protocol",
-            "sasl.mechanism",
-            "sasl.username",
-            "sasl.password",
-            "ssl.ca.location",
-        }
 
 
 class DescribeKafkaConfigToProducerConfig:

@@ -82,6 +82,35 @@ class DescribeWrite:
 
         assert failure_log.write(CONFIG, _record()) is None
 
+    def it_still_leaves_a_trace_when_the_underlying_logger_throws(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # "Never raises" doesn't require "never reports" (A9/Q13) — this is
+        # the bottom of every fallback chain, so silently discarding the
+        # one record meant to survive everything else failing is its own
+        # kind of loss. Logged to a *different* name than CONFIG.logger_name
+        # deliberately: if that name's own handler is what just broke,
+        # logging to it again here would recurse into the same failure.
+        def _explode(*args: object, **kwargs: object) -> None:
+            raise RuntimeError("logging subsystem is down")
+
+        monkeypatch.setattr(logging.getLogger(CONFIG.logger_name), "critical", _explode)
+
+        with caplog.at_level(logging.ERROR, logger="reimbursementanalyzer.failures.fallback"):
+            failure_log.write(CONFIG, _record())
+
+        fallback_records = [r for r in caplog.records if r.name == "reimbursementanalyzer.failures.fallback"]
+        assert len(fallback_records) == 1
+        assert fallback_records[0].levelno == logging.ERROR
+
+    def it_does_not_recurse_past_the_configured_depth(self) -> None:
+        nested: dict[str, Any] = {"value": "leaf"}
+        for _ in range(50):
+            nested = {"nested": nested}
+
+        # Must not raise RecursionError — the whole point of a depth bound.
+        failure_log.write(CONFIG, {"event": "deep", "payload": nested})
+
     def it_opens_no_file_of_its_own(
         self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
     ) -> None:
