@@ -29,6 +29,23 @@ from config import PublisherConfig
 
 logger = logging.getLogger(__name__)
 
+
+class _LazyJSON:
+    """Defers json.dumps until the logging module actually formats this
+    record — never on a call whose level isn't enabled. `logger.info(json
+    .dumps(...))` paid the serialization cost unconditionally even when
+    INFO was disabled, on a path that fires once per item and can repeat
+    many times over on redelivery (P7)."""
+
+    __slots__ = ("_value",)
+
+    def __init__(self, value: Any) -> None:
+        self._value = value
+
+    def __str__(self) -> str:
+        return json.dumps(self._value)
+
+
 DUPLICATE_DROPPED_EVENT = "reimbursement.duplicate_dropped"
 EMPTY_PAYLOAD_EVENT = "reimbursement.empty_payload"
 ESCALATION_FAILED_EVENT = "reimbursement.escalation_failed"
@@ -92,7 +109,7 @@ async def handle_message(deps: Dependencies, raw: bytes | None) -> list[ItemOutc
     if not envelope.payload:
         # A bug or a hand-crafted message — the POST endpoint already rejects
         # [] at ingress — so it fails safe rather than crashing the loop.
-        logger.info(json.dumps({"event": EMPTY_PAYLOAD_EVENT, "retry": envelope.retry}))
+        logger.info("%s", _LazyJSON({"event": EMPTY_PAYLOAD_EVENT, "retry": envelope.retry}))
         return []
 
     # Once, before fan-out: retry is envelope-level, and past the ceiling
@@ -207,7 +224,7 @@ async def escalate_item(
         )
         failure_log.write(
             deps.config.failure_log,
-            failure_record(
+            _failure_record(
                 ESCALATION_FAILED_EVENT,
                 index,
                 item,
@@ -239,7 +256,7 @@ def _accepts(
         )
         failure_log.write(
             deps.config.failure_log,
-            failure_record(
+            _failure_record(
                 INVALID_ITEM_EVENT,
                 index,
                 item,
@@ -300,7 +317,7 @@ async def _requeue(
     except PublishFailed as requeue_exc:
         failure_log.write(
             deps.config.failure_log,
-            failure_record(
+            _failure_record(
                 ITEM_FAILED_EVENT,
                 index,
                 item,
@@ -319,18 +336,19 @@ def _log_duplicate(envelope: RequestEnvelope, item: dict[str, Any], exc: BaseExc
     thousands of requests must not look identical to one discarding none
     (R-004's interim mitigation)."""
     logger.info(
-        json.dumps(
+        "%s",
+        _LazyJSON(
             {
                 "event": DUPLICATE_DROPPED_EVENT,
                 "request_id": _request_id(item),
                 "constraint": getattr(exc, "constraint_name", None),
                 "retry": envelope.retry,
             }
-        )
+        ),
     )
 
 
-def failure_record(
+def _failure_record(
     event: str,
     index: int,
     item: Any,

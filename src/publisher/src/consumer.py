@@ -5,7 +5,6 @@ lives in processing.py, which needs no Kafka consumer to test.
 """
 
 import asyncio
-import json
 import logging
 import signal
 from collections.abc import AsyncIterator
@@ -18,7 +17,7 @@ from shared.producer import managed_producer
 from shared.reimbursement.repository import managed_pool
 
 from config import PublisherConfig, load_publisher_config
-from processing import MESSAGE_HANDLED_EVENT, Dependencies, handle_message
+from processing import MESSAGE_HANDLED_EVENT, Dependencies, _LazyJSON, handle_message
 
 logger = logging.getLogger(__name__)
 
@@ -63,9 +62,16 @@ async def run(deps: Dependencies, consumer: AIOConsumer, stopping: asyncio.Event
     settle, then commit. A shutdown signal ends the loop only between
     messages, so the message in hand always finishes and commits."""
     while not stopping.is_set():
-        # consume() over poll(): AIOConsumer's own docs recommend it, and
         # num_messages=1 preserves the one-message-at-a-time semantics the
-        # offset model depends on.
+        # offset model depends on. Note this gains none of consume()'s usual
+        # advantage over poll() (P12): AIOConsumer's own docstring says that
+        # benefit comes specifically from amortizing ThreadPoolExecutor
+        # overhead "across the entire batch" — with num_messages=1 there is
+        # no batch, so this call pays the identical per-call overhead poll()
+        # would. consume() is kept anyway rather than swapped for poll() to
+        # avoid a FakeConsumer/test rewrite for a change with no behavioral
+        # difference; a real throughput reason to raise num_messages would
+        # be the natural trigger to revisit this.
         messages = await consumer.consume(
             num_messages=1, timeout=deps.publisher.consume_timeout_seconds
         )
@@ -89,7 +95,7 @@ async def run(deps: Dependencies, consumer: AIOConsumer, stopping: asyncio.Event
             outcomes = []
         else:
             logger.info(
-                json.dumps({"event": MESSAGE_HANDLED_EVENT, "outcomes": [o.value for o in outcomes]})
+                "%s", _LazyJSON({"event": MESSAGE_HANDLED_EVENT, "outcomes": [o.value for o in outcomes]})
             )
         # Only now. A crash before this point redelivers the whole message,
         # and whatever already committed is absorbed by the duplicate path —
