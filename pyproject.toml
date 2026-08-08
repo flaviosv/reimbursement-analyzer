@@ -36,7 +36,7 @@ python_functions = ["it_*"]
 # via a normal package install. Both sit on one sys.path and expose bare
 # module names, so publisher's must stay clear of api's
 # {dependencies, errors, main, migrate} — AD-026.
-pythonpath = ["src/api/tests", "src/api/src", "src/publisher/src"]
+pythonpath = ["src/api/tests", "src/api/src", "src/publisher/tests", "src/publisher/src"]
 addopts = "--import-mode=importlib"
 markers = [
     "integration: requires a container beyond the suite's own Postgres default",
