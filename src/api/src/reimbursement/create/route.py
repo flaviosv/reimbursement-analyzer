@@ -1,9 +1,9 @@
 from confluent_kafka.aio import AIOProducer
 from fastapi import APIRouter, Depends, Request
-from shared.config import MAX_BODY_BYTES, KafkaConfig
+from shared.config import MAX_BODY_BYTES, load_config
 
+from dependencies import get_producer
 from errors import MessageResponse
-from producer import get_kafka_config, get_producer
 from reimbursement.create.payload import read_capped
 from reimbursement.create.producer import publish
 from reimbursement.create.validation import BATCH_ADAPTER, validate_batch
@@ -31,9 +31,7 @@ router = APIRouter()
     },
 )
 async def create_reimbursement(
-    request: Request,
-    producer: AIOProducer = Depends(get_producer),
-    kafka_config: KafkaConfig = Depends(get_kafka_config),
+    request: Request, producer: AIOProducer = Depends(get_producer)
 ) -> MessageResponse:
     """Orchestrates cap -> validate -> publish -> respond, extracting the
     request IDs the response and error logging both need along the way —
@@ -48,5 +46,5 @@ async def create_reimbursement(
     # the envelope publish() builds from it) for the duration of the publish
     # call, which is where peak memory actually matters.
     del batch
-    await publish(producer, raw, request_ids, kafka_config)
+    await publish(producer, raw, request_ids, load_config().kafka)
     return MessageResponse(msg=f"{accepted_count} request(s) accepted")

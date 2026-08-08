@@ -1,8 +1,8 @@
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
+from dependencies import get_producer
 from main import lifespan
-from producer import get_producer
 
 # SPEC_DEVIATION: this file constructs a real, unmocked AIOProducer (via
 # lifespan) targeting the default localhost:9092 bootstrap server, with no

@@ -635,6 +635,44 @@ feature adds its own config needs — nest a new dataclass field onto
 `Settings` models) diverges from this further than AD-022 already noted;
 revisit before that design is approved.
 
+### AD-024 — `get_kafka_config` DI wrapper removed; `api/producer.py` renamed `api/dependencies.py`
+
+**Date:** 2026-08-08
+**Status:** Active (follow-on correction to AD-023)
+
+AD-023's `get_kafka_config()` had shrunk to a one-line pass-through
+(`return load_config().kafka`) with no runtime resource behind it — unlike
+`get_producer()` (which reads a live `AIOProducer` off `app.state`,
+constructed once by `main.py`'s `lifespan()` and genuinely needing
+FastAPI's request-scoped DI so tests can override it with a fake), Kafka
+config is just a cached, deterministic value reachable from anywhere via
+`load_config()`. Routing it through `Depends()` bought nothing — it can't
+be usefully overridden for a test in a way that plain `load_config()`
+already isn't (tests never needed a non-default `KafkaConfig` for
+route-level behavior; the one test that does — the publish-timeout test in
+`reimbursement/create/test_producer.py` — calls `publish()` directly, below
+the route layer, where `dataclasses.replace()` already handles it).
+`reimbursement/create/route.py` now calls `load_config().kafka` directly
+inside `create_reimbursement()`; `get_kafka_config` is deleted.
+
+With that gone, the file it lived in (`api/producer.py`) held only
+`get_producer` — which genuinely needs a shared, feature-independent module
+(not `main.py`, because `route.py`'s `Depends(get_producer)` would then
+import from `main.py`, which itself imports `route.py` for the router — a
+real import cycle; not `reimbursement/create/route.py` either, because
+`test_main.py` exercises `get_producer`/`lifespan` standalone, independent
+of any specific feature slice). Since its only remaining content **is** a
+route dependency, the file is renamed `api/dependencies.py` — a name that
+describes what's actually in it, rather than what technology it used to
+also configure.
+
+**Why:** direct question from the user ("why do you need the file
+src/producer.py?"), which surfaced that the file's sole remaining
+justification (`get_producer`) doesn't match its old name once
+`get_kafka_config` — the thing that made "producer" sound right — was
+gone. Renaming and dropping the dead wrapper together avoids leaving a
+misleadingly-named file with only accidental content in it.
+
 ---
 
 ## Handoff
@@ -660,8 +698,9 @@ false`), AD-019 (config/errors classes/kafka producer factory moved to
 (`PublishFailed` broad-except pattern), AD-022 (`KafkaConfig` dataclass,
 `api/kafka.py` → `api/producer.py`, `payload.py` → `reimbursement/create/`
 — amended by AD-023), AD-023 (single cached `load_config()` loader,
-`shared.kafka` → `shared.producer`). Read these before assuming any file
-path or import from the original `api-post-reimbursement` spec/design
+`shared.kafka` → `shared.producer`), AD-024 (`get_kafka_config` dropped,
+`api/producer.py` → `api/dependencies.py`). Read these before assuming any
+file path or import from the original `api-post-reimbursement` spec/design
 docs is still accurate — several are now stale (see below).
 
 **In flight:** `publisher-consume-request` — spec (42 requirements), context,
@@ -672,7 +711,7 @@ AD-013 / AD-014 / AD-015 were ratified in the prior session, and
 deferred. `design.md` proposes **AD-016** (single centralised config in
 `shared`, frozen `Settings` models + `from_env()`) and **AD-017** (`asyncpg`
 pool + implicit-transaction pattern) — **still reserved, not appended**,
-pending approval. AD-018 through AD-023 above deliberately did not claim
+pending approval. AD-018 through AD-024 above deliberately did not claim
 these numbers.
 
 **`design.md` is now partially stale — read before approving or starting
