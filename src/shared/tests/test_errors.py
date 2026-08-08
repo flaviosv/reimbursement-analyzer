@@ -1,4 +1,11 @@
+from pydantic import BaseModel, ValidationError
+
 from shared.errors import sanitize
+
+
+class _Model(BaseModel):
+    request_id: str
+    submitted_by: str
 
 
 class _DriverError(Exception):
@@ -44,3 +51,26 @@ class DescribeSanitize:
         rendered = sanitize(_Bare())
 
         assert rendered == "_Bare"
+
+    def it_names_the_failed_fields_of_a_validation_error(self) -> None:
+        # type(exc).__name__ alone was zero diagnostic content past "some
+        # field failed" (A10) — field locations are schema paths, not user
+        # data, so they're safe to include.
+        try:
+            _Model.model_validate({"request_id": 1, "submitted_by": 2})
+        except ValidationError as exc:
+            rendered = sanitize(exc)
+
+        assert "request_id" in rendered
+        assert "submitted_by" in rendered
+
+    def it_never_leaks_the_offending_value_of_a_validation_error(self) -> None:
+        try:
+            _Model.model_validate({"request_id": "REQ-1", "submitted_by": ["ana@company.com"]})
+        except ValidationError as exc:
+            rendered = sanitize(exc)
+        else:
+            raise AssertionError("expected a ValidationError")
+
+        assert "ana@company.com" not in rendered
+        assert "submitted_by" in rendered

@@ -1,3 +1,6 @@
+from pydantic import ValidationError
+
+
 class PayloadTooLarge(Exception):
     """The request body exceeded MAX_BODY_BYTES while streaming."""
 
@@ -13,14 +16,26 @@ class PublishFailed(Exception):
 
 
 def sanitize(exc: BaseException) -> str:
-    """Render an exception for stdout: its type, plus the violated
-    constraint when there is one.
+    """Render an exception for stdout: its type, plus whatever diagnostic
+    shape is safe to include for that exception kind — never a raw value.
 
-    Nothing else, deliberately. Postgres quotes the offending column values
-    in its DETAIL line — a unique violation on this schema embeds the
-    submitter's email — and stdout sits outside the payload's trust
-    boundary, unlike the envelope, the row, and the failure log (PUB-15).
+    Scope note (Q6/S10): this covers stdout only. `str(exc)` still reaches
+    `AttemptError.message` unsanitized in `_requeue` — deliberately, per
+    PUB-15/the envelope's own trust-boundary framing, with the newline-
+    injection angle covered separately (see `render_history`'s
+    `_one_line`). The reason stdout gets this treatment and the wire/DB
+    path does not isn't that stdout is uniquely risky — it's that
+    `str(exc)` is simply never called here, which is what keeps a
+    Postgres DETAIL line's quoted column values (e.g. a unique violation
+    embedding the submitter's email) from reaching it at all.
     """
+    if isinstance(exc, ValidationError):
+        # type(exc).__name__ alone ("ValidationError") was zero diagnostic
+        # content past whether coercion failed at all (A10) — field
+        # locations are safe (they're schema paths, not user data) and
+        # tell a reader what actually failed.
+        locations = ", ".join(".".join(str(part) for part in error["loc"]) for error in exc.errors())
+        return f"{type(exc).__name__}: {locations}" if locations else type(exc).__name__
     constraint_name = getattr(exc, "constraint_name", None)
     if constraint_name:
         return f"{type(exc).__name__}: {constraint_name}"
