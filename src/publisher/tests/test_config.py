@@ -13,8 +13,8 @@ class DescribePublisherConfig:
         # Configurable, not just a literal — see the matching
         # DescribeDatabaseConfig test in shared: making both sides of the
         # comparison configurable is what makes consumer.check_startup_config
-        # able to actually fail (A7/Q4/H8/P11 — it previously could not, since
-        # both were hardcoded to values that always satisfied the guard).
+        # able to actually fail (previously it couldn't, since both were
+        # hardcoded to values that always satisfied the guard).
         monkeypatch.setenv("PUBLISHER_ITEM_CONCURRENCY", "25")
 
         config = load_publisher_config()

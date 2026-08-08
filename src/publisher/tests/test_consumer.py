@@ -191,8 +191,8 @@ class DescribeTheStartupCheck:
     ) -> None:
         # The guard this class exercises was previously unfailable in any
         # deployment: pool_max_size and item_concurrency were both hardcoded
-        # literals, so the RuntimeError branch was dead code (A7/Q4/H8/P11).
-        # Both are env-driven now — this proves the guard can actually fire.
+        # literals, so the RuntimeError branch was dead code. Both are
+        # env-driven now — this proves the guard can actually fire.
         monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/x")
         monkeypatch.setenv("DATABASE_POOL_MAX_SIZE", "5")
         monkeypatch.setenv("PUBLISHER_ITEM_CONCURRENCY", "10")
@@ -372,8 +372,7 @@ class DescribeTheLoop:
 
     async def it_keeps_consuming_after_a_null_valued_record(self) -> None:
         # A tombstone/null-value record used to crash the loop permanently:
-        # handle_message called raw.decode() on None (H2/S1, reproduced by
-        # execution in code review and tests-code-review alike).
+        # handle_message called raw.decode() on None.
         stopping = asyncio.Event()
         good = _message(["REQ-AFTER-NULL"])
         consumer = FakeConsumer(
@@ -391,7 +390,7 @@ class DescribeTheLoop:
     ) -> None:
         # Defence in depth: handle_message is documented never to raise
         # (PUB-32), but nothing enforced that before — a violation would have
-        # taken the whole consume loop down with it (S2).
+        # taken the whole consume loop down with it.
         stopping = asyncio.Event()
         consumer = FakeConsumer([[_message(["REQ-1"])], [_message(["REQ-2"])]], stopping=stopping, stop_after=3)
 

@@ -10,11 +10,14 @@ from shared.reimbursement.repository import (
     approve,
     fetch_reimbursement_page,
     find_reimbursement_state,
+    get_by_uuid,
     insert_human_review,
     insert_pending,
     is_duplicate,
+    managed_pool,
     record_human_review_decision,
     reject,
+    update_human_review,
 )
 
 pytestmark = pytest.mark.anyio
@@ -143,7 +146,7 @@ class DescribeInsertPending:
         # request_id has strip_whitespace=True on the pydantic model; the raw
         # dict does not carry that normalisation. Storing the raw form would
         # let " REQ-PAD " and "REQ-PAD" coexist as two rows the dedup index
-        # was supposed to treat as the same request (S5).
+        # was supposed to treat as the same request.
         item = valid_reimbursement_item(" REQ-PAD ")
 
         uuid = await insert_pending(db, item)
@@ -463,3 +466,46 @@ class DescribeRecordHumanReviewDecision:
         assert rows[0]["status"] == "approved"
         assert rows[0]["reviewed_by"] == "reviewer@example.com"
         assert rows[0]["reason"] == "all good"
+
+
+class DescribeGetByUuid:
+    async def it_returns_the_full_row_for_a_real_uuid(self, db: asyncpg.Connection) -> None:
+        item = valid_reimbursement_item("REQ-GET", amount=42.0)
+        uuid = await insert_pending(db, item)
+
+        row = await get_by_uuid(db, uuid)
+
+        assert row is not None
+        assert row["uuid"] == uuid
+        assert row["request_id"] == "REQ-GET"
+        assert row["status"] == "pending"
+        assert row["updated_at"] is not None
+        assert json.loads(row["original_payload"]) == item
+
+    async def it_returns_none_for_a_uuid_matching_no_row(self, db: asyncpg.Connection) -> None:
+        # The ghost case (R-001): a uuid with no row must resolve to None, not
+        # an exception — the Agent's own tolerance for this depends on it.
+        row = await get_by_uuid(db, uuid4())
+
+        assert row is None
+
+
+class DescribeUpdateHumanReview:
+    async def it_returns_true_and_updates_the_existing_row(self, db: asyncpg.Connection) -> None:
+        uuid = await insert_pending(db, valid_reimbursement_item("REQ-ESCALATE"))
+
+        result = await update_human_review(db, uuid, "attempt 4 [resolve] RuntimeError: db down")
+
+        assert result is True
+        row = await db.fetchrow("SELECT * FROM reimbursement WHERE uuid = $1", uuid)
+        assert row["status"] == "human-review"
+        assert row["decision_reason"] == "attempt 4 [resolve] RuntimeError: db down"
+        assert row["updated_at"] is not None
+
+    async def it_returns_false_for_a_uuid_matching_no_row(self, db: asyncpg.Connection) -> None:
+        # The compound ghost + retry>3 case (AGT-18): nothing to update, and
+        # the caller must be able to tell "0 rows" from "1 row" to route to
+        # the failure log instead of treating this as success.
+        result = await update_human_review(db, uuid4(), "unreachable reason")
+
+        assert result is False

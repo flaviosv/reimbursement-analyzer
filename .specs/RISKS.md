@@ -434,3 +434,176 @@ The Agent feature is not yet specified and will need schema of its own (at
 minimum, the columns behind the decision and staleness rules). Deciding
 placement **before** that feature is specified avoids a second layer's
 migrations landing inside the api package and hardening the coupling.
+
+---
+
+## R-007 — `retry > 3` escalates to `human-review` regardless of cause, mixing infra failures with genuine data problems
+
+**Raised:** 2026-08-08
+**Status:** Open, needs evaluation — owner: Flavio
+**Affects:** `publisher-consume-request`, `agent-consume-reimbursement`
+**Severity:** Medium — no runtime failure; a review-queue data-quality problem that grows with volume and with the length of any infra incident
+
+### What breaks
+
+Both the publisher's and the Agent's `retry > 3` fallback escalate
+unconditionally to `human-review` once the ceiling is hit, regardless of
+*why* every attempt failed. Each `AttemptError` entry already records an
+`error type` and the failing `stage`, so the distinction between causes is
+present in the data — but nothing acts on it before the row lands in
+review. A request that failed four times purely because the DB or the
+broker was flapping (`ConnectionError`/`TimeoutError` at a
+`db-insert`/`publish`/resolve stage) lands in the exact same queue, with
+the exact same `status`, as a request that failed because its data was
+genuinely unprocessable. A human reviewer sees "this row needs a
+decision," not "this row failed for infrastructure reasons and would very
+likely have succeeded on a fifth attempt."
+
+### Why it matters more as the system grows
+
+The failure mode is correlated, not independent: a single infra incident
+(a few minutes of DB connection exhaustion, a broker outage) can push many
+concurrently-retrying items over the `retry > 3` ceiling at once, flooding
+`human-review` with rows that have nothing wrong with their underlying
+data. That noise can bury the genuinely-bad rows a reviewer actually needs
+to judge, and burns review capacity on items that infra recovery alone
+would have resolved for free had the retry ceiling been higher or the
+classification been cause-aware.
+
+### Options
+
+1. **Classify at escalation time.** Split `AttemptError`'s causes into
+   infra/transient (connection, timeout, broker unavailable) vs.
+   permanent/data (validation, constraint violation) and only escalate the
+   latter to `human-review`; an all-infra failure chain gets a different
+   treatment instead (extended backoff, a distinct "infra-stalled" status)
+   rather than consuming a review slot. Cost: a classification layer plus
+   a new intermediate state or retry policy on both the publisher and the
+   Agent.
+2. **Keep escalating everything, but tag the cause.** `decision_reason`
+   already renders the full error history in prose; add a coarse
+   machine-readable category alongside it (or a `human_review` column) so
+   a reviewer or a dashboard filter can deprioritize infra-caused rows
+   without reading prose first. Cheaper than option 1, doesn't stop the
+   pollution, only makes it filterable.
+3. **Accept and keep as-is.** Defensible at current, unmeasured volume
+   (mirrors **R-005**'s starting-values caveat) — no load or incident data
+   yet shows this is a real problem in practice, only that it's a real gap
+   in the design.
+
+### Not resolved by either feature
+
+Both `publisher-consume-request` and `agent-consume-reimbursement` keep
+the current undifferentiated `retry > 3` → `human-review` escalation
+as-is, per explicit user decision (2026-08-08) — recorded here for future
+evaluation, not acted on now.
+
+---
+
+## R-008 — The API applies no cross-item uniqueness check within one batch
+
+**Raised:** 2026-08-08
+**Status:** Open, needs evaluation — owner: Flavio
+**Affects:** `api-post-reimbursement`, `publisher-consume-request`
+**Severity:** Low — a performance-only consequence today, not a correctness one
+
+### What breaks
+
+`POST /api/v1/reimbursement` validates each item independently but never
+checks whether two items in the *same* batch share
+`(request_id, lower(submitted_by))`. The publisher's insert transaction
+stays open across the awaited Kafka publish (R-001's design) — so when a
+batch legitimately contains such a pair, the first item holds the
+unfulfilled unique-index tuple for the entire publish round-trip, and the
+second serializes on Postgres rather than on the publisher's own
+concurrency semaphore. That portion of the fan-out collapses to serial,
+burning a pool connection and a concurrency slot to do nothing (worse
+alongside any future fix to R-003/timeout handling, where the wait could
+be materially longer). Found in code review (**P4**) against the
+publisher's own logs, but the fix — if there is to be one — belongs at
+the API edge, which is why it's recorded here rather than acted on in
+`publisher-consume-request`.
+
+### Options
+
+1. **Reject at the API edge.** Validate batch-internal uniqueness on
+   `(request_id, lower(submitted_by))` before publishing, returning `400`
+   for a batch containing a duplicate pair. Matches the project's existing
+   philosophy of validating at ingress; costs one O(n) pass over the batch.
+2. **Accept and keep as-is.** The window only matters under real
+   contention and currently only costs throughput, not correctness — the
+   unique index still does its job either way. Revisit if P4's model
+   proves wrong under load.
+
+### Not resolved by `publisher-consume-request`
+
+The publisher has no batch-internal view to check against — it processes
+one item from the fan-out at a time by construction. Any fix here belongs
+to `api-post-reimbursement`.
+
+---
+
+## R-009 — The requeue-and-per-item-insert design has no backoff and no bulk path
+
+**Raised:** 2026-08-08
+**Status:** Open, needs evaluation — owner: Flavio
+**Affects:** `publisher-consume-request`
+**Severity:** Medium — no failure today at documented volumes; both issues
+compound with load and with the length of any DB/broker incident
+
+### What breaks
+
+Two related gaps in how the publisher moves items, both surfaced in code
+review against the same underlying design (per-item transactions,
+immediate republish on failure):
+
+1. **No backoff on requeue (P5).** `_requeue` republishes immediately with
+   no delay, jitter, or circuit breaker. During a sustained Postgres
+   outage, one 500-item message becomes up to 2000 consumed messages
+   (500 initial + up to 3 retries each) and 2000 connection attempts
+   against the exact database that is already down, cycled as fast as the
+   broker can serve them.
+2. **Per-item N+1 (P6).** `insert_pending` is one `fetchval` per item
+   inside its own acquire+BEGIN+COMMIT — 500 items is 500 separate
+   round-trips, not one bulk insert. The per-item-transaction requirement
+   (publish must sit inside the same transaction as its insert, R-001) is
+   real, but the round-trip cardinality this costs was never weighed
+   against a bulk-insert-then-batch-publish alternative that trades the
+   same R-001 window for far fewer round-trips.
+
+### User discussion (2026-08-08)
+
+On P6: whether a genuine Kafka *batch* publish (one broker-level batch
+containing several items' messages, not just several individual
+`produce()` calls) could let a redesign keep the semaphore's concurrency
+shape while processing in larger chunks (e.g. 10 processes × chunks of
+10). Technically, `confluent_kafka`'s producer already batches at the
+protocol level via `linger.ms`/`batch.size` under the hood for messages
+produced close together in time — but that's an internal delivery
+optimization, not something the application-level `_insert_and_publish`
+unit of work can key correctness off of (the DB transaction still needs
+to know per-item success/failure, and Postgres has no equivalent
+"batch insert with per-row transactional linkage to N separate Kafka
+messages"). A real redesign would most likely mean: bulk `INSERT ...
+VALUES (...), (...), ...` for the whole chunk in one transaction, then
+publish that chunk's N Kafka messages, accepting a wider R-001 window per
+chunk (more items exposed to the dual-write gap at once) in exchange for
+far fewer round-trips. That tradeoff needs its own design pass, not a
+quick patch here.
+
+### Options
+
+1. **Add backoff to requeue.** Exponential backoff keyed on
+   `envelope.retry`, ideally via a delay-topic scheme rather than a sleep
+   (a sleep would consume the poll budget from R-005's headroom).
+2. **Redesign around chunked bulk operations**, per the discussion above —
+   bulk insert per chunk, batch-publish per chunk, wider per-chunk R-001
+   window traded for far fewer round-trips. Largest change, needs its own
+   design.
+3. **Accept and keep as-is.** Defensible at current, unmeasured volume —
+   mirrors R-005's starting-values caveat.
+
+### Not resolved by `publisher-consume-request`
+
+Both gaps are accepted as shipped behavior for this feature; the user
+will evaluate a solution later, per the 2026-08-08 discussion above.

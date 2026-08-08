@@ -14,7 +14,7 @@ from pydantic import (
 
 from shared.config import MAX_BATCH_ITEMS
 
-Stage = Literal["db-insert", "publish"]
+Stage = Literal["db-insert", "publish", "resolve"]
 
 
 def _require_str(value: object) -> object:
@@ -91,7 +91,7 @@ class RequestEnvelope(BaseModel):
     retry: Annotated[int, Field(ge=0)]
     published_at: AwareDatetime
     errors: list[AttemptError] = []
-    # Bounded to the same ceiling the API enforces at ingress (S4/P9): the
+    # Bounded to the same ceiling the API enforces at ingress: the
     # publisher must not trust that every producer onto this topic is the
     # API — its own requeue path is one, and a directly-produced message
     # is another — so it re-asserts the cap at its own trust boundary

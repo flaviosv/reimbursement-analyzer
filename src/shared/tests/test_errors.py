@@ -54,8 +54,8 @@ class DescribeSanitize:
 
     def it_names_the_failed_fields_of_a_validation_error(self) -> None:
         # type(exc).__name__ alone was zero diagnostic content past "some
-        # field failed" (A10) — field locations are schema paths, not user
-        # data, so they're safe to include.
+        # field failed" — field locations are schema paths, not user data,
+        # so they're safe to include.
         try:
             _Model.model_validate({"request_id": 1, "submitted_by": 2})
         except ValidationError as exc:

@@ -34,7 +34,7 @@ class DescribeAttemptError:
         assert entry.error_type == "PublishFailed"
         assert entry.message == "broker unreachable"
 
-    def it_rejects_a_stage_outside_the_two_named_ones(self) -> None:
+    def it_rejects_a_stage_outside_the_named_ones(self) -> None:
         with pytest.raises(ValidationError):
             AttemptError(
                 attempt=1,
@@ -68,8 +68,8 @@ class DescribeAttemptErrorFromException:
         assert entry.occurred_at.utcoffset() == timedelta(0)
 
     def it_accepts_an_explicit_occurred_at_instead_of_reading_the_clock(self) -> None:
-        # A pure wire-contract module reading the wall clock internally made
-        # every caller's result time-dependent (A14); this is the escape
+        # A pure wire-contract module reading the wall clock internally would
+        # make every caller's result time-dependent; this is the escape
         # hatch — production omits it, a test that cares can pin it.
         stamp = datetime(2026, 4, 10, 9, 15, 0, tzinfo=UTC)
 
@@ -93,13 +93,18 @@ class DescribeAttemptErrorFromException:
         assert [entry.attempt for entry in history] == [1, 2, 3]
         assert [entry.stage for entry in history] == ["db-insert", "publish", "db-insert"]
 
+    def it_accepts_the_agent_resolve_stage(self) -> None:
+        entry = AttemptError.from_exception(1, "resolve", RuntimeError("boom"))
+
+        assert entry.stage == "resolve"
+
 
 class DescribeRequestEnvelopeBounds:
     def it_rejects_a_negative_retry(self) -> None:
         # retry is envelope-level protocol state, not attacker-facing input
         # (the public API always starts a fresh envelope at retry=0) — but a
         # directly-produced or hand-crafted message on the Request topic
-        # should not be able to send this negative (S3).
+        # should not be able to send this negative.
         with pytest.raises(ValidationError):
             RequestEnvelope(retry=-1, published_at=datetime.now(UTC), payload=[])
 
@@ -107,7 +112,7 @@ class DescribeRequestEnvelopeBounds:
         # The API enforces MAX_BATCH_ITEMS at ingress, but the publisher
         # cannot assume every producer onto this topic is the API — its own
         # requeue path is one, a directly-produced message is another — so
-        # it re-asserts the same cap at its own trust boundary (S4/P9).
+        # it re-asserts the same cap at its own trust boundary.
         from shared.config import MAX_BATCH_ITEMS
 
         with pytest.raises(ValidationError):

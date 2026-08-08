@@ -25,6 +25,7 @@
 - **Integration (`@pytest.mark.integration`):** `test_integration.py` (in both `api` and `publisher`) round-trips a real batch through real ephemeral Kafka/Postgres containers.
 - **Decision-tree unit tests with test doubles as a module, not fixtures (`publisher`):** `src/publisher/tests/fakes.py` defines `FakeProducer`, `FakePool`/`FakeConnection`, and `RealPool` as plain classes tests construct directly with per-test arguments (injectable errors, delays, turn-ordering) — reachable by bare name via the workspace `pythonpath`, not via conftest fixtures, because each test needs a differently-configured double rather than one shared resource. `test_processing.py` (813 lines) covers every `ItemOutcome` branch this way, including concurrency (`FakePool`'s in-flight/max-in-flight counters prove the semaphore bound without timing).
 - **Real-connection-behind-a-lock (`publisher`):** `RealPool` in `fakes.py` wraps the one real asyncpg connection a `db` fixture owns, serialized by an `asyncio.Lock`, so rollback/duplicate/escalation tests exercise genuine transaction and constraint semantics instead of a fake's approximation of them — while every in-flight caller still waits for a slot rather than failing, preserving the fan-out shape under test.
+- **Decision-tree unit tests with test doubles as a module (`agent`):** `src/agent/tests/agent_fakes.py` defines `FakePool`/`FakeConnection` as agent-specific classes (no in-flight/max-in-flight counters — `agent` has no per-message fan-out to observe; no `RealPool` — `agent.validation` wraps no `conn.transaction()`, so there's no transaction semantics a fake would approximate imperfectly, unlike `publisher`). `FakeProducer` itself is not redefined here — it's re-exported from `shared.testing`, the one double `shared` owns for a contract (`AIOProducer.produce()`) it also owns. `test_validation.py` (293 lines) covers every `MessageOutcome` branch this way.
 
 ## Test Execution
 
@@ -60,7 +61,11 @@ No coverage tool or enforced target exists. Coverage is a byproduct of the `Desc
 | `reimbursement` repository (insert, duplicate detection) | Integration (real Postgres) | `src/shared/tests/reimbursement/test_repository.py` | `uv run pytest` |
 | Human-review escalation + history rendering | Unit + integration | `src/shared/tests/reimbursement/use_cases/test_send_human_review.py` | mixed |
 | Failure log (never raises, truncation) | Unit | `src/shared/tests/test_failure_log.py` | `uv run pytest -m "not integration"` |
-| Decision logic — auto-approve/reject/human-review rules (`agent`) | **None — not implemented yet** | — | — |
+| Agent resolve/requeue/escalate (staleness guard, ghost tolerance, retry ceiling) | Unit (fakes) | `src/agent/tests/test_validation.py` | `uv run pytest -m "not integration"` |
+| Agent consumer lifecycle (offset commit, graceful shutdown, startup checks) | Unit | `src/agent/tests/test_consumer.py` | same |
+| Agent config loading | Unit | `src/agent/tests/test_config.py` | same |
+| Agent end-to-end (Reimbursement → resolved / ghost / stale / escalated) | Integration | `src/agent/tests/test_integration.py` | `uv run pytest` |
+| Decision logic — auto-approve/reject/human-review policy (`agent`) | **None — not implemented yet** | — | — |
 
 ## Parallelism Assessment
 
@@ -68,13 +73,14 @@ No coverage tool or enforced target exists. Coverage is a byproduct of the `Desc
 | --------- | -------------- | ----------------- | -------- |
 | Postgres-backed (schema, migrations, repository) | Yes, across processes | Each run creates its own uniquely-named database (`reimbursementanalyzer_<pid>_<random>_test`) on a session-scoped server, dropped `WITH (FORCE)` afterward. The fixture was promoted to a workspace-level conftest so `api` and `shared`/`publisher` tests share it | `src/api/tests/helpers.py::disposable_database_name`, workspace-level `conftest.py::disposable_database` |
 | Kafka integration (`api`) | Not verified for concurrent runs | One session-scoped `KafkaContainer` fixture shared by every test in `reimbursement/create/`; each test drains from a fresh consumer group and matches on its own marker string, but the container itself is not per-test | `src/api/tests/reimbursement/create/conftest.py::kafka_bootstrap_server` |
-| Kafka integration (`publisher`) | Not verified for concurrent runs | Same pattern as `api`'s, publisher-local: one session-scoped `KafkaContainer` sized from `KAFKA_MAX_MESSAGE_BYTES`. Not hoisted to the root conftest like Postgres was — the real reason is a topic-name collision between `api`'s and `publisher`'s fixtures, not conftest resolution scoping (I8, 2026-08-08 — the previous rationale here was checked and found factually wrong: pytest conftest fixtures *do* fan out workspace-wide, which is exactly how the root-level Postgres fixture below reaches both) | `src/publisher/tests/conftest.py::kafka_bootstrap_server` |
+| Kafka integration (`publisher`) | Not verified for concurrent runs | Same pattern as `api`'s, publisher-local: one session-scoped `KafkaContainer` sized from `KAFKA_MAX_MESSAGE_BYTES`. Not hoisted to the root conftest like Postgres was — the real reason is a topic-name collision between `api`'s and `publisher`'s fixtures, not conftest resolution scoping (pytest conftest fixtures *do* fan out workspace-wide, which is exactly how the root-level Postgres fixture below reaches both) | `src/publisher/tests/conftest.py::kafka_bootstrap_server` |
+| Kafka integration (`agent`) | Not verified for concurrent runs | Same pattern again, agent-local: one session-scoped `KafkaContainer`, same reasoning for staying local (topic-name collision risk against `api`'s/`publisher`'s own fixtures, not conftest scoping) | `src/agent/tests/conftest.py::kafka_bootstrap_server` |
 | Unit tests (fakes only) | Yes | No shared external state; `shared.config.load_config()`'s process-wide `lru_cache` is explicitly cleared by an autouse fixture before every test | `src/shared/tests/conftest.py`, `src/api/tests/conftest.py` |
 
 ## Gate Check Commands
 
 | Gate Level | When to Use | Command |
 | ---------- | ----------- | ------- |
-| Quick | After changes with no *Kafka* dependency | `uv run pytest -m "not integration"` — still needs Docker: the `integration` marker means "needs a container *beyond* the suite's own Postgres default" (`pyproject.toml`'s marker text), not "needs no container" (corrected 2026-08-08 — V8/M2/P4/I2, 4-way corroborated: this row previously said "no DB/Kafka dependency," contradicted by line 37 above and by dozens of Postgres-backed tests in this same gate) |
+| Quick | After changes with no *Kafka* dependency | `uv run pytest -m "not integration"` — still needs Docker: the `integration` marker means "needs a container *beyond* the suite's own Postgres default" (`pyproject.toml`'s marker text), not "needs no container" — see line 37 above and the dozens of Postgres-backed tests that also run in this gate |
 | Full | Before considering a task/PR done | `uv run pytest` |
 | Lint (ad hoc) | Optional sanity check, not gated | `uv run ruff check <path>` |

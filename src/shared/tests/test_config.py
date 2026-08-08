@@ -102,6 +102,14 @@ class DescribeDatabaseConfig:
 
         assert config.database.dsn == "postgresql://user:pw@db:5432/reimbursementanalyzer"
 
+    def it_bounds_every_query_at_ten_seconds(self) -> None:
+        # Without a command_timeout, a stuck connection (broker failover,
+        # network partition, lock contention) hangs the caller forever --
+        # neither service's consume loop has its own per-call timeout.
+        config = load_config()
+
+        assert config.database.command_timeout == 10.0
+
     def it_sizes_the_pool_explicitly_rather_than_at_asyncpg_defaults(self) -> None:
         config = load_config()
 
@@ -111,7 +119,7 @@ class DescribeDatabaseConfig:
         # Configurable, not just a literal, so a deployment that raises
         # PUBLISHER_ITEM_CONCURRENCY without raising this in step is a
         # startup failure (publisher's check_startup_config) rather than
-        # silent connection starvation under load (R-005 / A7).
+        # silent connection starvation under load (R-005).
         monkeypatch.setenv("DATABASE_POOL_MAX_SIZE", "42")
 
         config = load_config()

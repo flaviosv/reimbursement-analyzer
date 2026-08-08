@@ -3,38 +3,21 @@ failure nothing else could handle."""
 
 import json
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from shared.config import FailureLogConfig
-from shared.models import AttemptError
+
+if TYPE_CHECKING:
+    from shared.models import AttemptError
 
 _MAX_DEPTH = 10
 _FALLBACK_LOGGER_NAME = "reimbursementanalyzer.failures.fallback"
 
 
-def build_record(
-    event: str,
-    index: int,
-    item: Any,
-    errors: list[AttemptError],
-    **extra: Any,
-) -> dict[str, Any]:
-    """The shape every last-resort record shares.
-
-    Moved here from the publisher (A6, 2026-08-08): AD-025's justification
-    for putting `failure_log` in `shared` is that both the publisher and
-    the future Agent must write to it — leaving the record *shape* defined
-    in the publisher would have made the Agent reinvent this schema
-    independently the first time it needed to escalate something.
-    """
-    return {
-        "event": event,
-        "item_index": index,
-        "request_id": item.get("request_id") if isinstance(item, dict) else None,
-        "item": item,
-        "errors": [error.model_dump(mode="json") for error in errors],
-        **extra,
-    }
+def render_errors(errors: "list[AttemptError]") -> list[dict[str, Any]]:
+    """Each `AttemptError` as a JSON-safe dict, in order — the one
+    sub-expression every service's own failure-record shape shares."""
+    return [error.model_dump(mode="json") for error in errors]
 
 
 def _truncated(value: Any, limit: int, depth: int = 0) -> Any:
@@ -43,9 +26,9 @@ def _truncated(value: Any, limit: int, depth: int = 0) -> Any:
     if isinstance(value, str):
         return value[:limit]
     if isinstance(value, dict):
-        # Keys truncated too (S8): `extra="allow"` on ReimbursementRequest
-        # means an item's field *names* are as unbounded as its values —
-        # an oversized key would otherwise pass through this cap untouched.
+        # Keys truncated too: `extra="allow"` on ReimbursementRequest means
+        # an item's field *names* are as unbounded as its values — an
+        # oversized key would otherwise pass through this cap untouched.
         return {
             (key[:limit] if isinstance(key, str) else key): _truncated(item, limit, depth + 1)
             for key, item in value.items()

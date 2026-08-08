@@ -114,6 +114,18 @@ Seen once or not yet corroborated. Tracked, not trusted.
 - evidence: LIST-01 (test-design)
 - last seen: 2026-08-08T21:05:59Z
 
+### L-018 — Add a test at the exact boundary value of every numeric ceiling comparison (e.g. retry == MAX_RETRY), not just values comfortably past it, so a > -> >= mutation is caught
+- signal: `surviving_mutant` · recurrence: 1 feature(s) · scope: `testing` · harmful: 0
+- features: agent-consume-reimbursement
+- evidence: validation.md — Discrimination Sensor mutation 2, agent/validation.py:81 (testing)
+- last seen: 2026-08-08T19:19:01Z
+
+### L-019 — When an acceptance criterion requires both a positive outcome and a negative side-effect claim (e.g. no republish, no failure-log entry), assert both explicitly, not just the positive outcome
+- signal: `ac_gap` · recurrence: 1 feature(s) · scope: `testing` · harmful: 0
+- features: agent-consume-reimbursement
+- evidence: validation.md — AGT-03, AGT-17 (agent/tests/test_validation.py:145-160,74-92) (testing)
+- last seen: 2026-08-08T19:19:01Z
+
 ## Quarantined (failed when applied — ignore)
 
 A confirmed lesson that recurred alongside failure. Kept for the maintainer to review.

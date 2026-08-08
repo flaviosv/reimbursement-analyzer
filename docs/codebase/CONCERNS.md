@@ -4,14 +4,14 @@
 
 ## Tech Debt
 
-**`agent` is an unimplemented stub, despite being wired as if functional:**
-- Issue: the service's entire implementation is a `consumer.py` that subscribes to a placeholder topic (`sample-topic`), parses `shared.models.SampleMessage`, and `print()`s it. No rules engine, no LLM evaluation, no consumption of the real `Reimbursement` topic `publisher` now publishes to.
-- Files: `src/agent/src/agent/consumer.py`
-- Why: scaffolded ahead of the real infrastructure/decision work (per the file's own comment: "Placeholder topic name for structural validation ahead of the real infra setup"). `publisher` was in the same state as of the last scan; it has since been implemented (see below) — `agent` has not.
-- Impact: `docker-compose.yml` builds and runs it as if it participates in the pipeline — a reader could assume the reimbursement decision flow is wired end to end, when the pipeline durably reaches a `Reimbursement` Kafka message and stops there.
-- Fix approach: implement `agent` (consume `Reimbursement`, run rules + LLM evaluation, record the decision) as its own feature.
+**`agent`'s decision policy (the service's core stated purpose) is unimplemented, despite the pipeline plumbing around it now being complete:**
+- Issue: `agent` now consumes `Reimbursement`, resolves the row by `uuid`, applies a staleness guard, tolerates a ghost, requeues transient failures, and escalates past its own retry ceiling (`src/agent/src/agent/{consumer,validation}.py`) — but no code path anywhere implements the actual auto-approve/auto-reject/human-review policy from `docs/SCOPE.md`. `langchain`/`langgraph` remain declared, unused dependencies.
+- Files: no single file — the gap is the absence of a decision module, not a defect in an existing one.
+- Why: this feature deliberately scoped the consume/resolve layer separately from decision logic, per the project's own stated plan to implement them in different sessions.
+- Impact: `docker-compose.yml` builds and runs `agent` as if it participates in the full pipeline — a reader could assume the reimbursement decision flow is wired end to end, when the pipeline durably reaches a resolved, decision-ready message and stops there. Its retry-ceiling escalation to `human-review` is a failure-handling safety valve (mirroring `publisher`'s own), not the policy itself — don't conflate the two.
+- Fix approach: implement the decision layer (rules + LLM evaluation, recording the decision) as its own feature, consuming what `agent.validation` already resolves.
 
-**Resolved since the last scan — `publisher` is now fully implemented:** `src/publisher/src/{consumer,processing}.py` consume `Request`, insert a `reimbursement` row, publish to `Reimbursement`, and handle retry/duplicate/escalation per `SCOPE.md`. Covered by `src/publisher/tests/{test_consumer,test_processing,test_integration}.py` plus `src/shared/tests/reimbursement/`. Left here as a record that this entry's scope narrowed, not deleted outright.
+**Resolved since the last scan — `publisher` and `agent`'s consume/resolve layers are now both fully implemented:** `src/publisher/src/{consumer,processing}.py` consume `Request`, insert a `reimbursement` row, publish to `Reimbursement`, and handle retry/duplicate/escalation; `src/agent/src/agent/{consumer,validation}.py` consume `Reimbursement` and resolve/requeue/escalate — both per `SCOPE.md`. Covered by `src/publisher/tests/{test_consumer,test_processing,test_integration}.py`, `src/agent/tests/{test_consumer,test_validation,test_integration}.py`, plus `src/shared/tests/reimbursement/`. Left here as a record that this entry's scope narrowed twice, not deleted outright.
 
 **`README.md` documents a pre-flatten file layout:**
 - Issue: references `src/api/src/api/migrations/` and `uv run --extra migrations python -m api.migrate`, both from before `api`'s directory structure was flattened (loose modules directly under `src/api/src/`, no wrapping `api/` package dir).
@@ -20,12 +20,12 @@
 - Impact: a new contributor following the README literally would run a command (`python -m api.migrate`) that does not resolve — the correct current invocation is `PYTHONPATH=src/api/src python -m migrate` (see `src/api/Dockerfile`'s `migrate` stage, and `docs/codebase/STACK.md`).
 - Fix approach: update the three lines to reflect the current flat layout and command.
 
-**`asyncpg` is a declared dependency with no consumer in `agent` (resolved for `publisher`):**
-- Issue: `asyncpg` is listed in `api`, `agent`, and `publisher`'s `pyproject.toml`. `publisher` now imports it for real, via `shared.reimbursement.repository`. `api` and `agent` still declare it with no import anywhere.
-- Files: `src/api/pyproject.toml`, `src/agent/pyproject.toml` (unused); `src/shared/src/shared/reimbursement/repository.py` (used, on `publisher`'s behalf)
-- Why: added ahead of the persistence layer that will use it (the migration runner uses sync `psycopg` instead, since it's a one-shot job, not a request-serving path); `publisher-consume-request` is the feature that put it to use.
-- Impact: none currently for `api`/`agent` (unused dependency, not a runtime risk) — worth closing once `agent` starts reading/writing Postgres, and worth asking whether `api` needs it at all.
-- Fix approach: no action needed until `agent`'s persistence work begins; revisit then. `api`'s declaration is unexplained and could likely be dropped.
+**`asyncpg` is a declared dependency with no consumer in `api` (resolved for `publisher` and `agent`):**
+- Issue: `asyncpg` is listed in `api`, `agent`, and `publisher`'s `pyproject.toml`. `publisher` and `agent` both now import it for real, via `shared.reimbursement.repository`. Only `api` still declares it with no import anywhere.
+- Files: `src/api/pyproject.toml` (unused); `src/shared/src/shared/reimbursement/repository.py` (used, on both `publisher`'s and `agent`'s behalf)
+- Why: added ahead of the persistence layer that will use it (the migration runner uses sync `psycopg` instead, since it's a one-shot job, not a request-serving path); `publisher-consume-request` and `agent-consume-reimbursement` are the features that put it to use.
+- Impact: none currently for `api` (unused dependency, not a runtime risk).
+- Fix approach: `api`'s declaration is unexplained and could likely be dropped — no other action needed, this entry is otherwise resolved.
 
 ## Security Considerations
 
@@ -53,7 +53,7 @@
 ## Test Coverage Gaps
 
 **Decision logic (auto-approve / auto-reject / human-review):**
-- What's not tested: nothing — the approval policy described in `docs/SCOPE.md` (auto-approve ≤200, mandatory human-review >2000, reject receipts >90 days old) has no implementing code anywhere in this repo yet. This is distinct from `publisher`'s own `retry > 3` → `human-review` escalation (which is implemented and tested) — that path preserves a row for a human to decide, it does not itself decide anything.
+- What's not tested: nothing — the approval policy described in `docs/SCOPE.md` (auto-approve ≤200, mandatory human-review >2000, reject receipts >90 days old) has no implementing code anywhere in this repo yet. This is distinct from both `publisher`'s and `agent`'s own `retry > 3` → `human-review` escalations (both implemented and fully tested) — those paths preserve a row for a human to decide when the pipeline itself fails, they do not evaluate the request's substance.
 - Risk: this is the core stated purpose of the service; it does not exist yet, so there is nothing to test.
 - Priority: highest — this is the next major piece of work, not a testing gap in existing code.
 - Difficulty to test: n/a until implemented.

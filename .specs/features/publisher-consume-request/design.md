@@ -4,9 +4,7 @@
 **Context**: `.specs/features/publisher-consume-request/context.md`
 **Risks**: `.specs/RISKS.md` (R-001 … R-005)
 **Status**: Complete — v3 shipped; see `validation.md` for the Verifier's
-PASS. (Q26, 2026-08-08: this line said "Draft" through Tasks, Execute, and
-the full comment-triage remediation pass — never updated once the feature
-landed.)
+PASS.
 
 ---
 
@@ -169,9 +167,7 @@ src/
 ```
 
 Root `pyproject.toml`: `pythonpath = ["src/api/tests", "src/api/src", "src/publisher/tests", "src/publisher/src"]`
-— gained the `src/publisher/tests` entry once publisher tests existed
-(A8/Q25, 2026-08-08: this line listed only 3 of the 4 that actually
-shipped).
+— gained the `src/publisher/tests` entry once publisher tests existed.
 
 ### Flat-module namespace — no action needed, but a constraint to carry
 

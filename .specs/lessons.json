@@ -3,7 +3,7 @@
   "promote_threshold": 2,
   "window_days": 45,
   "quarantine_threshold": 2,
-  "next_id": 18,
+  "next_id": 20,
   "lessons": [
     {
       "id": "L-001",
@@ -312,6 +312,42 @@
       ],
       "created": "2026-08-08T21:05:59Z",
       "last_seen": "2026-08-08T21:05:59Z"
+    },
+    {
+      "id": "L-018",
+      "key": "surviving_mutant::add a test at the exact boundary value of every numeric ceiling comparison e g retry max retry not just values comfortably past it so a mutation is caught",
+      "text": "Add a test at the exact boundary value of every numeric ceiling comparison (e.g. retry == MAX_RETRY), not just values comfortably past it, so a > -> >= mutation is caught",
+      "signal": "surviving_mutant",
+      "scope": "testing",
+      "status": "candidate",
+      "features": [
+        "agent-consume-reimbursement"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "validation.md — Discrimination Sensor mutation 2, agent/validation.py:81 (testing)"
+      ],
+      "created": "2026-08-08T19:19:01Z",
+      "last_seen": "2026-08-08T19:19:01Z"
+    },
+    {
+      "id": "L-019",
+      "key": "ac_gap::when an acceptance criterion requires both a positive outcome and a negative side effect claim e g no republish no failure log entry assert both explicitly not just the positive outcome",
+      "text": "When an acceptance criterion requires both a positive outcome and a negative side-effect claim (e.g. no republish, no failure-log entry), assert both explicitly, not just the positive outcome",
+      "signal": "ac_gap",
+      "scope": "testing",
+      "status": "candidate",
+      "features": [
+        "agent-consume-reimbursement"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "validation.md — AGT-03, AGT-17 (agent/tests/test_validation.py:145-160,74-92) (testing)"
+      ],
+      "created": "2026-08-08T19:19:01Z",
+      "last_seen": "2026-08-08T19:19:01Z"
     }
   ]
 }

@@ -485,8 +485,7 @@ and assert the other 499 are unaffected.
 **Coverage:** 42 total, 42 mapped to tasks (see `tasks.md`), 0 unmapped.
 Independently re-verified by tlc-spec-driven's Verifier — see
 `validation.md`: spec-anchored check 42/42 matched, sensor 18/18
-mutants killed, full gate 274 passed / 0 failed. (Q18, 2026-08-08 —
-this table was never updated after Tasks/Execute/Verify completed.)
+mutants killed, full gate 274 passed / 0 failed.
 
 ---
 
