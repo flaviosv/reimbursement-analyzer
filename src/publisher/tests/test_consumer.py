@@ -1,11 +1,14 @@
 import asyncio
+import signal
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
 import consumer as consumer_module
 import pytest
-from consumer import check_startup_config, managed_consumer, run
+from consumer import _install_signal_handlers, check_startup_config, managed_consumer, run
 from fakes import FakePool, FakeProducer
 from helpers import valid_reimbursement_item
 from processing import Dependencies
@@ -93,6 +96,41 @@ class BlockingProducer(FakeProducer):
         self.started.set()
         await self.release.wait()
         return await super().produce(topic, value, **kwargs)
+
+
+class SignallingProducer(FakeProducer):
+    """Delivers a real SIGTERM while the first item is mid-publish, then waits
+    for the handler to fire. Waiting on the event rather than sleeping is what
+    keeps this deterministic: the message is provably still in flight when the
+    shutdown is requested."""
+
+    def __init__(self, stopping: asyncio.Event) -> None:
+        super().__init__()
+        self.stopping = stopping
+        self.raised = False
+
+    async def produce(self, topic: str, value: bytes, **kwargs: object) -> asyncio.Future:
+        if not self.raised:
+            self.raised = True
+            signal.raise_signal(signal.SIGTERM)
+            await asyncio.wait_for(self.stopping.wait(), timeout=2.0)
+        return await super().produce(topic, value, **kwargs)
+
+
+@contextmanager
+def _armed_signal_handlers(stopping: asyncio.Event) -> Iterator[None]:
+    """Arm the real handlers, parking SIGTERM on a no-op first: with the
+    handlers absent the default disposition kills the test runner instead of
+    failing the assertion."""
+    previous = signal.signal(signal.SIGTERM, lambda *_: None)
+    _install_signal_handlers(stopping)
+    try:
+        yield
+    finally:
+        loop = asyncio.get_running_loop()
+        loop.remove_signal_handler(signal.SIGTERM)
+        loop.remove_signal_handler(signal.SIGINT)
+        signal.signal(signal.SIGTERM, previous)
 
 
 def _deps(pool: Any, producer: Any, config: Config | None = None) -> Dependencies:
@@ -269,6 +307,25 @@ class DescribeTheLoop:
         # still settles and commits before the loop exits.
         assert stopping.is_set()
         assert [row[0] for row in pool.inserted] == ["REQ-LAST"]
+        assert [committed for committed, _ in consumer.commits] == [message]
+        assert len(consumer.consume_kwargs) == 1
+
+    async def it_stops_on_a_real_sigterm_only_after_the_message_in_hand_commits(self) -> None:
+        stopping = asyncio.Event()
+        message = _message(["REQ-SIGTERM"])
+        # A second batch and a stop_after well past it: if the signal never
+        # armed anything, the loop keeps going and the assertions below say so
+        # instead of hanging.
+        consumer = FakeConsumer(
+            [[message], [_message(["REQ-NEVER"])]], stopping=stopping, stop_after=3
+        )
+        pool, producer = FakePool(), SignallingProducer(stopping)
+
+        with _armed_signal_handlers(stopping):
+            await run(_deps(pool, producer), consumer, stopping)
+
+        assert stopping.is_set()
+        assert [row[0] for row in pool.inserted] == ["REQ-SIGTERM"]
         assert [committed for committed, _ in consumer.commits] == [message]
         assert len(consumer.consume_kwargs) == 1
 
