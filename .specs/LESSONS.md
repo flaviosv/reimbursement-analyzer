@@ -72,6 +72,48 @@ Seen once or not yet corroborated. Tracked, not trusted.
 - evidence: PUB-39 / spec.md P1 concurrency AC4 (spec-writing)
 - last seen: 2026-08-08T17:20:19Z
 
+### L-011 — When a use case wraps multiple writes in one DB transaction for atomicity, add a test that injects a failure between the writes and asserts both are rolled back — happy-path and reject-all-writes tests alone don't prove the transaction boundary does anything
+- signal: `surviving_mutant` · recurrence: 1 feature(s) · scope: `repo-layer` · harmful: 0
+- features: api-put-reimbursement
+- evidence: validation.md#Discrimination Sensor mutation 4 (repo-layer)
+- last seen: 2026-08-08T21:02:55Z
+
+### L-012 — When a spec AC's THEN clause has multiple parts (status code, error message content, no DB change), assert every part, not just the status code — a passing status-code assertion can hide an unenforced message or DB-state clause
+- signal: `spec_precision_gap` · recurrence: 1 feature(s) · scope: `api-error-contract` · harmful: 0
+- features: api-put-reimbursement
+- evidence: validation.md#REVIEW-02,REVIEW-03,REVIEW-06,REVIEW-08 (api-error-contract)
+- last seen: 2026-08-08T21:03:00Z
+
+### L-013 — When a query result is filtered on a column an index also sorts by, prove ORDER BY is load-bearing with a test whose data/filter can't be coincidentally satisfied by that index's own scan order.
+- signal: `surviving_mutant` · recurrence: 1 feature(s) · scope: `repository-layer` · harmful: 0
+- features: api-get-reimbursement
+- evidence: src/shared/src/shared/reimbursement/repository.py:52 (mutant #3, ORDER BY removed) (repository-layer)
+- last seen: 2026-08-08T21:05:36Z
+
+### L-014 — When a spec AC lists multiple invalid-input variants (e.g. out-of-range vs. non-integer), write a discriminating test for each variant, not just the ones that need new code.
+- signal: `ac_gap` · recurrence: 1 feature(s) · scope: `validation` · harmful: 0
+- features: api-get-reimbursement
+- evidence: LIST-02 (validation)
+- last seen: 2026-08-08T21:05:42Z
+
+### L-015 — When a spec's own Independent Test names a specific input combination, write that exact test rather than substituting a simpler case that exercises the same code path but not the same scenario.
+- signal: `ac_gap` · recurrence: 1 feature(s) · scope: `validation` · harmful: 0
+- features: api-get-reimbursement
+- evidence: LIST-07 (validation)
+- last seen: 2026-08-08T21:05:50Z
+
+### L-016 — When a spec AC requires an error to be logged, assert the log via caplog, not just the response status/body.
+- signal: `ac_gap` · recurrence: 1 feature(s) · scope: `error-handling` · harmful: 0
+- features: api-get-reimbursement
+- evidence: LIST-11 (error-handling)
+- last seen: 2026-08-08T21:05:54Z
+
+### L-017 — When a spec AC is a conjunction of conditions, write one test asserting the full conjunction rather than proving each condition in a separate test that individually omits the others.
+- signal: `spec_precision_gap` · recurrence: 1 feature(s) · scope: `test-design` · harmful: 0
+- features: api-get-reimbursement
+- evidence: LIST-01 (test-design)
+- last seen: 2026-08-08T21:05:59Z
+
 ## Quarantined (failed when applied — ignore)
 
 A confirmed lesson that recurred alongside failure. Kept for the maintainer to review.

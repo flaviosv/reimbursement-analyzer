@@ -3,7 +3,7 @@
   "promote_threshold": 2,
   "window_days": 45,
   "quarantine_threshold": 2,
-  "next_id": 11,
+  "next_id": 18,
   "lessons": [
     {
       "id": "L-001",
@@ -186,6 +186,132 @@
       ],
       "created": "2026-08-08T17:20:19Z",
       "last_seen": "2026-08-08T17:20:19Z"
+    },
+    {
+      "id": "L-011",
+      "key": "surviving_mutant::when a use case wraps multiple writes in one db transaction for atomicity add a test that injects a failure between the writes and asserts both are rolled back happy path and reject all writes tests alone don t prove the transaction boundary does anything",
+      "text": "When a use case wraps multiple writes in one DB transaction for atomicity, add a test that injects a failure between the writes and asserts both are rolled back — happy-path and reject-all-writes tests alone don't prove the transaction boundary does anything",
+      "signal": "surviving_mutant",
+      "scope": "repo-layer",
+      "status": "candidate",
+      "features": [
+        "api-put-reimbursement"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "validation.md#Discrimination Sensor mutation 4 (repo-layer)"
+      ],
+      "created": "2026-08-08T21:02:55Z",
+      "last_seen": "2026-08-08T21:02:55Z"
+    },
+    {
+      "id": "L-012",
+      "key": "spec_precision_gap::when a spec ac s then clause has multiple parts status code error message content no db change assert every part not just the status code a passing status code assertion can hide an unenforced message or db state clause",
+      "text": "When a spec AC's THEN clause has multiple parts (status code, error message content, no DB change), assert every part, not just the status code — a passing status-code assertion can hide an unenforced message or DB-state clause",
+      "signal": "spec_precision_gap",
+      "scope": "api-error-contract",
+      "status": "candidate",
+      "features": [
+        "api-put-reimbursement"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "validation.md#REVIEW-02,REVIEW-03,REVIEW-06,REVIEW-08 (api-error-contract)"
+      ],
+      "created": "2026-08-08T21:03:00Z",
+      "last_seen": "2026-08-08T21:03:00Z"
+    },
+    {
+      "id": "L-013",
+      "key": "surviving_mutant::when a query result is filtered on a column an index also sorts by prove order by is load bearing with a test whose data filter can t be coincidentally satisfied by that index s own scan order",
+      "text": "When a query result is filtered on a column an index also sorts by, prove ORDER BY is load-bearing with a test whose data/filter can't be coincidentally satisfied by that index's own scan order.",
+      "signal": "surviving_mutant",
+      "scope": "repository-layer",
+      "status": "candidate",
+      "features": [
+        "api-get-reimbursement"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "src/shared/src/shared/reimbursement/repository.py:52 (mutant #3, ORDER BY removed) (repository-layer)"
+      ],
+      "created": "2026-08-08T21:05:36Z",
+      "last_seen": "2026-08-08T21:05:36Z"
+    },
+    {
+      "id": "L-014",
+      "key": "ac_gap::when a spec ac lists multiple invalid input variants e g out of range vs non integer write a discriminating test for each variant not just the ones that need new code",
+      "text": "When a spec AC lists multiple invalid-input variants (e.g. out-of-range vs. non-integer), write a discriminating test for each variant, not just the ones that need new code.",
+      "signal": "ac_gap",
+      "scope": "validation",
+      "status": "candidate",
+      "features": [
+        "api-get-reimbursement"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "LIST-02 (validation)"
+      ],
+      "created": "2026-08-08T21:05:42Z",
+      "last_seen": "2026-08-08T21:05:42Z"
+    },
+    {
+      "id": "L-015",
+      "key": "ac_gap::when a spec s own independent test names a specific input combination write that exact test rather than substituting a simpler case that exercises the same code path but not the same scenario",
+      "text": "When a spec's own Independent Test names a specific input combination, write that exact test rather than substituting a simpler case that exercises the same code path but not the same scenario.",
+      "signal": "ac_gap",
+      "scope": "validation",
+      "status": "candidate",
+      "features": [
+        "api-get-reimbursement"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "LIST-07 (validation)"
+      ],
+      "created": "2026-08-08T21:05:50Z",
+      "last_seen": "2026-08-08T21:05:50Z"
+    },
+    {
+      "id": "L-016",
+      "key": "ac_gap::when a spec ac requires an error to be logged assert the log via caplog not just the response status body",
+      "text": "When a spec AC requires an error to be logged, assert the log via caplog, not just the response status/body.",
+      "signal": "ac_gap",
+      "scope": "error-handling",
+      "status": "candidate",
+      "features": [
+        "api-get-reimbursement"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "LIST-11 (error-handling)"
+      ],
+      "created": "2026-08-08T21:05:54Z",
+      "last_seen": "2026-08-08T21:05:54Z"
+    },
+    {
+      "id": "L-017",
+      "key": "spec_precision_gap::when a spec ac is a conjunction of conditions write one test asserting the full conjunction rather than proving each condition in a separate test that individually omits the others",
+      "text": "When a spec AC is a conjunction of conditions, write one test asserting the full conjunction rather than proving each condition in a separate test that individually omits the others.",
+      "signal": "spec_precision_gap",
+      "scope": "test-design",
+      "status": "candidate",
+      "features": [
+        "api-get-reimbursement"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "LIST-01 (test-design)"
+      ],
+      "created": "2026-08-08T21:05:59Z",
+      "last_seen": "2026-08-08T21:05:59Z"
     }
   ]
 }
