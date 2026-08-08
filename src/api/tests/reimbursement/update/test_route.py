@@ -92,7 +92,7 @@ class DescribePutReimbursement:
             response = await client.put(f"/api/v1/reimbursement/{uuid}", json=payload)
 
         assert response.status_code == 422
-        assert "msg" in response.json()
+        assert response.json() == {"msg": "approved.receipts_value: Field required"}
 
     async def it_returns_422_for_a_malformed_receipts_currency(self, db: asyncpg.Connection) -> None:
         uuid = await _seed(db, "REQ-PUT-APPROVE-BAD-CURRENCY")
@@ -102,6 +102,7 @@ class DescribePutReimbursement:
             response = await client.put(f"/api/v1/reimbursement/{uuid}", json=payload)
 
         assert response.status_code == 422
+        assert response.json() == {"msg": "approved.receipts_currency: String should match pattern '^[A-Z]{3}$'"}
         status = await db.fetchval("SELECT status FROM reimbursement WHERE uuid = $1", uuid)
         assert status == "human-review"
 
@@ -112,6 +113,7 @@ class DescribePutReimbursement:
             response = await client.put(f"/api/v1/reimbursement/{uuid}", json=_APPROVE_PAYLOAD)
 
         assert response.status_code == 400
+        assert response.json() == {"msg": f"reimbursement {uuid} is not eligible for this decision"}
 
     async def it_rejects_an_eligible_complete_row_and_returns_200(self, db: asyncpg.Connection) -> None:
         uuid = await _seed_with_receipts(db, "REQ-PUT-REJECT-OK")
@@ -131,12 +133,16 @@ class DescribePutReimbursement:
             response = await client.put(f"/api/v1/reimbursement/{uuid}", json=payload)
 
         assert response.status_code == 422
+        assert response.json() == {"msg": "rejected.approved_by: Field required"}
 
     async def it_returns_404_for_an_unknown_uuid(self, db: asyncpg.Connection) -> None:
+        unknown_uuid = uuid4()
+
         async with _build_client(FakePool(db)) as client:
-            response = await client.put(f"/api/v1/reimbursement/{uuid4()}", json=_APPROVE_PAYLOAD)
+            response = await client.put(f"/api/v1/reimbursement/{unknown_uuid}", json=_APPROVE_PAYLOAD)
 
         assert response.status_code == 404
+        assert response.json() == {"msg": f"no reimbursement with uuid {unknown_uuid}"}
 
     async def it_returns_400_when_rejecting_an_ineligible_status(self, db: asyncpg.Connection) -> None:
         uuid = await _seed_with_receipts(db, "REQ-PUT-REJECT-INELIGIBLE", status="human-approved")
@@ -145,6 +151,7 @@ class DescribePutReimbursement:
             response = await client.put(f"/api/v1/reimbursement/{uuid}", json=_REJECT_PAYLOAD)
 
         assert response.status_code == 400
+        assert response.json() == {"msg": f"reimbursement {uuid} is not eligible for this decision"}
         status = await db.fetchval("SELECT status FROM reimbursement WHERE uuid = $1", uuid)
         assert status == "human-approved"
 
@@ -155,6 +162,7 @@ class DescribePutReimbursement:
             response = await client.put(f"/api/v1/reimbursement/{uuid}", json=_REJECT_PAYLOAD)
 
         assert response.status_code == 400
+        assert response.json() == {"msg": f"reimbursement {uuid} is not eligible for this decision"}
 
     async def it_returns_400_when_the_body_uuid_does_not_match_the_path_uuid(
         self, db: asyncpg.Connection
@@ -217,9 +225,10 @@ class DescribeTheRealApp:
         # constructed fresh inside TestClient's own loop via the real
         # lifespan, never handed in from this test's loop.
         monkeypatch.setenv("DATABASE_URL", migrated_db)
+        unknown_uuid = uuid4()
 
         with TestClient(real_app) as client:
-            response = client.put(f"/api/v1/reimbursement/{uuid4()}", json=_APPROVE_PAYLOAD)
+            response = client.put(f"/api/v1/reimbursement/{unknown_uuid}", json=_APPROVE_PAYLOAD)
 
         assert response.status_code == 404
-        assert "msg" in response.json()
+        assert response.json() == {"msg": f"no reimbursement with uuid {unknown_uuid}"}
