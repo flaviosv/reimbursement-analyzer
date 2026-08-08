@@ -59,8 +59,11 @@ async def managed_consumer(config: Config, publisher: PublisherConfig) -> AsyncI
 
 async def run(deps: Dependencies, consumer: AIOConsumer, stopping: asyncio.Event) -> None:
     """One message at a time: fan its items out, wait for every one of them to
-    settle, then commit. A shutdown signal ends the loop only between
-    messages, so the message in hand always finishes and commits."""
+    settle, then commit. Matches PUB-33 AC5 precisely: on a termination
+    signal, the message currently being processed completes and commits its
+    offset, and the loop then exits without consuming another message —
+    the `while not stopping.is_set()` check runs only between messages,
+    never mid-message."""
     while not stopping.is_set():
         # num_messages=1 preserves the one-message-at-a-time semantics the
         # offset model depends on. Note this gains none of consume()'s usual

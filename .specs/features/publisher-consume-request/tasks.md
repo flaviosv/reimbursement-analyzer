@@ -15,7 +15,7 @@ without it.**
 **Spec**: `.specs/features/publisher-consume-request/spec.md`
 **Design**: `.specs/features/publisher-consume-request/design.md`
 **Risks**: `.specs/RISKS.md` (R-001 … R-005)
-**Status**: Draft
+**Status**: Complete — see `validation.md` (all 13 tasks, Verifier PASS)
 
 ---
 
@@ -133,20 +133,22 @@ file, same conventions
 
 **Done when**:
 
-- [ ] `AttemptError` has `attempt: int`, `occurred_at: AwareDatetime`,
+- [x] `AttemptError` has `attempt: int`, `occurred_at: AwareDatetime`,
       `stage: Literal["db-insert", "publish"]`, `error_type: str`, `message: str`
-- [ ] `AttemptError.next(errors, stage, exc)` returns the next entry with
-      `attempt == len(errors) + 1` and an aware UTC `occurred_at`
-- [ ] `RequestEnvelope.errors: list[AttemptError] = []`
-- [ ] `ReimbursementEnvelope` has `uuid: UUID`, `retry: int`,
+- [x] `AttemptError.next(errors, stage, exc)` returns the next entry with
+      `attempt == len(errors) + 1` and an aware UTC `occurred_at` —
+      renamed to `from_exception(attempt, stage, exc, occurred_at=None)`
+      in the PR #5 comment-triage pass (Q11/A14); behaviour unchanged
+- [x] `RequestEnvelope.errors: list[AttemptError] = []`
+- [x] `ReimbursementEnvelope` has `uuid: UUID`, `retry: int`,
       `published_at: AwareDatetime`, `errors: list[AttemptError] = []` — and
       **no payload field** (AD-015)
-- [ ] A test parses an envelope JSON **without** an `errors` key and asserts it
+- [x] A test parses an envelope JSON **without** an `errors` key and asserts it
       yields `[]` — the back-compat guarantee for messages already on the topic
-- [ ] A test asserts `AttemptError.next` appends rather than replaces (attempt
+- [x] A test asserts `AttemptError.next` appends rather than replaces (attempt
       numbers 1→2→3 across successive calls)
-- [ ] Gate check passes: `uv run pytest -q -m "not integration"`
-- [ ] Test count: 145 + ≥6 new, all passing (no silent deletions)
+- [x] Gate check passes: `uv run pytest -q -m "not integration"`
+- [x] Test count: 145 + ≥6 new, all passing (no silent deletions)
 
 **Tests**: unit
 **Gate**: quick
@@ -173,17 +175,17 @@ envelope-byte assertions that cover it.
 
 **Done when**:
 
-- [ ] Prefix is `{"retry":0,"published_at":"…","errors":[],"payload":` — the
+- [x] Prefix is `{"retry":0,"published_at":"…","errors":[],"payload":` — the
       byte-splice approach is **unchanged**, only the literal grows
-- [ ] The payload half stays byte-for-byte identical to the request body — the
+- [x] The payload half stays byte-for-byte identical to the request body — the
       existing assertion is updated for the new prefix, **never weakened or deleted**
-- [ ] A test round-trips the result through `RequestEnvelope.model_validate_json`
+- [x] A test round-trips the result through `RequestEnvelope.model_validate_json`
       and asserts `errors == []`
-- [ ] `test_integration.py`'s broker round-trip still asserts byte-identical
+- [x] `test_integration.py`'s broker round-trip still asserts byte-identical
       delivery
-- [ ] Gate check passes: `uv run pytest -q` (this task's coverage includes the
+- [x] Gate check passes: `uv run pytest -q` (this task's coverage includes the
       Kafka-container test)
-- [ ] Test count: T1's total + ≥1 new, all passing (no silent deletions)
+- [x] Test count: T1's total + ≥1 new, all passing (no silent deletions)
 
 **Tests**: unit + integration
 **Gate**: full
@@ -210,23 +212,23 @@ same `to_*_config()` idiom
 
 **Done when**:
 
-- [ ] `REIMBURSEMENT_TOPIC = "Reimbursement"` and `MAX_RETRY = 3` sit with the
+- [x] `REIMBURSEMENT_TOPIC = "Reimbursement"` and `MAX_RETRY = 3` sit with the
       other wire constants (module level, not in a dataclass)
-- [ ] `DatabaseConfig(dsn: str | None, pool_min_size, pool_max_size)` —
+- [x] `DatabaseConfig(dsn: str | None, pool_min_size, pool_max_size)` —
       **`os.getenv`, never `os.environ[...]`**; a test asserts `load_config()`
       succeeds with `DATABASE_URL` unset (api must still boot without it)
-- [ ] `FailureLogConfig(logger_name, max_message_chars)`
-- [ ] `PublisherConfig(consumer_group_id, item_concurrency=10, consume_timeout_seconds)`
-- [ ] `PublisherConfig.to_consumer_config(kafka)` sets
+- [x] `FailureLogConfig(logger_name, max_message_chars)`
+- [x] `PublisherConfig(consumer_group_id, item_concurrency=10, consume_timeout_seconds)`
+- [x] `PublisherConfig.to_consumer_config(kafka)` sets
       `enable.auto.commit=False`, `auto.offset.reset="earliest"`, `group.id`,
       and both fetch sizes from `KAFKA_MAX_MESSAGE_BYTES`; SASL/TLS branches are
       **reused from `KafkaConfig`, not re-derived**
-- [ ] A test asserts `enable.auto.commit` is `False` — not merely present
-- [ ] A test asserts both fetch limits equal `KAFKA_MAX_MESSAGE_BYTES` (PUB-34)
-- [ ] No dataclass gains a `from_env()` — `load_config()` stays the only
+- [x] A test asserts `enable.auto.commit` is `False` — not merely present
+- [x] A test asserts both fetch limits equal `KAFKA_MAX_MESSAGE_BYTES` (PUB-34)
+- [x] No dataclass gains a `from_env()` — `load_config()` stays the only
       env-reading site (AD-023)
-- [ ] Gate check passes: `uv run pytest -q -m "not integration"`
-- [ ] Test count: T2's total + ≥8 new, all passing (no silent deletions)
+- [x] Gate check passes: `uv run pytest -q -m "not integration"`
+- [x] Test count: T2's total + ≥8 new, all passing (no silent deletions)
 
 **Tests**: unit
 **Gate**: quick
@@ -235,10 +237,20 @@ same `to_*_config()` idiom
 
 ---
 
-### T4: Add the duplicate error type and a PII-safe sanitiser
+### T4: Add a PII-safe sanitiser
 
-**What**: `DuplicateRequest` plus `sanitize(exc)`, which renders an exception for
-stdout without leaking driver-supplied values.
+**Superseded (Q20/Q24, 2026-08-08):** this task originally planned a
+`DuplicateRequest` exception type alongside `sanitize(exc)`. It was built,
+then removed in the Verifier's round-1 fix pass as dead code —
+`repository.is_duplicate(exc)` classifies the driver's own
+`UniqueViolationError` by `constraint_name` directly; nothing ever needed a
+purpose-built exception type to carry that classification (see
+`validation.md`'s round-1 gap #9). The checklist below is edited to match
+what actually shipped, rather than left describing a class that no longer
+exists.
+
+**What**: `sanitize(exc)`, which renders an exception for stdout without
+leaking driver-supplied values.
 **Where**: `src/shared/src/shared/errors.py` (modify),
 `src/shared/tests/test_errors.py` (new)
 **Depends on**: None
@@ -252,21 +264,22 @@ stdout without leaking driver-supplied values.
 
 **Done when**:
 
-- [ ] `DuplicateRequest` defined alongside the existing exceptions
-- [ ] `sanitize(exc)` returns the exception class name plus, when present, the
+- [x] ~~`DuplicateRequest` defined alongside the existing exceptions~~ —
+      not built; see the superseded note above
+- [x] `sanitize(exc)` returns the exception class name plus, when present, the
       constraint name — and **nothing else**
-- [ ] A test builds an exception carrying a Postgres-shaped `detail`
+- [x] A test builds an exception carrying a Postgres-shaped `detail`
       (`Key (request_id, lower(submitted_by))=(REQ-1, ana@company.com) already
       exists`) and asserts the email is **absent** from `sanitize`'s output (PUB-15)
-- [ ] A test asserts `sanitize` never raises on an exception with no
+- [x] A test asserts `sanitize` never raises on an exception with no
       `constraint_name`/`detail` attributes
-- [ ] Gate check passes: `uv run pytest -q -m "not integration"`
-- [ ] Test count: T3's total + ≥4 new, all passing (no silent deletions)
+- [x] Gate check passes: `uv run pytest -q -m "not integration"`
+- [x] Test count: T3's total + ≥4 new, all passing (no silent deletions)
 
 **Tests**: unit
 **Gate**: quick
 
-**Commit**: `feat(shared): add duplicate error type and pii-safe sanitiser`
+**Commit**: `feat(shared): add pii-safe sanitiser`
 
 ---
 
@@ -288,17 +301,17 @@ logger — the bottom of every fallback chain.
 
 **Done when**:
 
-- [ ] `write(config, record: dict) -> None` — **synchronous**; emits one JSON
+- [x] `write(config, record: dict) -> None` — **synchronous**; emits one JSON
       object to `logging.getLogger(config.logger_name)` at critical level
-- [ ] Writes no file and opens no path — durability is the log handler's job
+- [x] Writes no file and opens no path — durability is the log handler's job
       (design: "Why a logger, not a file")
-- [ ] **Never raises**: a test forces the underlying logger to throw and asserts
+- [x] **Never raises**: a test forces the underlying logger to throw and asserts
       `write` returns normally
-- [ ] Long values are truncated to `max_message_chars`; a test asserts the cap
-- [ ] A test asserts the emitted record is valid JSON and carries the fields the
+- [x] Long values are truncated to `max_message_chars`; a test asserts the cap
+- [x] A test asserts the emitted record is valid JSON and carries the fields the
       design names (`request_id`, `stage`, `errors`, outcome)
-- [ ] Gate check passes: `uv run pytest -q -m "not integration"`
-- [ ] Test count: T4's total + ≥5 new, all passing (no silent deletions)
+- [x] Gate check passes: `uv run pytest -q -m "not integration"`
+- [x] Test count: T4's total + ≥5 new, all passing (no silent deletions)
 
 **Tests**: unit
 **Gate**: quick
@@ -325,20 +338,20 @@ rewrite; `helpers.py` stays where it is
 
 **Done when**:
 
-- [ ] `server_url` is session-scoped and defined **once** for the whole
+- [x] `server_url` is session-scoped and defined **once** for the whole
       workspace; a second container is never started
-- [ ] **Verify, do not assume:** the root `conftest.py` can import `helpers` and
+- [x] **Verify, do not assume:** the root `conftest.py` can import `helpers` and
       `migrate`, which resolve only through `pythonpath`. If `pythonpath` is
       applied too late for a rootdir conftest, fall back to keeping the fixture
       in `src/api/tests/conftest.py` and having `src/shared/tests/conftest.py`
       import it — and **record the deviation in the commit body**
-- [ ] The `_clear_config_cache` autouse fixture is not duplicated into two
+- [x] The `_clear_config_cache` autouse fixture is not duplicated into two
       conftests that both apply
-- [ ] Every existing Postgres-backed api test still passes, unchanged
-- [ ] A shared-side test proves the fixture is reachable from
+- [x] Every existing Postgres-backed api test still passes, unchanged
+- [x] A shared-side test proves the fixture is reachable from
       `src/shared/tests/` (connects and runs `SELECT 1`)
-- [ ] Gate check passes: `uv run pytest -q -m "not integration"`
-- [ ] Test count: T5's total + ≥1 new, **zero lost** — this task's whole risk is
+- [x] Gate check passes: `uv run pytest -q -m "not integration"`
+- [x] Test count: T5's total + ≥1 new, **zero lost** — this task's whole risk is
       silently dropping api fixtures
 
 **Tests**: integration (real Postgres)
@@ -369,25 +382,25 @@ inserts, and duplicate detection.
 
 **Done when**:
 
-- [ ] `asyncpg` added to `src/shared/pyproject.toml`; `uv sync --all-packages` resolves
-- [ ] `managed_pool(config)` sets `min_size`/`max_size` **explicitly** — a test
+- [x] `asyncpg` added to `src/shared/pyproject.toml`; `uv sync --all-packages` resolves
+- [x] `managed_pool(config)` sets `min_size`/`max_size` **explicitly** — a test
       asserts they are not asyncpg's `10`/`10` default
-- [ ] `insert_pending(conn, item) -> UUID` populates `request_id`,
+- [x] `insert_pending(conn, item) -> UUID` populates `request_id`,
       `submitted_by`, `submitted_at`, `original_payload`; leaves `status` at its
       `pending` default (PUB-03)
-- [ ] `insert_human_review(conn, item, reason) -> UUID` sets
+- [x] `insert_human_review(conn, item, reason) -> UUID` sets
       `status='human-review'` and `decision_reason`
-- [ ] `is_duplicate(exc)` returns `True` **only** for a `UniqueViolationError`
+- [x] `is_duplicate(exc)` returns `True` **only** for a `UniqueViolationError`
       whose `constraint_name == "reimbursement_request_submitter_key"`
-- [ ] A test proves a primary-key violation is **not** classified as a duplicate
+- [x] A test proves a primary-key violation is **not** classified as a duplicate
       — the misclassification the design calls out
-- [ ] A test inserts the same `(request_id, submitted_by)` twice against a real
+- [x] A test inserts the same `(request_id, submitted_by)` twice against a real
       Postgres and asserts **no second row exists** (PUB-21), not merely that an
       exception was raised
-- [ ] A test proves case-varied `submitted_by` still collides (the index is on
+- [x] A test proves case-varied `submitted_by` still collides (the index is on
       `lower(submitted_by)`)
-- [ ] Gate check passes: `uv run pytest -q -m "not integration"`
-- [ ] Test count: T6's total + ≥8 new, all passing (no silent deletions)
+- [x] Gate check passes: `uv run pytest -q -m "not integration"`
+- [x] Test count: T6's total + ≥8 new, all passing (no silent deletions)
 
 **Tests**: integration (real Postgres)
 **Gate**: quick
@@ -414,18 +427,18 @@ full failure history rendered into `decision_reason`.
 
 **Done when**:
 
-- [ ] `send_human_review(conn, item, errors) -> UUID` inserts a
+- [x] `send_human_review(conn, item, errors) -> UUID` inserts a
       `status='human-review'` row (PUB-23)
-- [ ] `render_history(errors)` renders **every** entry — a test with three
+- [x] `render_history(errors)` renders **every** entry — a test with three
       distinct errors asserts all three messages **and** all three stage names
       appear (PUB-24). A count or summary fails this test
-- [ ] A test with four *identical* errors asserts four entries render, not one —
+- [x] A test with four *identical* errors asserts four entries render, not one —
       a reviewer must be able to tell a permanent fault from a flapping one
-- [ ] With `errors == []`, `decision_reason` is non-null and states the ceiling
+- [x] With `errors == []`, `decision_reason` is non-null and states the ceiling
       was reached with no detail carried (PUB-25)
-- [ ] Each rendered message is truncated to `FailureLogConfig.max_message_chars`
-- [ ] Gate check passes: `uv run pytest -q -m "not integration"`
-- [ ] Test count: T7's total + ≥6 new, all passing (no silent deletions)
+- [x] Each rendered message is truncated to `FailureLogConfig.max_message_chars`
+- [x] Gate check passes: `uv run pytest -q -m "not integration"`
+- [x] Test count: T7's total + ≥6 new, all passing (no silent deletions)
 
 **Tests**: integration (real Postgres) + unit
 **Gate**: quick
@@ -454,21 +467,21 @@ problem for `api`
 
 **Done when**:
 
-- [ ] `src/publisher/src/` holds loose modules; the `publisher/` package
+- [x] `src/publisher/src/` holds loose modules; the `publisher/` package
       directory is gone
-- [ ] `[tool.uv] package = false`, `[build-system]` dropped — uv_build cannot
+- [x] `[tool.uv] package = false`, `[build-system]` dropped — uv_build cannot
       wheel loose modules (AD-018's verified finding)
-- [ ] Dockerfile sets `ENV PYTHONPATH=/app/src/publisher/src`; **both** CMDs
+- [x] Dockerfile sets `ENV PYTHONPATH=/app/src/publisher/src`; **both** CMDs
       change from `python -m publisher.consumer` to `python -m consumer`
       (dev's `watchfiles` invocation included)
-- [ ] The `dev`/`prod` editable-vs-baked split collapses as it did for `api` —
+- [x] The `dev`/`prod` editable-vs-baked split collapses as it did for `api` —
       nothing is installed, every stage runs from source
-- [ ] Root `pythonpath` becomes
+- [x] Root `pythonpath` becomes
       `["src/api/tests", "src/api/src", "src/publisher/src"]`
-- [ ] Publisher's module names do not collide with api's bare
+- [x] Publisher's module names do not collide with api's bare
       `{dependencies, errors, main, migrate}` — `consumer` and `processing` are clear
-- [ ] `docker compose config -q` passes and `docker build --target dev` succeeds
-- [ ] Gate check passes: `uv sync --all-packages && docker compose config -q`,
+- [x] `docker compose config -q` passes and `docker build --target dev` succeeds
+- [x] Gate check passes: `uv sync --all-packages && docker compose config -q`,
       then `uv run pytest -q -m "not integration"` with no test lost
 
 **Tests**: none (packaging layer — matrix says build gate only)
@@ -496,30 +509,30 @@ per-item transaction, duplicate short-circuit, and requeue.
 
 **Done when**:
 
-- [ ] `ItemOutcome` enum: `PUBLISHED | DUPLICATE | REQUEUED | ESCALATED | LOGGED | INVALID`
-- [ ] `process_item` **never raises** — a test drives an unexpected exception
+- [x] `ItemOutcome` enum: `PUBLISHED | DUPLICATE | REQUEUED | ESCALATED | LOGGED | INVALID`
+- [x] `process_item` **never raises** — a test drives an unexpected exception
       through it and asserts an outcome is returned, not propagated (PUB-38)
-- [ ] The publish happens **inside** `async with conn.transaction()`, so a
+- [x] The publish happens **inside** `async with conn.transaction()`, so a
       publish failure rolls back with no explicit rollback call
-- [ ] A test asserts that after a publish failure **no row remains** (PUB-09) —
+- [x] A test asserts that after a publish failure **no row remains** (PUB-09) —
       asserting the fake was called does not satisfy this
-- [ ] A duplicate insert yields `DUPLICATE` with no republish, no escalation,
+- [x] A duplicate insert yields `DUPLICATE` with no republish, no escalation,
       no failure-log entry (PUB-18)
-- [ ] A duplicate drop emits a structured record carrying a stable event name,
+- [x] A duplicate drop emits a structured record carrying a stable event name,
       `request_id`, constraint name, and envelope `retry` (PUB-19)
-- [ ] Non-duplicate insert failure and publish failure both requeue a
+- [x] Non-duplicate insert failure and publish failure both requeue a
       **single-item** `RequestEnvelope` with `retry+1` and exactly one new
       `AttemptError`, with the correct `stage` (PUB-10, PUB-11)
-- [ ] A test drives a second failure and asserts the requeued envelope carries
+- [x] A test drives a second failure and asserts the requeued envelope carries
       **two** entries in order — appended, never truncated (PUB-12)
-- [ ] Requeue failure falls back to the failure log (PUB-16)
-- [ ] Concurrency: an instrumented fake records maximum observed in-flight; a
+- [x] Requeue failure falls back to the failure log (PUB-16)
+- [x] Concurrency: an instrumented fake records maximum observed in-flight; a
       500-item message asserts it **never exceeds 10** (PUB-36). Asserting a
       `Semaphore` was constructed does not satisfy this
-- [ ] A test asserts one item's failure leaves the other items' outcomes
+- [x] A test asserts one item's failure leaves the other items' outcomes
       unchanged (PUB-06)
-- [ ] Gate check passes: `uv run pytest -q -m "not integration"`
-- [ ] Test count: T9's total + ≥18 new, all passing (no silent deletions)
+- [x] Gate check passes: `uv run pytest -q -m "not integration"`
+- [x] Test count: T9's total + ≥18 new, all passing (no silent deletions)
 
 **Tests**: unit
 **Gate**: quick
@@ -546,22 +559,22 @@ items, empty payloads.
 
 **Done when**:
 
-- [ ] The `retry > 3` check happens **once, before fan-out** — a test asserts no
+- [x] The `retry > 3` check happens **once, before fan-out** — a test asserts no
       item is processed through the normal path for such a message (PUB-22)
-- [ ] Escalation produces `ESCALATED` with **no publish and no requeue**,
+- [x] Escalation produces `ESCALATED` with **no publish and no requeue**,
       whether or not the insert succeeded (PUB-26)
-- [ ] Escalation insert failure → failure log carrying the full history (PUB-27)
-- [ ] Escalation hitting the unique constraint → `DUPLICATE`, **not** the
+- [x] Escalation insert failure → failure log carrying the full history (PUB-27)
+- [x] Escalation hitting the unique constraint → `DUPLICATE`, **not** the
       failure log (PUB-28)
-- [ ] Malformed / non-`RequestEnvelope` message → `LOGGED`, with no DB call and
+- [x] Malformed / non-`RequestEnvelope` message → `LOGGED`, with no DB call and
       no republish (PUB-29); a test asserts the fake repository recorded zero calls
-- [ ] An item failing `ReimbursementRequest` validation → `INVALID`, never
+- [x] An item failing `ReimbursementRequest` validation → `INVALID`, never
       retried and never escalated (PUB-30)
-- [ ] `payload == []` → logged no-op, not an error (PUB-31)
-- [ ] A test feeds a bad message followed by a good one and asserts the good one
+- [x] `payload == []` → logged no-op, not an error (PUB-31)
+- [x] A test feeds a bad message followed by a good one and asserts the good one
       still processes — the loop survives (PUB-32)
-- [ ] Gate check passes: `uv run pytest -q -m "not integration"`
-- [ ] Test count: T10's total + ≥12 new, all passing (no silent deletions)
+- [x] Gate check passes: `uv run pytest -q -m "not integration"`
+- [x] Test count: T10's total + ≥12 new, all passing (no silent deletions)
 
 **Tests**: unit
 **Gate**: quick
@@ -589,22 +602,22 @@ from `shared/producer.py`; `managed_pool` from T7
 
 **Done when**:
 
-- [ ] The `SampleMessage` / `sample-queue` placeholder is **gone**
-- [ ] `AIOConsumer` is constructed **inside** the running loop, never at import
+- [x] The `SampleMessage` / `sample-queue` placeholder is **gone**
+- [x] `AIOConsumer` is constructed **inside** the running loop, never at import
       — it calls `asyncio.get_event_loop()` (`_AIOConsumer.py:47`)
-- [ ] Uses `consume(num_messages=1)`, not `poll()`
-- [ ] The offset is committed **once per message, after every item settles** — a
+- [x] Uses `consume(num_messages=1)`, not `poll()`
+- [x] The offset is committed **once per message, after every item settles** — a
       test with a fake consumer asserts the commit happens after the last item,
       and exactly once (PUB-07, PUB-40)
-- [ ] A test asserts no commit occurs while items are still in flight
-- [ ] Startup asserts `pool_max_size >= item_concurrency` and **refuses to
+- [x] A test asserts no commit occurs while items are still in flight
+- [x] Startup asserts `pool_max_size >= item_concurrency` and **refuses to
       boot** otherwise; a test asserts the failure is raised, with the message
       naming both values (PUB-41, R-005)
-- [ ] Startup fails clearly when `DATABASE_URL` is unset
-- [ ] A shutdown signal lets the current message finish and commit, then exits;
+- [x] Startup fails clearly when `DATABASE_URL` is unset
+- [x] A shutdown signal lets the current message finish and commit, then exits;
       a test asserts an interrupted message's offset is **not** committed (PUB-33)
-- [ ] Gate check passes: `uv run pytest -q -m "not integration"`
-- [ ] Test count: T11's total + ≥10 new, all passing (no silent deletions)
+- [x] Gate check passes: `uv run pytest -q -m "not integration"`
+- [x] Test count: T11's total + ≥10 new, all passing (no silent deletions)
 
 **Tests**: unit
 **Gate**: quick
@@ -632,19 +645,19 @@ fixture from T6
 
 **Done when**:
 
-- [ ] Marked `@pytest.mark.integration` so the Quick gate stays Kafka-free
-- [ ] A real multi-item `Request` envelope is produced, consumed by the
+- [x] Marked `@pytest.mark.integration` so the Quick gate stays Kafka-free
+- [x] A real multi-item `Request` envelope is produced, consumed by the
       publisher, and yields exactly one committed row **and** one
       `Reimbursement` message **per item** (PUB-02)
-- [ ] Each consumed `Reimbursement` message carries the `uuid` of the row that
+- [x] Each consumed `Reimbursement` message carries the `uuid` of the row that
       exists in Postgres, and **no payload** (AD-015)
-- [ ] The source message's offset advances exactly once (PUB-07, PUB-40)
-- [ ] A message sized near `KAFKA_MAX_MESSAGE_BYTES` is consumed and processed —
+- [x] The source message's offset advances exactly once (PUB-07, PUB-40)
+- [x] A message sized near `KAFKA_MAX_MESSAGE_BYTES` is consumed and processed —
       proving the consumer's fetch sizing, not just the producer's (PUB-35)
-- [ ] The Kafka container is sized **from** `KAFKA_MAX_MESSAGE_BYTES`, never a
+- [x] The Kafka container is sized **from** `KAFKA_MAX_MESSAGE_BYTES`, never a
       retyped literal
-- [ ] Gate check passes: `uv run pytest -q`
-- [ ] Test count: T12's total + ≥4 new, all passing (no silent deletions)
+- [x] Gate check passes: `uv run pytest -q`
+- [x] Test count: T12's total + ≥4 new, all passing (no silent deletions)
 
 **Tests**: integration
 **Gate**: full
