@@ -93,11 +93,30 @@ class PublisherConfig:
 
 
 @dataclass(frozen=True)
+class AgentConfig:
+    consumer_group_id: str
+    consume_timeout_seconds: float = 1.0
+
+    def to_consumer_config(self, kafka: KafkaConfig) -> dict[str, Any]:
+        # No fetch.max.bytes/max.partition.fetch.bytes override, unlike
+        # PublisherConfig: Reimbursement messages are small, fixed-shape
+        # envelopes, so librdkafka's default fetch sizing is sufficient.
+        return {
+            "bootstrap.servers": kafka.bootstrap_servers,
+            "group.id": self.consumer_group_id,
+            "auto.offset.reset": "earliest",
+            "enable.auto.commit": False,
+            **kafka.security_config(),
+        }
+
+
+@dataclass(frozen=True)
 class Config:
     kafka: KafkaConfig
     database: DatabaseConfig
     failure_log: FailureLogConfig
     publisher: PublisherConfig
+    agent: AgentConfig
 
 
 @lru_cache(maxsize=1)
@@ -130,5 +149,8 @@ def load_config() -> Config:
         ),
         publisher=PublisherConfig(
             consumer_group_id=os.getenv("PUBLISHER_CONSUMER_GROUP_ID", "publisher"),
+        ),
+        agent=AgentConfig(
+            consumer_group_id=os.getenv("AGENT_CONSUMER_GROUP_ID", "agent"),
         ),
     )
