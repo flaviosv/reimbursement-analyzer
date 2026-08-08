@@ -29,8 +29,18 @@
 │   │   │           └── producer.py    # Envelope building + publish wrapper
 │   │   ├── tests/                # Mirrors src/ layout
 │   │   └── Dockerfile            # Multi-stage: builder / dev / migrate / prod
-│   ├── agent/                 # LLM evaluation layer — stub only
-│   │   └── src/agent/consumer.py  # Placeholder Kafka consumer
+│   ├── agent/                 # Consume Reimbursement, resolve by uuid — implemented; decision layer not yet
+│   │   ├── src/agent/            # Real installable package (unlike flattened api/publisher)
+│   │   │   ├── consumer.py         # Composition root: pool/producer/consumer lifecycle, offset commit
+│   │   │   ├── validation.py       # Decision tree: resolve, staleness guard, requeue, retry-ceiling escalation
+│   │   │   └── config.py           # AgentConfig (consumer_group_id, consume_timeout_seconds), load_agent_config()
+│   │   └── tests/
+│   │       ├── conftest.py         # Agent-local Kafka container fixture
+│   │       ├── agent_fakes.py      # FakePool/FakeConnection; re-exports shared.testing.FakeProducer
+│   │       ├── test_config.py
+│   │       ├── test_consumer.py
+│   │       ├── test_validation.py
+│   │       └── test_integration.py   # Real Kafka + Postgres round trip
 │   ├── publisher/              # Consume Request, persist, publish Reimbursement — implemented
 │   │   ├── src/                  # Loose modules, no package dir (flat layout, like api)
 │   │   │   ├── consumer.py         # Composition root: pool/producer/consumer lifecycle, offset commit
@@ -49,9 +59,11 @@
 │           ├── models.py          # Cross-service pydantic models, AttemptError, ReimbursementEnvelope
 │           ├── producer.py        # Generic Kafka publish + producer lifecycle
 │           └── reimbursement/     # Domain slice: persistence for the reimbursement table
-│               ├── repository.py           # managed_pool(), insert_pending, insert_human_review, is_duplicate
+│               ├── repository.py           # managed_pool(), insert_pending, insert_human_review, is_duplicate, get_by_uuid
 │               └── use_cases/
-│                   └── send_human_review.py  # render_history(), send_human_review()
+│                   └── send_human_review.py  # render_history(), send_human_review(), escalate_existing()
+│           ├── signals.py         # install_shutdown_handlers() — SIGINT/SIGTERM → asyncio.Event (used by agent only so far)
+│           └── testing.py         # FakeProducer — the one test double genuinely reused across service test suites
 ├── docker-compose.yml          # Full local stack (app infra + LangFuse + 3 services)
 ├── pyproject.toml              # Workspace root — pytest config, dev dependency group
 └── uv.lock
@@ -85,8 +97,9 @@
 
 ### `agent`
 
-- **Purpose (intended):** consumes `Reimbursement`, runs the LLM/rules decision layer (LangGraph), records the decision.
-- **Current state:** still a single `consumer.py` that subscribes to a placeholder topic (`sample-topic`) and prints whatever `shared.models.SampleMessage` it receives — structural scaffolding only, not real business logic. Unlike `publisher`, this has not changed.
+- **Purpose:** consumes `Reimbursement`, resolves the row by `uuid`, and settles it into one of resolved / stale / ghost / requeued / escalated / logged / invalid — the middle link between `publisher`'s handoff and a (not yet built) decision policy.
+- **Location:** `src/agent/src/agent/{consumer,validation,config}.py` — a real installable package, unlike the flattened `api`/`publisher`.
+- **Key files:** `consumer.py` (Kafka consumer lifecycle, offset commit), `validation.py` (the decision tree — `handle_message`, resolve-by-uuid, staleness guard, ghost tolerance (R-001), transient-failure requeue, `retry > 3` escalation reusing `shared.reimbursement.use_cases.send_human_review.escalate_existing`), `config.py` (`AgentConfig`). Fully implemented and tested — see `TESTING.md`. **Not yet implemented:** the actual decision/rules/LLM evaluation policy (auto-approve/auto-reject/human-review classification) — `langchain`/`langgraph` remain declared, unused dependencies.
 
 ## Where Things Live
 
@@ -112,6 +125,6 @@
 | Package | Path | Responsibility |
 | ------- | ---- | -------------- |
 | `api` | `src/api` | Public HTTP API — intake, validation, publish to Kafka |
-| `agent` | `src/agent` | LLM-based decision evaluation (stub) |
+| `agent` | `src/agent` | Consume `Reimbursement`, resolve by uuid, requeue/escalate (implemented); decision policy not yet built |
 | `publisher` | `src/publisher` | Consume `Request`, persist to `reimbursement`, publish `Reimbursement` (implemented) |
 | `shared` | `src/shared` | Shared kernel: models, config, Kafka producer, `reimbursement` persistence |
