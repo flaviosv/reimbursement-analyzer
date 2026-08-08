@@ -61,8 +61,8 @@ _INVALID_REVIEW_CASES = [
     ),
     pytest.param(
         {**_REJECT_PAYLOAD, "status": "cancelled"},
-        "does not match any of the expected tags",
-        id="invalid-status",
+        "body: Input tag 'cancelled' found using 'status' does not match any of the expected tags",
+        id="invalid-status-falls-back-to-body-on-empty-loc",
     ),
 ]
 
