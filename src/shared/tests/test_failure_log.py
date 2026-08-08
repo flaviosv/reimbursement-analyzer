@@ -1,11 +1,13 @@
 import builtins
 import json
 import logging
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 from shared import failure_log
 from shared.config import FailureLogConfig
+from shared.models import AttemptError
 
 CONFIG = FailureLogConfig(logger_name="test.failures", max_message_chars=40)
 
@@ -118,14 +120,6 @@ class DescribeWrite:
         assert len(fallback_records) == 1
         assert fallback_records[0].levelno == logging.ERROR
 
-    def it_does_not_recurse_past_the_configured_depth(self) -> None:
-        nested: dict[str, Any] = {"value": "leaf"}
-        for _ in range(50):
-            nested = {"nested": nested}
-
-        # Must not raise RecursionError — the whole point of a depth bound.
-        failure_log.write(CONFIG, {"event": "deep", "payload": nested})
-
     def it_opens_no_file_of_its_own(
         self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -141,3 +135,45 @@ class DescribeWrite:
             failure_log.write(CONFIG, _record())
 
         assert len(_emitted(caplog)) == 1
+
+    def it_does_not_recurse_past_the_configured_depth(self) -> None:
+        nested: dict[str, Any] = {"value": "leaf"}
+        for _ in range(50):
+            nested = {"nested": nested}
+
+        # Must not raise RecursionError — the whole point of a depth bound.
+        failure_log.write(CONFIG, {"event": "deep", "payload": nested})
+
+
+class DescribeBuildRecord:
+    def it_carries_the_event_index_request_id_item_and_errors(self) -> None:
+        error = AttemptError(
+            attempt=1,
+            occurred_at=datetime(2026, 4, 10, 9, 0, 0, tzinfo=UTC),
+            stage="db-insert",
+            error_type="RuntimeError",
+            message="boom",
+        )
+        item = {"request_id": "REQ-1", "submitted_by": "person@example.com"}
+
+        record = failure_log.build_record("some.event", 2, item, [error], outcome="logged")
+
+        assert record["event"] == "some.event"
+        assert record["item_index"] == 2
+        assert record["request_id"] == "REQ-1"
+        assert record["item"] == item
+        assert record["errors"] == [
+            {
+                "attempt": 1,
+                "occurred_at": "2026-04-10T09:00:00Z",
+                "stage": "db-insert",
+                "error_type": "RuntimeError",
+                "message": "boom",
+            }
+        ]
+        assert record["outcome"] == "logged"
+
+    def it_returns_none_for_request_id_when_the_item_is_not_a_dict(self) -> None:
+        record = failure_log.build_record("some.event", 0, "not-a-dict", [])
+
+        assert record["request_id"] is None

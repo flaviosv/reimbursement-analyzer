@@ -224,7 +224,7 @@ async def escalate_item(
         )
         failure_log.write(
             deps.config.failure_log,
-            _failure_record(
+            failure_log.build_record(
                 ESCALATION_FAILED_EVENT,
                 index,
                 item,
@@ -256,7 +256,7 @@ def _accepts(
         )
         failure_log.write(
             deps.config.failure_log,
-            _failure_record(
+            failure_log.build_record(
                 INVALID_ITEM_EVENT,
                 index,
                 item,
@@ -317,7 +317,7 @@ async def _requeue(
     except PublishFailed as requeue_exc:
         failure_log.write(
             deps.config.failure_log,
-            _failure_record(
+            failure_log.build_record(
                 ITEM_FAILED_EVENT,
                 index,
                 item,
@@ -346,31 +346,6 @@ def _log_duplicate(envelope: RequestEnvelope, item: dict[str, Any], exc: BaseExc
             }
         ),
     )
-
-
-def _failure_record(
-    event: str,
-    index: int,
-    item: Any,
-    errors: list[AttemptError],
-    **extra: Any,
-) -> dict[str, Any]:
-    """The shape every last-resort record shares. Unlike the stdout logs
-    above it carries the item in full, not sanitized down to type/constraint —
-    the failure log exists precisely so an unhandleable item is not lost, and
-    it sits inside the payload's own trust boundary. "In full" bounded by
-    max_message_chars per field/key like everything else `failure_log.write`
-    emits (Q7) — not byte-exact for a field longer than that, which is why
-    `_malformed_message_record` logs items individually rather than as one
-    blob (R1): truncation then trims each item, not the whole batch."""
-    return {
-        "event": event,
-        "item_index": index,
-        "request_id": _request_id(item),
-        "item": item,
-        "errors": [error.model_dump(mode="json") for error in errors],
-        **extra,
-    }
 
 
 def _request_id(item: Any) -> str | None:
