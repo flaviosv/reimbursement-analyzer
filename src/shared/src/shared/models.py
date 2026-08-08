@@ -1,4 +1,6 @@
-from typing import Annotated, Any
+from datetime import UTC, datetime
+from typing import Annotated, Any, Literal, Self
+from uuid import UUID
 
 from pydantic import (
     AwareDatetime,
@@ -8,6 +10,8 @@ from pydantic import (
     EmailStr,
     StringConstraints,
 )
+
+Stage = Literal["db-insert", "publish"]
 
 
 def _require_str(value: object) -> object:
@@ -46,6 +50,30 @@ class ReimbursementRequest(BaseModel):
     submitted_at: Annotated[AwareDatetime, BeforeValidator(_require_str)]
 
 
+class AttemptError(BaseModel):
+    """One failed attempt at turning a request item into a reimbursement.
+
+    The history travels on the envelope because the consumer that eventually
+    sees `retry = 4` is a different poll — possibly a different process — and
+    has no other way to learn what failed on attempts 1-3 (AD-014)."""
+
+    attempt: int
+    occurred_at: AwareDatetime
+    stage: Stage
+    error_type: str
+    message: str
+
+    @classmethod
+    def next(cls, errors: list["AttemptError"], stage: Stage, exc: Exception) -> Self:
+        return cls(
+            attempt=len(errors) + 1,
+            occurred_at=datetime.now(UTC),
+            stage=stage,
+            error_type=type(exc).__name__,
+            message=str(exc),
+        )
+
+
 class RequestEnvelope(BaseModel):
     """The message shape published to the `Request` Kafka topic. The write
     path never constructs this via the model — the envelope is byte-spliced
@@ -54,4 +82,16 @@ class RequestEnvelope(BaseModel):
 
     retry: int
     published_at: AwareDatetime
+    errors: list[AttemptError] = []
     payload: list[dict[str, Any]]
+
+
+class ReimbursementEnvelope(BaseModel):
+    """The message shape published to the `Reimbursement` Kafka topic. It
+    carries the row's `uuid` and no payload — the Agent reads the payload
+    back from `reimbursement.original_payload` (AD-015)."""
+
+    uuid: UUID
+    retry: int
+    published_at: AwareDatetime
+    errors: list[AttemptError] = []
