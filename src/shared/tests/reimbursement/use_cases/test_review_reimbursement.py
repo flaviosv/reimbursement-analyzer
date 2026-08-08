@@ -130,6 +130,11 @@ class DescribeRejectReimbursement:
         with pytest.raises(ReimbursementNotEligible):
             await reject_reimbursement(db, uuid, reason="x", approved_by="a@example.com")
 
+        status = await db.fetchval("SELECT status FROM reimbursement WHERE uuid = $1", uuid)
+        assert status == "human-approved"
+        count = await db.fetchval("SELECT count(*) FROM human_review WHERE reimbursement_uuid = $1", uuid)
+        assert count == 0
+
     async def it_raises_reimbursement_not_eligible_when_the_entity_is_incomplete(
         self, db: asyncpg.Connection
     ) -> None:
@@ -138,6 +143,62 @@ class DescribeRejectReimbursement:
         with pytest.raises(ReimbursementNotEligible):
             await reject_reimbursement(db, uuid, reason="x", approved_by="a@example.com")
 
+        count = await db.fetchval("SELECT count(*) FROM human_review WHERE reimbursement_uuid = $1", uuid)
+        assert count == 0
+
+
+class DescribeTransactionAtomicity:
+    """spec.md Edge Cases: a failure between the two writes must roll back
+    both, not leave the `reimbursement` status change committed with no
+    matching `human_review` row. Simulated by making the second write
+    (`record_human_review_decision`, which always runs after the row
+    update) raise inside the `async with conn.transaction():` block."""
+
+    async def it_rolls_back_the_approve_status_change_when_the_review_write_fails(
+        self, db: asyncpg.Connection, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        uuid = await _seed(db, "REQ-UC-TX-APPROVE-ROLLBACK")
+
+        async def _boom(*_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("simulated failure between the two writes")
+
+        monkeypatch.setattr(
+            "shared.reimbursement.use_cases.review_reimbursement.record_human_review_decision", _boom
+        )
+
+        with pytest.raises(RuntimeError):
+            await approve_reimbursement(
+                db,
+                uuid,
+                receipts_value=Decimal("50.00"),
+                receipts_date=date(2026, 1, 5),
+                receipts_currency="BRL",
+                reason="looks good",
+                approved_by="reviewer@example.com",
+            )
+
+        status = await db.fetchval("SELECT status FROM reimbursement WHERE uuid = $1", uuid)
+        assert status == "human-review"
+        count = await db.fetchval("SELECT count(*) FROM human_review WHERE reimbursement_uuid = $1", uuid)
+        assert count == 0
+
+    async def it_rolls_back_the_reject_status_change_when_the_review_write_fails(
+        self, db: asyncpg.Connection, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        uuid = await _seed_with_receipts(db, "REQ-UC-TX-REJECT-ROLLBACK")
+
+        async def _boom(*_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("simulated failure between the two writes")
+
+        monkeypatch.setattr(
+            "shared.reimbursement.use_cases.review_reimbursement.record_human_review_decision", _boom
+        )
+
+        with pytest.raises(RuntimeError):
+            await reject_reimbursement(db, uuid, reason="bad receipt", approved_by="reviewer@example.com")
+
+        status = await db.fetchval("SELECT status FROM reimbursement WHERE uuid = $1", uuid)
+        assert status == "human-review"
         count = await db.fetchval("SELECT count(*) FROM human_review WHERE reimbursement_uuid = $1", uuid)
         assert count == 0
 

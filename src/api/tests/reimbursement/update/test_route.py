@@ -102,6 +102,8 @@ class DescribePutReimbursement:
             response = await client.put(f"/api/v1/reimbursement/{uuid}", json=payload)
 
         assert response.status_code == 422
+        status = await db.fetchval("SELECT status FROM reimbursement WHERE uuid = $1", uuid)
+        assert status == "human-review"
 
     async def it_returns_400_when_approving_an_ineligible_status(self, db: asyncpg.Connection) -> None:
         uuid = await _seed(db, "REQ-PUT-APPROVE-INELIGIBLE", status="human-approved")
@@ -143,6 +145,8 @@ class DescribePutReimbursement:
             response = await client.put(f"/api/v1/reimbursement/{uuid}", json=_REJECT_PAYLOAD)
 
         assert response.status_code == 400
+        status = await db.fetchval("SELECT status FROM reimbursement WHERE uuid = $1", uuid)
+        assert status == "human-approved"
 
     async def it_returns_400_when_rejecting_an_incomplete_entity(self, db: asyncpg.Connection) -> None:
         uuid = await _seed(db, "REQ-PUT-REJECT-INCOMPLETE")

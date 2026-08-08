@@ -40,8 +40,10 @@ class DescribeValidateReview:
     def it_raises_when_a_required_approve_field_is_missing(self) -> None:
         payload = {k: v for k, v in _APPROVE_PAYLOAD.items() if k != "receipts_value"}
 
-        with pytest.raises(ReviewInvalid):
+        with pytest.raises(ReviewInvalid) as exc_info:
             validate_review(_body(payload))
+
+        assert "receipts_value" in str(exc_info.value)
 
     def it_raises_when_receipts_date_is_malformed(self) -> None:
         payload = {**_APPROVE_PAYLOAD, "receipts_date": "not-a-date"}
@@ -66,6 +68,14 @@ class DescribeValidateReview:
 
         with pytest.raises(ReviewInvalid):
             validate_review(_body(payload))
+
+    def it_raises_when_reason_is_missing_on_reject(self) -> None:
+        payload = {k: v for k, v in _REJECT_PAYLOAD.items() if k != "reason"}
+
+        with pytest.raises(ReviewInvalid) as exc_info:
+            validate_review(_body(payload))
+
+        assert "reason" in str(exc_info.value)
 
     def it_raises_when_status_is_not_approved_or_rejected(self) -> None:
         payload = {**_REJECT_PAYLOAD, "status": "cancelled"}
