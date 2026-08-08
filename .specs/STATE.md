@@ -771,88 +771,182 @@ only while it stays an installable package** — flattening it would collide
 its natural `consumer.py` with the publisher's. Decide before that feature
 starts.
 
+### AD-027 — PUT/GET reimbursement state-transition rules clarified: three source statuses confirmed, review writes are append + update, uuid-not-found is 404, no identity-field gate
+
+**Date:** 2026-08-08
+**Status:** Active
+
+Four internal contradictions in `docs/SCOPE.md`'s PUT/GET sections, surfaced
+while specifying `api-get-reimbursement`/`api-put-reimbursement`, are
+resolved:
+
+1. **PUT source statuses.** `human-rejected`, `auto-rejected`, and
+   `human-review` are all PUT-eligible, exactly as the API section states.
+   The Decisions section's "not possible to Human-Approve if the
+   Reimbursement is rejected" line does not exclude `human-rejected` — it
+   refers to the two already-*approved* statuses (`auto-approved`/
+   `human-approved`), which were already excluded from PUT's reachable set;
+   money already disbursed cannot be clawed back, which only applies to an
+   approved item, not a rejected one.
+2. **"Do not override the existing record, create a new one."** Refers to
+   `human_review`, which is already DB-enforced append-only
+   (`human_review_append_only` trigger, `0002.create-human-review.sql`). PUT
+   inserts a new `human_review` row per review event and updates
+   `reimbursement.status` (and the approval-only fields) in place — it never
+   creates a second `reimbursement` row.
+3. **404 semantics.** `GET /api/v1/reimbursement`'s list endpoint never
+   returns 404 — a filter matching zero rows is still `200` with an empty
+   `data` array; SCOPE.md's documented 404 for GET is dropped as a spec
+   error. `PUT /api/v1/reimbursement/:uuid` gains 404 for an unknown `uuid`
+   instead — SCOPE.md's own PUT Responses list omitted it despite PUT
+   operating on a path parameter.
+4. **Approval field completeness.** No additional application-level gate
+   beyond the DB's own constraints and the payload's own required fields.
+   `receipts_value`/`receipts_date`/`receipts_currency` being NULL on a
+   `human-review` row is expected — the approval payload already supplies
+   them (SCOPE.md's existing "all fields from the payload are required for
+   approval" rule already covers this). `submitted_by`/`submitted_at` are
+   not part of the PUT payload and are not gated at approval either — both
+   are already guaranteed non-null, since `POST /api/v1/reimbursement`
+   requires them on every item (`shared.models.ReimbursementRequest`).
+
+**Why:** user decisions made while resolving four contradictions between
+`docs/SCOPE.md`'s API section, its own Decisions section, and the actual
+`reimbursement`/`human_review` schema (AD-003/AD-004), surfaced during the
+Specify/Discuss phase for `api-get-reimbursement`/`api-put-reimbursement`.
+
+**Implication:** `docs/SCOPE.md`'s PUT/GET sections and the Human Review
+Decisions bullets are amended in place with inline notes pointing here,
+following the AD-020 precedent — the original text is corrected rather than
+left to silently contradict the two new specs.
+
+**Addendum 2026-08-08 — reject has its own, opposite-direction completeness
+gate.** Point 4 above resolved *approval's* gate (none needed — the payload
+backfills the three receipt fields). Rejecting does **not** backfill them
+(`SCOPE.md:195`: "just the `reason` and `approved_by` are required") — so a
+reimbursement rejected while `receipts_value`/`receipts_date`/
+`receipts_currency` are still NULL would stay permanently incomplete, since
+no other write path sets them. User decision: **reject is blocked with
+`400` unless all three are already non-null on the row**, making no DB
+change. This creates a known dead end, accepted as-is: a `human-review` row
+that never had these three fields extracted can only be resolved by
+*approving* it (which supplies fresh values via its own payload) — rejecting
+such a row is impossible until/unless a future feature adds a way to correct
+these fields independently of a review decision. Recorded here rather than
+as a new AD — same feature pair, same session, extends point 4 rather than
+contradicting it.
+
+---
+
+### AD-028 — GET's `status` filter accepts a comma-separated list, not a single value
+
+**Date:** 2026-08-08
+**Status:** Active
+
+`GET /api/v1/reimbursement?status=` accepts one or more of the five
+client-facing status values joined by commas (e.g.
+`status=human-review,auto-rejected`), matching rows whose status is any one
+of the listed values (SQL `IN (...)`). A single value remains valid syntax
+(the one-element case). Any comma-separated segment that isn't one of the
+five values invalidates the whole filter (`400`) — same as today's
+single-value validation; `pending` remains excluded either way (AD-003 —
+internal-only status, never client-facing).
+
+**Why:** user decision — a reviewer's dashboard commonly needs several
+statuses in one call (e.g. "everything rejected":
+`auto-rejected,human-rejected`) rather than N calls merged client-side.
+
+**Implication:** `docs/SCOPE.md:157-161` amended in place to document the
+comma-separated form. The query-param type is a raw `str` (split and
+validated in code), not FastAPI's native `list[str]` repeated-param
+binding — a repeated `?status=a&status=b` stays a validation error; only the
+comma-joined single-param form is accepted.
+
+---
+
+### AD-029 — Generic DB pool lifecycle relocated: `shared.reimbursement.repository.managed_pool` → `shared.db.managed_pool`
+
+**Date:** 2026-08-08
+**Status:** Active
+
+`managed_pool()` — construct an `asyncpg.Pool` from `DatabaseConfig`,
+guarantee `.close()` on exit — moves to a new `shared/db.py`, mirroring
+`shared/producer.py`'s existing shape (a generic, domain-agnostic
+resource-lifecycle module at the `shared` root). `shared.reimbursement.repository`
+keeps only reimbursement-table SQL, matching its own module docstring's
+stated scope ("every SQL statement against the reimbursement table").
+
+**Why:** user decision, surfaced while designing `api-get-reimbursement`.
+`managed_pool` has zero reimbursement-specific logic — it takes a generic
+`DatabaseConfig` and yields a generic `asyncpg.Pool`. Placing it under
+`shared.reimbursement` mis-scoped it as domain code, the way placing
+`managed_producer` under a hypothetical `shared.reimbursement.producer`
+would have — and `managed_producer` was correctly kept generic at
+`shared/producer.py` from the start (AD-010/AD-019). This corrects a
+placement inconsistency in already-shipped code
+(`publisher-consume-request`, AD-017/AD-025's persistence layer), not a new
+pattern being introduced for the new features alone.
+
+**Implication:** three existing import sites move: `src/publisher/src/consumer.py`,
+`src/publisher/tests/test_integration.py`, and
+`src/shared/tests/reimbursement/test_repository.py` (its `DescribeManagedPool`
+test class relocates to a new `src/shared/tests/test_db.py`, matching the
+1:1 test-mirrors-source convention AD-009 established). Pure relocation, no
+behavior change. Any future domain package needing DB access imports
+`shared.db.managed_pool`, never a sibling domain's repository module. This
+is a prerequisite refactor task for whichever of `api-get-reimbursement`/
+`api-put-reimbursement` is implemented first.
+
 ---
 
 ## Handoff
 
 **Last updated:** 2026-08-08
 
-**Done:** `db-schema-migrations` — merged to `main` via PR #3 (`9799607`).
-`api-post-reimbursement` — all 11 tasks complete, standalone Verifier PASS
-(`.specs/features/api-post-reimbursement/validation.md`), PR #4 opened
-(draft) against `main` on `feature/4-create-reimbursement-endpoint`,
-`/code-review` + `/tests-code-review` run (68 raw findings), all 45 review
-threads on PR #4 now fixed and resolved — 15 the user replied to directly
-(some fixes, some accepted-as-is with a posted rationale), 30 with no reply
-fixed and resolved without waiting on one, per explicit instruction. Full
-suite green (145 tests) after the remediation. Sitting at "wait for the
-user's manual submit/merge of PR #4" — no further autonomous action pending
-here.
+**Done:** `db-schema-migrations` (PR #3) and `api-post-reimbursement` (PR #4)
+— superseded by the below; see git history for detail. `publisher-consume-request`
+— spec (42 requirements) fully implemented and independently verified:
+`.specs/features/publisher-consume-request/validation.md` records
+spec-anchored check 42/42 matched, sensor 18/18 mutants killed, full gate
+274 passed / 0 failed. Built `shared.reimbursement.repository`
+(`managed_pool`, `insert_pending`, `insert_human_review`, `is_duplicate`),
+`shared.reimbursement.use_cases.send_human_review`, and
+`src/publisher/src/{consumer,processing}.py` — the project's first runtime
+DB access (AD-017) and first cross-service persistence layer (AD-025).
+Committed through `11747a5`.
 
-**Structural changes made during PR #4 remediation, relevant to whoever
-touches `api` or `shared` next:** AD-018 (flat `api` layout, `package =
-false`), AD-019 (config/errors classes/kafka producer factory moved to
-`shared` — amended by AD-022), AD-020 (body ceiling 25 MiB → 1 MiB), AD-021
-(`PublishFailed` broad-except pattern), AD-022 (`KafkaConfig` dataclass,
-`api/kafka.py` → `api/producer.py`, `payload.py` → `reimbursement/create/`
-— amended by AD-023), AD-023 (single cached `load_config()` loader,
-`shared.kafka` → `shared.producer`), AD-024 (`get_kafka_config` dropped,
-`api/producer.py` → `api/dependencies.py`). Read these before assuming any
-file path or import from the original `api-post-reimbursement` spec/design
-docs is still accurate — several are now stale (see below).
+**Current branch:** `feature/5_reimbursement_publisher` (this supersedes the
+stale `feature/4-create-reimbursement-endpoint` this section previously
+recorded — the PR #4 branch merged since).
 
-**In flight:** `publisher-consume-request` — spec (42 requirements), context,
-and `design.md` **v3** complete. v3 was rewritten against the `docs/codebase/`
-context set (`1ea1eba`) and AD-018 … AD-024; the staleness this section
-previously warned about is resolved. Awaiting design approval before Tasks.
-No code yet.
+**In flight — new this session (2026-08-08):** Specify phase complete for
+two new features, both placed in `api` per user request:
+`.specs/features/api-get-reimbursement/{spec,context}.md` and
+`.specs/features/api-put-reimbursement/{spec,context}.md`. Both are Large
+scope (new DB read/write paths in `api`, financial state transitions). The
+Discuss phase surfaced four internal contradictions in `docs/SCOPE.md`'s
+PUT/GET sections; all four resolved directly with the user and recorded as
+**AD-027**, with `docs/SCOPE.md` amended in place (inline notes, same style
+as the existing AD-020 amendment) rather than left contradicting the two new
+specs. Both spec.md files are closure-gate-clean (every AC unambiguous,
+every open item resolved or logged as an assumption) but **not yet
+user-confirmed** — that confirmation, then Design, is the next step for
+each.
 
-**ADR numbering reconciled 2026-08-08.** design.md v2 proposed AD-023/AD-024,
-which `0c6d35f` and `7da0697` claimed in the meantime. v3 now proposes:
-**AD-016 vacated** (reserved for a frozen-`Settings`/`from_env()` config that
-was actually taken, in a different shape, as AD-022 + AD-023 — release it so
-the gap in the log is explained); **AD-017 claimed as reserved** (`asyncpg`
-pool + implicit-transaction pattern — still unclaimed and exactly this
-design's DB decision); **AD-025** (`shared` owns cross-service persistence —
-`repository`, `failure_log`, `usecases` — and gains `asyncpg`); **AD-026**
-(`publisher` flattens to `src/publisher/src`, virtual `package = false`).
-None appended yet. AD-017 and AD-025 bind the Agent feature.
+**What GET/PUT will build on, not duplicate:** `shared.reimbursement.repository`
+already has the pool lifecycle and two insert functions; it has no query
+function, no update function, and `api`'s `main.py`/`dependencies.py` have
+never opened a DB pool — wiring that (mirroring the existing
+`managed_producer` lifespan pattern) is common groundwork both features need
+and belongs in Design.
 
-**Remaining prerequisite — one, not four.** Only the envelope change
-survives: `AttemptError` + `RequestEnvelope.errors` in `shared/models.py`,
-and the `"errors":[],` splice prefix in
-`api/src/reimbursement/create/producer.py`. It amends shipped, passing code —
-`test_producer.py` and `test_integration.py` assert envelope bytes. The
-500-item cap (`shared.config.MAX_BATCH_ITEMS`) and the centralised config
-(`shared/config.py`) have both since shipped.
+**Untracked, not part of this session's work:** `.specs/features/agent-consume-reimbursement/`
+(context.md + design.md only, no spec.md — pre-existing, left as found).
+`docs/codebase/*.md` show as modified in git status but were not edited by
+this session — likely a concurrent `architecture-evaluate` run; verify their
+diff before trusting them if picking this up fresh.
 
-**Structural direction taken 2026-08-08** (user): `publisher` flattens to
-`src/publisher/src`; `repository.py`, `failure_log.py`, and a new
-`shared/usecases/send_human_review.py` go to `shared` for Agent reuse; the
-publisher gets no `producer.py` (`shared.producer.publish` is already
-generic) and no `reporting.py`; consumer lifecycle stays publisher-local
-because a consumer's `group.id`/subscription/offset semantics are
-layer-specific, unlike a stateless `publish()`.
-
-**Open task-level questions:** where the Postgres testcontainer fixture lives
-once `src/shared/tests/` needs it (it currently sits in
-`src/api/tests/conftest.py`), and whether `helpers.py` is promoted out of
-`src/api/tests/` rather than cross-imported via `pythonpath`.
-
-**Deferred, decide before the Agent feature:** flat-module names share one
-pytest `sys.path` (`src/api/src` is already on it; `src/publisher/src` joins
-it). Publisher's `consumer.py`/`processing.py` are clear of `api`'s
-`{dependencies, errors, main, migrate}`, so nothing is needed now — but
-`agent` is namespaced only while it stays an installable package. Flattening
-it would collide its `consumer.py` with the publisher's.
-
-**Repo-wide note:** `.specs/` was untracked by git until the prior session —
-a `.gitignore` pattern bug (`!.spec`/`!.spec**`, which doesn't match
-`.specs/` and can't un-ignore a directory via `**` anyway) silently kept
-every spec local-only. Fixed to `!.specs`/`!.specs/**` and the whole
-directory committed for the first time on
+**Repo-wide note (kept from prior entry):** `.specs/` was untracked by git
+until 2026-08-07 — a `.gitignore` pattern bug (`!.spec`/`!.spec**`) silently
+kept every spec local-only. Fixed and committed on
 `feature/4-create-reimbursement-endpoint`.
-
-**Branch:** `feature/4-create-reimbursement-endpoint`, based on `main` at
-`9799607` (post PR #3 merge). Not yet merged — PR #4 is still in draft,
-awaiting the user's own review/submit.
