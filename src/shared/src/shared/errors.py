@@ -15,6 +15,12 @@ class PublishFailed(Exception):
     within the publish timeout."""
 
 
+class ReimbursementFilterInvalid(Exception):
+    """The requested status/limit/offset combination failed the list use
+    case's gate: an out-of-whitelist status value, or an out-of-bounds
+    limit/offset."""
+
+
 def sanitize(exc: BaseException) -> str:
     """Render an exception for stdout: its type, plus whatever diagnostic
     shape is safe to include for that exception kind — never a raw value.
