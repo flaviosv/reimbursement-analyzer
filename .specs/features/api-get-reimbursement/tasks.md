@@ -237,11 +237,11 @@ T7 → T8 → T9
 - Skill: NONE
 
 **Done when**:
-- [ ] `limit: int = 100`, `offset: int = 0` as FastAPI `Query()` params, no `ge`/`le` bounds (that's T6's job)
-- [ ] `parse_status_filter(raw: str | None) -> list[str] | None` splits on `,`, returns segments unchecked, `None` for an absent/empty param
-- [ ] Unit tests: defaults apply when omitted, comma-split produces the right list, empty string behaves as omitted
-- [ ] Gate check passes: `uv run pytest -m "not integration"`
-- [ ] Test count: +4
+- [x] `limit: int = 100`, `offset: int = 0` as FastAPI `Query()` params, no `ge`/`le` bounds (that's T6's job)
+- [x] `parse_status_filter(raw: str | None) -> list[str] | None` splits on `,`, returns segments unchecked, `None` for an absent/empty param
+- [x] Unit tests: defaults apply when omitted, comma-split produces the right list, empty string behaves as omitted
+- [x] Gate check passes: `uv run pytest -m "not integration"`
+- [x] Test count: +4
 
 **Tests**: unit
 **Gate**: quick
@@ -261,11 +261,11 @@ T7 → T8 → T9
 - Skill: NONE
 
 **Done when**:
-- [ ] All three models defined per the design's interfaces
-- [ ] `from_record()` correctly builds `last_human_review` when the record's `hr_*` columns are populated, and `None` when they're `NULL`
-- [ ] Unit tests: both branches of `from_record()`, full round-trip of every `reimbursement` column
-- [ ] Gate check passes: `uv run pytest -m "not integration"`
-- [ ] Test count: +2
+- [x] All three models defined per the design's interfaces
+- [x] `from_record()` correctly builds `last_human_review` when the record's `hr_*` columns are populated, and `None` when they're `NULL`
+- [x] Unit tests: both branches of `from_record()`, full round-trip of every `reimbursement` column
+- [x] Gate check passes: `uv run pytest -m "not integration"`
+- [x] Test count: +2
 
 **Tests**: unit
 **Gate**: quick
@@ -286,12 +286,12 @@ T7 → T8 → T9
 - Skill: NONE
 
 **Done when**:
-- [ ] `GET /api/v1/reimbursement` registered, `Depends(get_pool)`, calls the use case and shapes the response
-- [ ] `_reimbursement_filter_invalid_handler` registered in `register_handlers()` → `400`
-- [ ] `DescribeGetReimbursement` in `test_route.py` covers: happy path with defaults (LIST-01), custom `limit`/`offset` (LIST-01), out-of-bounds `limit`/`offset` → `400` (LIST-02), empty result → `200 []` (LIST-03), single-status filter (LIST-04), multi-status comma filter (LIST-05), status omitted includes `pending` (LIST-06), invalid status → `400` (LIST-07), repeated `status` param → `400` (LIST-08), last-human-review present/absent in the response (LIST-09, LIST-10), `500` on a simulated pool failure (LIST-11)
-- [ ] `DescribeTheRealApp` proves `main.app`'s actual lifespan/wiring serves this route correctly (this is T4's only real test, merge-forwarded here)
-- [ ] Gate check passes: `uv run pytest`
-- [ ] Test count: +12 (11 route cases + 1 real-app case)
+- [x] `GET /api/v1/reimbursement` registered, `Depends(get_pool)`, calls the use case and shapes the response
+- [x] `_reimbursement_filter_invalid_handler` registered in `register_handlers()` → `400`
+- [x] `DescribeGetReimbursement` in `test_route.py` covers: happy path with defaults (LIST-01), custom `limit`/`offset` (LIST-01), out-of-bounds `limit`/`offset` → `400` (LIST-02), empty result → `200 []` (LIST-03), single-status filter (LIST-04), multi-status comma filter (LIST-05), status omitted includes `pending` (LIST-06), invalid status → `400` (LIST-07), repeated `status` param → `400` (LIST-08), last-human-review present/absent in the response (LIST-09, LIST-10), `500` on a simulated pool failure (LIST-11)
+- [x] `DescribeTheRealApp` proves `main.app`'s actual lifespan/wiring serves this route correctly (this is T4's only real test, merge-forwarded here)
+- [x] Gate check passes: `uv run pytest`
+- [x] Test count: +12 (11 route cases + 1 real-app case)
 
 **Tests**: route-level
 **Gate**: full
