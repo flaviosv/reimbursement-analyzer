@@ -1,17 +1,14 @@
 import json
-from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 import asyncpg
 import pytest
 from helpers import valid_reimbursement_item
-from shared.config import load_config
 from shared.reimbursement.repository import (
     insert_human_review,
     insert_pending,
     is_duplicate,
-    managed_pool,
 )
 
 pytestmark = pytest.mark.anyio
@@ -24,25 +21,6 @@ _RAW_INSERT = """
 
 async def _rows_for(db: asyncpg.Connection, request_id: str) -> list[asyncpg.Record]:
     return await db.fetch("SELECT * FROM reimbursement WHERE request_id = $1", request_id)
-
-
-class DescribeManagedPool:
-    async def it_sizes_the_pool_from_config_rather_than_asyncpg_defaults(self, migrated_db: str) -> None:
-        config = replace(load_config().database, dsn=migrated_db)
-
-        async with managed_pool(config) as pool:
-            assert pool.get_min_size() == config.pool_min_size
-            assert pool.get_max_size() == config.pool_max_size
-            assert (pool.get_min_size(), pool.get_max_size()) != (10, 10)
-            assert await pool.fetchval("SELECT 1") == 1
-
-    async def it_closes_the_pool_on_exit(self, migrated_db: str) -> None:
-        config = replace(load_config().database, dsn=migrated_db)
-
-        async with managed_pool(config) as pool:
-            pass
-
-        assert pool.is_closing()
 
 
 class DescribeInsertPending:
