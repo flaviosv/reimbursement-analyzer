@@ -138,7 +138,7 @@ file, same conventions
 - [x] `AttemptError.next(errors, stage, exc)` returns the next entry with
       `attempt == len(errors) + 1` and an aware UTC `occurred_at` —
       renamed to `from_exception(attempt, stage, exc, occurred_at=None)`
-      in the PR #5 comment-triage pass (Q11/A14); behaviour unchanged
+      during review; behaviour unchanged
 - [x] `RequestEnvelope.errors: list[AttemptError] = []`
 - [x] `ReimbursementEnvelope` has `uuid: UUID`, `retry: int`,
       `published_at: AwareDatetime`, `errors: list[AttemptError] = []` — and
@@ -239,8 +239,8 @@ same `to_*_config()` idiom
 
 ### T4: Add a PII-safe sanitiser
 
-**Superseded (Q20/Q24, 2026-08-08):** this task originally planned a
-`DuplicateRequest` exception type alongside `sanitize(exc)`. It was built,
+**Superseded:** this task originally planned a `DuplicateRequest` exception
+type alongside `sanitize(exc)`. It was built,
 then removed in the Verifier's round-1 fix pass as dead code —
 `repository.is_duplicate(exc)` classifies the driver's own
 `UniqueViolationError` by `constraint_name` directly; nothing ever needed a

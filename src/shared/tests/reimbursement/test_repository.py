@@ -96,7 +96,7 @@ class DescribeInsertPending:
         # request_id has strip_whitespace=True on the pydantic model; the raw
         # dict does not carry that normalisation. Storing the raw form would
         # let " REQ-PAD " and "REQ-PAD" coexist as two rows the dedup index
-        # was supposed to treat as the same request (S5).
+        # was supposed to treat as the same request.
         item = valid_reimbursement_item(" REQ-PAD ")
 
         uuid = await insert_pending(db, item)

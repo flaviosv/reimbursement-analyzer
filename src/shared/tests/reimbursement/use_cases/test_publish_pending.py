@@ -51,9 +51,9 @@ class DescribePublishPending:
         self, db: asyncpg.Connection
     ) -> None:
         # The one construction site of ReimbursementEnvelope previously never
-        # forwarded this field at all (H1/Q16) — an item that failed then
-        # succeeded handed the Agent an empty history at exactly the handoff
-        # this field exists to make informative.
+        # forwarded this field at all — an item that failed then succeeded
+        # handed the Agent an empty history at exactly the handoff this
+        # field exists to make informative.
         item = valid_reimbursement_item("REQ-PUBLISH-HISTORY")
         producer = FakeProducer()
         history = [_error(1), _error(2)]

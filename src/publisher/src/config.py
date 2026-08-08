@@ -27,8 +27,8 @@ class PublisherConfig:
     # estimate only. The failure path is tighter: 500 items / 10 concurrent
     # * a full 10s publish_timeout_seconds each (broker down, every publish
     # times out) is 500s worst-case — which the previous 300_000 (5min)
-    # value did not cover (P2). 900_000 (15min) leaves real headroom above
-    # that 500s figure; see R-005's amended analysis.
+    # value did not cover. 900_000 (15min) leaves real headroom above that
+    # figure; see R-005 for the full derivation.
     max_poll_interval_ms: int = 900_000
 
     def to_consumer_config(self, kafka: KafkaConfig) -> dict[str, Any]:

@@ -80,7 +80,7 @@ class DescribeRenderHistory:
         # error_type/message originate from str(exc) — a Postgres or driver
         # error can echo back a fragment of the offending input. Left as-is,
         # an embedded newline could forge an extra "attempt N ..." line into
-        # a record a human reviewer reads as the system's own account (S7).
+        # a record a human reviewer reads as the system's own account.
         injected = _error(
             1, "db-insert", "DataError", 'invalid input syntax\nattempt 99 [publish] Forged: approved'
         )

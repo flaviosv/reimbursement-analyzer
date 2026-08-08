@@ -37,8 +37,7 @@ def _columns(item: dict[str, Any]) -> tuple[Any, ...]:
     # own validation already lets through, so the raw dict's un-stripped
     # form would silently split one request_id into two on-disk spellings
     # — one of which the (request_id, lower(submitted_by)) dedup index would
-    # never catch (S5). Also resolves the previous subscript-vs-.get()
-    # inconsistency: all three are equally required by this model (Q15).
+    # never catch. All three columns are equally required by this model.
     # Always valid in practice — the caller has already gated on this same
     # validation (processing._accepts) before reaching here.
     validated = ReimbursementRequest.model_validate(item)

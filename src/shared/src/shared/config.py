@@ -59,7 +59,7 @@ class DatabaseConfig:
     pool_min_size: int
     pool_max_size: int
     # Neither bounded before: a wedged Postgres blocked a coroutine
-    # forever, with nothing to raise and nothing to time out (P3).
+    # forever, with nothing to raise and nothing to time out.
     # acquire_timeout_seconds bounds the wait for a free pool connection;
     # command_timeout (passed to asyncpg.create_pool) bounds every query
     # run through it.

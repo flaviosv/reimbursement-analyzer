@@ -67,7 +67,7 @@ async def run(deps: Dependencies, consumer: AIOConsumer, stopping: asyncio.Event
     while not stopping.is_set():
         # num_messages=1 preserves the one-message-at-a-time semantics the
         # offset model depends on. Note this gains none of consume()'s usual
-        # advantage over poll() (P12): AIOConsumer's own docstring says that
+        # advantage over poll(): AIOConsumer's own docstring says that
         # benefit comes specifically from amortizing ThreadPoolExecutor
         # overhead "across the entire batch" — with num_messages=1 there is
         # no batch, so this call pays the identical per-call overhead poll()

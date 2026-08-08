@@ -107,7 +107,7 @@ class DescribeDatabaseConfig:
         # Configurable, not just a literal, so a deployment that raises
         # PUBLISHER_ITEM_CONCURRENCY without raising this in step is a
         # startup failure (publisher's check_startup_config) rather than
-        # silent connection starvation under load (R-005 / A7).
+        # silent connection starvation under load (R-005).
         monkeypatch.setenv("DATABASE_POOL_MAX_SIZE", "42")
 
         config = load_config()

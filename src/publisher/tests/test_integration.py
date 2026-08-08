@@ -121,8 +121,8 @@ def _drain_reimbursements(
     Stopping the instant `len(collected) == len(uuids)` (as this used to)
     made every "exactly one message" assertion in this module unable to
     detect an over-publish by construction — it can only prove "at least
-    this many showed up in time" (C2/V3/I5). Once the target count is
-    reached, this keeps draining for `grace_seconds` more before returning,
+    this many showed up in time." Once the target count is reached, this
+    keeps draining for `grace_seconds` more before returning,
     so a genuine double-publish within that window still shows up — without
     taxing the common (correct) case with the full `timeout`.
     """
