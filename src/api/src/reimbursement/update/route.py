@@ -2,10 +2,11 @@ from uuid import UUID
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
-from shared.config import load_config
+from shared.config import MAX_BODY_BYTES, load_config
 
 from dependencies import get_pool
 from errors import MessageResponse
+from reimbursement.create.payload import read_capped
 from reimbursement.update.validation import ApproveReview, validate_review
 from shared.reimbursement.use_cases.review_reimbursement import approve_reimbursement, reject_reimbursement
 
@@ -18,6 +19,10 @@ router = APIRouter()
     responses={
         400: {"model": MessageResponse, "description": "uuid mismatch, or the row's state disallows this decision"},
         404: {"model": MessageResponse, "description": "Unknown reimbursement"},
+        413: {
+            "model": MessageResponse,
+            "description": f"Body exceeds the {MAX_BODY_BYTES // (1024 * 1024)} MiB ceiling",
+        },
         422: {"model": MessageResponse, "description": "Review payload failed its own shape contract"},
         500: {"model": MessageResponse, "description": "Failed to apply the decision"},
     },
@@ -29,7 +34,7 @@ async def put_reimbursement(
     -> respond. No branching logic of its own beyond the uuid consistency
     check — every other failure mode is a raise from validation.py or the
     use case, caught by the app-wide handlers registered in errors.py."""
-    raw = await request.body()
+    raw = await read_capped(request)
     review = validate_review(raw)
     if review.uuid is not None and review.uuid != uuid:
         raise HTTPException(status_code=400, detail="body uuid does not match the path uuid")
