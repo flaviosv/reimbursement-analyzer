@@ -28,6 +28,20 @@ class DescribeListReimbursements:
         with pytest.raises(ReimbursementFilterInvalid):
             await list_reimbursements(None, statuses=None, limit=100, offset=-1)
 
+    async def it_accepts_limit_zero_the_lower_inclusive_boundary(
+        self, db: asyncpg.Connection
+    ) -> None:
+        rows = await list_reimbursements(db, statuses=None, limit=0, offset=0)
+
+        assert rows == []
+
+    async def it_accepts_limit_at_the_ceiling_the_upper_inclusive_boundary(
+        self, db: asyncpg.Connection
+    ) -> None:
+        rows = await list_reimbursements(db, statuses=None, limit=MAX_LIST_LIMIT, offset=0)
+
+        assert isinstance(rows, list)
+
     async def it_delegates_to_fetch_reimbursement_page_and_returns_real_rows_unchanged(
         self, db: asyncpg.Connection
     ) -> None:
