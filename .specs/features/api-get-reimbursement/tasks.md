@@ -92,15 +92,15 @@ T7 → T8 → T9
 - Skill: NONE
 
 **Done when**:
-- [ ] `shared/db.py` exports `managed_pool(config: DatabaseConfig) -> AsyncIterator[asyncpg.Pool]`, identical behavior to today's
-- [ ] `shared.reimbursement.repository` no longer defines or imports `managed_pool`; its module docstring reads "every SQL statement against the reimbursement table" (drops "pool lifecycle")
-- [ ] `src/publisher/src/consumer.py` imports `managed_pool` from `shared.db`
-- [ ] `src/publisher/tests/test_integration.py` imports `managed_pool` from `shared.db`
-- [ ] `src/shared/tests/test_db.py::DescribeManagedPool` exists with both original test methods, unmodified in content
-- [ ] `src/shared/tests/reimbursement/test_repository.py` no longer contains `DescribeManagedPool`
-- [ ] Full existing `publisher` + `shared` suites still pass — not just this task's new/moved tests (this touches already-shipped, independently-verified code)
-- [ ] Gate check passes: `uv run pytest`
-- [ ] Test count: same total as before the move (2 tests relocated, 0 added, 0 removed)
+- [x] `shared/db.py` exports `managed_pool(config: DatabaseConfig) -> AsyncIterator[asyncpg.Pool]`, identical behavior to today's
+- [x] `shared.reimbursement.repository` no longer defines or imports `managed_pool`; its module docstring reads "every SQL statement against the reimbursement table" (drops "pool lifecycle")
+- [x] `src/publisher/src/consumer.py` imports `managed_pool` from `shared.db`
+- [x] `src/publisher/tests/test_integration.py` imports `managed_pool` from `shared.db`
+- [x] `src/shared/tests/test_db.py::DescribeManagedPool` exists with both original test methods, unmodified in content
+- [x] `src/shared/tests/reimbursement/test_repository.py` no longer contains `DescribeManagedPool`
+- [x] Full existing `publisher` + `shared` suites still pass — not just this task's new/moved tests (this touches already-shipped, independently-verified code)
+- [x] Gate check passes: `uv run pytest`
+- [x] Test count: same total as before the move (2 tests relocated, 0 added, 0 removed)
 
 **Tests**: integration
 **Gate**: full
@@ -120,10 +120,10 @@ T7 → T8 → T9
 - Skill: NONE
 
 **Done when**:
-- [ ] `MAX_LIST_LIMIT = 500` defined alongside `MAX_BATCH_ITEMS` in `shared/config.py`
-- [ ] `test_config.py` asserts the value loads as `500`
-- [ ] Gate check passes: `uv run pytest -m "not integration"`
-- [ ] Test count: +1
+- [x] `MAX_LIST_LIMIT = 500` defined alongside `MAX_BATCH_ITEMS` in `shared/config.py`
+- [x] `test_config.py` asserts the value loads as `500`
+- [x] Gate check passes: `uv run pytest -m "not integration"`
+- [x] Test count: +1
 
 **Tests**: unit
 **Gate**: quick
@@ -136,16 +136,16 @@ T7 → T8 → T9
 **Where**: `src/shared/src/shared/errors.py` (modify)
 **Depends on**: None
 **Reuses**: `BatchInvalid`'s exact shape (bare `Exception` subclass with a one-line docstring).
-**Requirement**: LIST-06 (invalid status filter → 400), LIST-02 (bounds → 400)
+**Requirement**: LIST-07 (invalid status filter → 400), LIST-02 (bounds → 400)
 
 **Tools**:
 - MCP: NONE
 - Skill: NONE
 
 **Done when**:
-- [ ] `class ReimbursementFilterInvalid(Exception)` added with a docstring stating what it signals (bad status value or out-of-bounds limit/offset)
-- [ ] No dedicated test — exercised indirectly by T6/T9 per the coverage matrix's "none" entry
-- [ ] Gate check passes: `uv run pytest -m "not integration"`
+- [x] `class ReimbursementFilterInvalid(Exception)` added with a docstring stating what it signals (bad status value or out-of-bounds limit/offset)
+- [x] No dedicated test — exercised indirectly by T6/T9 per the coverage matrix's "none" entry
+- [x] Gate check passes: `uv run pytest -m "not integration"`
 
 **Tests**: none
 **Gate**: quick
@@ -165,12 +165,12 @@ T7 → T8 → T9
 - Skill: NONE
 
 **Done when**:
-- [ ] `dependencies.get_pool` added, identical shape to `get_producer`
-- [ ] `main.lifespan` nests `async with managed_pool(replace(load_config().database, pool_min_size=0)) as pool:` inside the existing producer block, sets `app.state.pool` — **`pool_min_size=0` is required, not optional**: `asyncpg.create_pool()` eagerly pre-connects `min_size` real connections at construction (unlike `AIOProducer`'s lazy connect), so without this override, lifespan construction hard-fails the moment no reachable/authenticated Postgres is present, breaking `test_health.py`/`test_main.py`/`create/test_route.py::DescribeTheRealApp` — none of which are in this task's or any other task's file list. `replace()` overrides the field for this call site only; `shared.config.DatabaseConfig`'s default (`pool_min_size=2`, used by the publisher per AD-017) is untouched. See `design.md`'s `main.lifespan` component and Risks & Concerns for the full diagnosis (discovered during Execute).
-- [ ] `main.py` imports `from dataclasses import replace`
-- [ ] `test_health.py`, `test_main.py`, `create/test_route.py::DescribeTheRealApp` still pass unmodified — confirms the pool is genuinely lazy, not just "happens to work here"
-- [ ] Code compiles and imports cleanly (no route yet exercises the pool's actual queries — real end-to-end proof of a route using it is merge-forwarded into T9's `DescribeTheRealApp`, per the Test Co-location "resolving compilation dependencies" rule)
-- [ ] Gate check passes: `uv run pytest -m "not integration"` (no new DB-touching test at this task; the real wiring proof lands in T9)
+- [x] `dependencies.get_pool` added, identical shape to `get_producer`
+- [x] `main.lifespan` nests `async with managed_pool(replace(load_config().database, pool_min_size=0)) as pool:` inside the existing producer block, sets `app.state.pool` — **`pool_min_size=0` is required, not optional**: `asyncpg.create_pool()` eagerly pre-connects `min_size` real connections at construction (unlike `AIOProducer`'s lazy connect), so without this override, lifespan construction hard-fails the moment no reachable/authenticated Postgres is present, breaking `test_health.py`/`test_main.py`/`create/test_route.py::DescribeTheRealApp` — none of which are in this task's or any other task's file list. `replace()` overrides the field for this call site only; `shared.config.DatabaseConfig`'s default (`pool_min_size=2`, used by the publisher per AD-017) is untouched. See `design.md`'s `main.lifespan` component and Risks & Concerns for the full diagnosis (discovered during Execute).
+- [x] `main.py` imports `from dataclasses import replace`
+- [x] `test_health.py`, `test_main.py`, `create/test_route.py::DescribeTheRealApp` still pass unmodified — confirms the pool is genuinely lazy, not just "happens to work here"
+- [x] Code compiles and imports cleanly (no route yet exercises the pool's actual queries — real end-to-end proof of a route using it is merge-forwarded into T9's `DescribeTheRealApp`, per the Test Co-location "resolving compilation dependencies" rule)
+- [x] Gate check passes: `uv run pytest -m "not integration"` (no new DB-touching test at this task; the real wiring proof lands in T9)
 
 **Tests**: none (merge-forward to T9 — see Done when)
 **Gate**: quick
@@ -183,17 +183,17 @@ T7 → T8 → T9
 **Where**: `src/shared/src/shared/reimbursement/repository.py` (modify), `src/shared/tests/reimbursement/test_repository.py` (extend)
 **Depends on**: T1 (repository.py's post-relocation state)
 **Reuses**: `reimbursement_status_created_idx`, `human_review_reimbursement_created_idx` (both pre-existing, built for exactly this query per `ARCHITECTURE.md`); `insert_pending`'s function-per-statement style in the same file.
-**Requirement**: LIST-01, LIST-03, LIST-04, LIST-05, LIST-09, LIST-10
+**Requirement**: LIST-01, LIST-03, LIST-04, LIST-05, LIST-06, LIST-09, LIST-10
 
 **Tools**:
 - MCP: NONE
 - Skill: NONE
 
 **Done when**:
-- [ ] `fetch_reimbursement_page(conn, *, statuses: list[str] | None, limit: int, offset: int) -> list[asyncpg.Record]` implemented per the design's SQL
-- [ ] `DescribeFetchReimbursementPage` in `test_repository.py` covers: returns the correct page slice (LIST-01), a single status filter (LIST-04), a multi-status filter via `ANY(...)` (from `AD-028`'s comma-separated contract, exercised here at the SQL layer), no filter returns every status including `pending` (LIST-05), zero-match returns `[]` (LIST-03), `last_human_review` populated when a `human_review` row exists and `None` when it doesn't (LIST-09, LIST-10), ordering is `created_at DESC`
-- [ ] Gate check passes: `uv run pytest`
-- [ ] Test count: +7 (one per bullet above)
+- [x] `fetch_reimbursement_page(conn, *, statuses: list[str] | None, limit: int, offset: int) -> list[asyncpg.Record]` implemented per the design's SQL
+- [x] `DescribeFetchReimbursementPage` in `test_repository.py` covers: returns the correct page slice (LIST-01), a single status filter (LIST-04), a multi-status filter via `ANY(...)` (LIST-05) (from `AD-028`'s comma-separated contract, exercised here at the SQL layer), no filter returns every status including `pending` (LIST-06), zero-match returns `[]` (LIST-03), `last_human_review` populated when a `human_review` row exists and `None` when it doesn't (LIST-09, LIST-10), ordering is `created_at DESC`
+- [x] Gate check passes: `uv run pytest`
+- [x] Test count: +7 (one per bullet above)
 
 **Tests**: integration
 **Gate**: full
@@ -206,18 +206,18 @@ T7 → T8 → T9
 **Where**: `src/shared/src/shared/reimbursement/use_cases/list_reimbursements.py` (new), `src/shared/tests/reimbursement/use_cases/test_list_reimbursements.py` (new)
 **Depends on**: T2 (`MAX_LIST_LIMIT`), T3 (`ReimbursementFilterInvalid`), T5 (`fetch_reimbursement_page`)
 **Reuses**: `send_human_review.py`'s exact module shape (`conn`-taking, framework-agnostic, sibling file in the same `use_cases/` package).
-**Requirement**: LIST-02, LIST-06, LIST-08 (repeated-param case is a `params.py`/route concern, not this gate's — see T7/T9)
+**Requirement**: LIST-02, LIST-07, LIST-08 (repeated-param case is a `params.py`/route concern, not this gate's — see T7/T9)
 
 **Tools**:
 - MCP: NONE
 - Skill: NONE
 
 **Done when**:
-- [ ] `list_reimbursements(conn, *, statuses, limit, offset) -> list[asyncpg.Record]` implemented with both gates evaluated before any DB call
-- [ ] Unit tests (no DB touched — pass `conn=None` or equivalent, since a gate violation must raise before `conn` is ever used): invalid status value raises `ReimbursementFilterInvalid` (LIST-06), `limit > MAX_LIST_LIMIT` raises (LIST-02), `limit < 0` raises, `offset < 0` raises
-- [ ] Integration test: valid inputs delegate to `fetch_reimbursement_page` and return real rows unchanged
-- [ ] Gate check passes: `uv run pytest` (mixed — unit portion also independently passes `-m "not integration"`)
-- [ ] Test count: +5 (4 unit + 1 integration)
+- [x] `list_reimbursements(conn, *, statuses, limit, offset) -> list[asyncpg.Record]` implemented with both gates evaluated before any DB call
+- [x] Unit tests (no DB touched — pass `conn=None` or equivalent, since a gate violation must raise before `conn` is ever used): invalid status value raises `ReimbursementFilterInvalid` (LIST-07), `limit > MAX_LIST_LIMIT` raises (LIST-02), `limit < 0` raises, `offset < 0` raises
+- [x] Integration test: valid inputs delegate to `fetch_reimbursement_page` and return real rows unchanged
+- [x] Gate check passes: `uv run pytest` (mixed — unit portion also independently passes `-m "not integration"`)
+- [x] Test count: +5 (4 unit + 1 integration)
 
 **Tests**: unit + integration (mixed)
 **Gate**: full
@@ -288,7 +288,7 @@ T7 → T8 → T9
 **Done when**:
 - [ ] `GET /api/v1/reimbursement` registered, `Depends(get_pool)`, calls the use case and shapes the response
 - [ ] `_reimbursement_filter_invalid_handler` registered in `register_handlers()` → `400`
-- [ ] `DescribeGetReimbursement` in `test_route.py` covers: happy path with defaults (LIST-01), custom `limit`/`offset` (LIST-01), out-of-bounds `limit`/`offset` → `400` (LIST-02), empty result → `200 []` (LIST-03), single-status filter (LIST-04), multi-status comma filter (LIST-04), status omitted includes `pending` (LIST-05), invalid status → `400` (LIST-06), repeated `status` param → `400` (LIST-08), last-human-review present/absent in the response (LIST-09, LIST-10), `500` on a simulated pool failure (LIST-11)
+- [ ] `DescribeGetReimbursement` in `test_route.py` covers: happy path with defaults (LIST-01), custom `limit`/`offset` (LIST-01), out-of-bounds `limit`/`offset` → `400` (LIST-02), empty result → `200 []` (LIST-03), single-status filter (LIST-04), multi-status comma filter (LIST-05), status omitted includes `pending` (LIST-06), invalid status → `400` (LIST-07), repeated `status` param → `400` (LIST-08), last-human-review present/absent in the response (LIST-09, LIST-10), `500` on a simulated pool failure (LIST-11)
 - [ ] `DescribeTheRealApp` proves `main.app`'s actual lifespan/wiring serves this route correctly (this is T4's only real test, merge-forwarded here)
 - [ ] Gate check passes: `uv run pytest`
 - [ ] Test count: +12 (11 route cases + 1 real-app case)
