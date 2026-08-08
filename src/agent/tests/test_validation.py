@@ -77,7 +77,8 @@ class DescribeRetryCeilingEscalation:
     ) -> None:
         uuid = uuid4()
         pool = FakePool(rows={uuid: {"status": "pending"}})
-        deps = _deps(pool=pool)
+        producer = FakeProducer()
+        deps = _deps(pool=pool, producer=producer)
         envelope = _envelope(uuid=uuid, retry=4, errors=[_error(1), _error(2), _error(3), _error(4)])
 
         with caplog.at_level(logging.ERROR):
@@ -90,6 +91,22 @@ class DescribeRetryCeilingEscalation:
             "reimbursement.escalated" in record.message and str(uuid) in record.message
             for record in caplog.records
         )
+        # AGT-17: on success, no further action — no republish.
+        assert producer.produced == []
+
+    async def it_does_not_escalate_at_exactly_the_retry_ceiling(self) -> None:
+        # The boundary itself: SCOPE.md's rule is "retry > 3", so retry == 3
+        # (MAX_RETRY) must still take the normal resolve path, not escalate.
+        uuid = uuid4()
+        row_updated_at = datetime(2026, 4, 10, 9, 0, 0, tzinfo=UTC)
+        pool = FakePool(rows={uuid: _row(updated_at=row_updated_at)})
+        deps = _deps(pool=pool)
+        envelope = _envelope(uuid=uuid, retry=3, published_at=row_updated_at, errors=[_error(1)])
+
+        outcome = await handle_message(deps, envelope.model_dump_json().encode())
+
+        assert outcome == MessageOutcome.RESOLVED
+        assert pool.rows[uuid]["status"] == "pending"  # never touched by escalation
 
     async def it_writes_to_the_failure_log_when_the_uuid_is_a_ghost(
         self, caplog: pytest.LogCaptureFixture
@@ -146,7 +163,8 @@ class DescribeResolveByUuid:
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         pool = FakePool(rows={})
-        deps = _deps(pool=pool)
+        producer = FakeProducer()
+        deps = _deps(pool=pool, producer=producer)
         envelope = _envelope(uuid=uuid4(), retry=0)
 
         with caplog.at_level(logging.INFO):
@@ -158,6 +176,9 @@ class DescribeResolveByUuid:
         ghost_records = [r for r in caplog.records if "reimbursement.ghost_dropped" in r.message]
         assert ghost_records
         assert all(r.levelno < logging.ERROR for r in ghost_records)
+        # AGT-03: no republish, no retry, no failure-log entry.
+        assert producer.produced == []
+        assert not any(r.levelno >= logging.CRITICAL for r in caplog.records)
 
     async def it_ignores_a_message_older_than_the_rows_last_update(
         self, caplog: pytest.LogCaptureFixture
