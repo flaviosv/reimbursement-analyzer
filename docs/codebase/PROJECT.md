@@ -34,5 +34,6 @@ ReimbursementAnalyzer Reimbursement Decisioning Service — a mission-critical, 
 Early-stage, partially implemented:
 
 - **`api`** — the POST-reimbursement intake endpoint is fully implemented: request validation, a 1 MiB body ceiling, and publishing to Kafka. The decision logic itself (rules engine, auto-approve/reject/human-review classification) is **not yet implemented anywhere in this codebase**.
-- **`agent`** (LLM evaluation layer) and **`publisher`** (persistence + republishing) are placeholder scaffolds only — each has a single `consumer.py` that logs messages off a placeholder topic name, with no real business logic.
-- Database schema exists for `reimbursement` and `human_review`, but nothing currently writes to it — the schema was built ahead of the persistence/decision layers that will use it.
+- **`publisher`** — implemented: consumes `Request`, inserts one `reimbursement` row per item, and publishes one `Reimbursement` message per item, with retry-with-history on transient failures, duplicate detection, and `retry > 3` escalation to a `human-review` status. Fully tested, including a real Kafka+Postgres integration round trip.
+- **`agent`** (LLM evaluation layer) remains a placeholder scaffold — a single `consumer.py` that logs messages off a placeholder topic name, with no real business logic, and no consumption of the `Reimbursement` topic `publisher` now publishes to.
+- Database schema exists for `reimbursement` and `human_review`. `reimbursement` is now actively written by `publisher` (`pending` rows on success, `human-review` rows past the retry ceiling). `human_review` remains unwritten — no code yet records an actual review event there.

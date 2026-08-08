@@ -15,7 +15,7 @@
 | `uvicorn[standard]` | >=0.52.1 | ASGI server | `api` |
 | `pydantic[email]` | >=2.13.4 | Request/message validation, `EmailStr` | `shared`, `api` |
 | `confluent-kafka` | >=2.15.0 | Kafka producer/consumer client (`confluent_kafka.aio.AIOProducer` for the async producer) | `api`, `shared`, `agent`, `publisher` |
-| `asyncpg` | >=0.31.0 | Postgres async driver — declared but **not yet imported anywhere** in the codebase | `api`, `agent`, `publisher` (dependency only) |
+| `asyncpg` | >=0.31.0 | Postgres async driver — pool + statements in `shared.reimbursement.repository` | `publisher` (real use, via `shared`); `agent` still declares it but does not import it |
 | `python-dotenv` | >=1.2.2 | Loads `.env` at process start (`load_dotenv()`) | `api`, `agent`, `publisher` |
 | `langchain` | >=1.3.14 | LLM orchestration — declared, not yet used (agent is a stub) | `agent` |
 | `langgraph` | >=1.2.10 | Agentic graph orchestration — declared, not yet used | `agent` |
@@ -23,13 +23,13 @@
 | `yoyo-migrations` | >=9.0.0 | Plain-SQL schema migrations | `api` (`migrations` extra only) |
 | `psycopg[binary]` | >=3.3.4 | Sync Postgres driver, used by the migration runner and the advisory lock | `api` (`migrations` extra only) |
 | `pytest` | >=9.1.1 | Test runner (workspace-wide, root `dependency-groups.dev`) | all |
-| `testcontainers[kafka,postgres]` | >=4.15.0 | Ephemeral Postgres/Kafka containers for tests | `api`, `shared` |
+| `testcontainers[kafka,postgres]` | >=4.15.0 | Ephemeral Postgres/Kafka containers for tests | `api`, `shared`, `publisher` |
 | `httpx` | >=0.28.1 | Used transitively by FastAPI's `TestClient` | `api` tests |
 
 ## Backend
 
 - API style: REST, single versioned prefix `/api/v1/...`, OpenAPI schema generated from the same `pydantic.TypeAdapter` that validates requests (no hand-duplicated schema).
-- Database: PostgreSQL 18 (app's own), schema owned by `api`'s migrations. No ORM — raw SQL migrations via `yoyo`; no query layer exists yet (nothing currently reads/writes the tables).
+- Database: PostgreSQL 18 (app's own), schema owned by `api`'s migrations. No ORM — raw SQL migrations via `yoyo`; runtime access is raw SQL statements via `asyncpg` (`shared.reimbursement.repository`), used by `publisher`.
 - Messaging: Apache Kafka 4.3.1 (KRaft mode, single node, no ZooKeeper).
 - Authentication: none implemented on the public API.
 
