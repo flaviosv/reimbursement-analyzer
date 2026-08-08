@@ -105,6 +105,30 @@ class DescribeApproveReimbursement:
         count = await db.fetchval("SELECT count(*) FROM human_review WHERE reimbursement_uuid = $1", uuid)
         assert count == 0
 
+    @pytest.mark.parametrize("starting_status", ["auto-rejected", "human-rejected"])
+    async def it_overturns_a_prior_rejection_into_an_approval(
+        self, db: asyncpg.Connection, starting_status: str
+    ) -> None:
+        # AD-027 §1 (.specs/STATE.md) + spec.md's P1 "Approve a rejected or
+        # human-review reimbursement" story: all three source statuses are
+        # explicitly, intentionally PUT-eligible for approval — overturning
+        # a rejection is a deliberate reviewer override, not a bug.
+        uuid = await _seed(db, f"REQ-UC-APPROVE-OVERTURN-{starting_status}", status=starting_status)
+
+        row = await approve_reimbursement(
+            db,
+            uuid,
+            receipts_value=Decimal("50.00"),
+            receipts_date=date(2026, 1, 5),
+            receipts_currency="BRL",
+            reason="overturned on further review",
+            approved_by="reviewer@example.com",
+        )
+
+        assert row["status"] == "human-approved"
+        hr = await db.fetchrow("SELECT * FROM human_review WHERE reimbursement_uuid = $1", uuid)
+        assert hr["status"] == "approved"
+
 
 class DescribeRejectReimbursement:
     async def it_rejects_an_eligible_complete_row_and_records_the_decision(
@@ -145,6 +169,25 @@ class DescribeRejectReimbursement:
 
         count = await db.fetchval("SELECT count(*) FROM human_review WHERE reimbursement_uuid = $1", uuid)
         assert count == 0
+
+    @pytest.mark.parametrize("starting_status", ["auto-rejected", "human-rejected"])
+    async def it_re_rejects_an_already_rejected_row(
+        self, db: asyncpg.Connection, starting_status: str
+    ) -> None:
+        # AD-027 §1 (.specs/STATE.md) + spec.md's P1 "Reject a reimbursement
+        # under review" story ("...or re-reject an auto-rejected/
+        # human-rejected one"): re-rejecting an already-rejected row is
+        # explicitly, intentionally PUT-eligible, not an accidental
+        # ELIGIBLE_STATUSES overreach.
+        uuid = await _seed_with_receipts(
+            db, f"REQ-UC-REJECT-REREJECT-{starting_status}", status=starting_status
+        )
+
+        row = await reject_reimbursement(db, uuid, reason="still bad", approved_by="reviewer@example.com")
+
+        assert row["status"] == "human-rejected"
+        hr = await db.fetchrow("SELECT * FROM human_review WHERE reimbursement_uuid = $1", uuid)
+        assert hr["status"] == "rejected"
 
 
 class DescribeTransactionAtomicity:

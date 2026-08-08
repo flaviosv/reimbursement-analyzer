@@ -107,6 +107,21 @@ class DescribePutReimbursement:
         status = await db.fetchval("SELECT status FROM reimbursement WHERE uuid = $1", uuid)
         assert status == "human-review"
 
+    async def it_approves_an_auto_rejected_row_overturning_the_rejection(
+        self, db: asyncpg.Connection
+    ) -> None:
+        # AD-027 §1 (.specs/STATE.md) + spec.md's P1 "Approve a rejected or
+        # human-review reimbursement" story: overturning a rejection into
+        # an approval is intentional, not an ELIGIBLE_STATUSES bug.
+        uuid = await _seed(db, "REQ-PUT-APPROVE-OVERTURN", status="auto-rejected")
+
+        async with _build_client(FakePool(db)) as client:
+            response = await client.put(f"/api/v1/reimbursement/{uuid}", json=_APPROVE_PAYLOAD)
+
+        assert response.status_code == 200
+        status = await db.fetchval("SELECT status FROM reimbursement WHERE uuid = $1", uuid)
+        assert status == "human-approved"
+
     async def it_returns_400_when_approving_an_ineligible_status(self, db: asyncpg.Connection) -> None:
         uuid = await _seed(db, "REQ-PUT-APPROVE-INELIGIBLE", status="human-approved")
 
@@ -164,6 +179,19 @@ class DescribePutReimbursement:
 
         assert response.status_code == 400
         assert response.json() == {"msg": f"reimbursement {uuid} is not eligible for this decision"}
+
+    async def it_re_rejects_an_already_human_rejected_row(self, db: asyncpg.Connection) -> None:
+        # AD-027 §1 (.specs/STATE.md) + spec.md's P1 "Reject a reimbursement
+        # under review" story ("...or re-reject an auto-rejected/
+        # human-rejected one"): intentional, not an ELIGIBLE_STATUSES bug.
+        uuid = await _seed_with_receipts(db, "REQ-PUT-REJECT-REREJECT", status="human-rejected")
+
+        async with _build_client(FakePool(db)) as client:
+            response = await client.put(f"/api/v1/reimbursement/{uuid}", json=_REJECT_PAYLOAD)
+
+        assert response.status_code == 200
+        status = await db.fetchval("SELECT status FROM reimbursement WHERE uuid = $1", uuid)
+        assert status == "human-rejected"
 
     async def it_returns_400_when_the_body_uuid_does_not_match_the_path_uuid(
         self, db: asyncpg.Connection
