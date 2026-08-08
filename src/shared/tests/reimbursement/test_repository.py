@@ -1,0 +1,159 @@
+import json
+from dataclasses import replace
+from datetime import UTC, datetime
+from uuid import UUID, uuid4
+
+import asyncpg
+import pytest
+from helpers import valid_reimbursement_item
+from shared.config import load_config
+from shared.reimbursement.repository import (
+    insert_human_review,
+    insert_pending,
+    is_duplicate,
+    managed_pool,
+)
+
+pytestmark = pytest.mark.anyio
+
+_RAW_INSERT = """
+    INSERT INTO reimbursement (uuid, request_id, original_payload)
+    VALUES ($1, $2, '{}'::jsonb)
+"""
+
+
+async def _rows_for(db: asyncpg.Connection, request_id: str) -> list[asyncpg.Record]:
+    return await db.fetch("SELECT uuid FROM reimbursement WHERE request_id = $1", request_id)
+
+
+class DescribeManagedPool:
+    async def it_sizes_the_pool_from_config_rather_than_asyncpg_defaults(self, migrated_db: str) -> None:
+        config = replace(load_config().database, dsn=migrated_db)
+
+        async with managed_pool(config) as pool:
+            assert pool.get_min_size() == config.pool_min_size
+            assert pool.get_max_size() == config.pool_max_size
+            assert (pool.get_min_size(), pool.get_max_size()) != (10, 10)
+            assert await pool.fetchval("SELECT 1") == 1
+
+    async def it_closes_the_pool_on_exit(self, migrated_db: str) -> None:
+        config = replace(load_config().database, dsn=migrated_db)
+
+        async with managed_pool(config) as pool:
+            pass
+
+        assert pool.is_closing()
+
+
+class DescribeInsertPending:
+    async def it_returns_the_uuid_of_the_row_it_created(self, db: asyncpg.Connection) -> None:
+        uuid = await insert_pending(db, valid_reimbursement_item("REQ-RETURN"))
+
+        assert isinstance(uuid, UUID)
+        assert [row["uuid"] for row in await _rows_for(db, "REQ-RETURN")] == [uuid]
+
+    async def it_populates_the_identity_columns_and_the_original_payload(
+        self, db: asyncpg.Connection
+    ) -> None:
+        item = valid_reimbursement_item("REQ-FIELDS", amount=93.5, currency="BRL")
+
+        uuid = await insert_pending(db, item)
+
+        row = await db.fetchrow("SELECT * FROM reimbursement WHERE uuid = $1", uuid)
+        assert row["request_id"] == "REQ-FIELDS"
+        assert row["submitted_by"] == "person@example.com"
+        assert row["submitted_at"] == datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+        assert json.loads(row["original_payload"]) == item
+
+    async def it_leaves_the_status_at_its_pending_default(self, db: asyncpg.Connection) -> None:
+        uuid = await insert_pending(db, valid_reimbursement_item("REQ-PENDING"))
+
+        status = await db.fetchval("SELECT status FROM reimbursement WHERE uuid = $1", uuid)
+        assert status == "pending"
+
+    async def it_stores_no_second_row_for_a_repeated_request_and_submitter(
+        self, db: asyncpg.Connection
+    ) -> None:
+        item = valid_reimbursement_item("REQ-DUP")
+        first_uuid = await insert_pending(db, item)
+
+        with pytest.raises(asyncpg.UniqueViolationError):
+            async with db.transaction():
+                await insert_pending(db, item)
+
+        assert [row["uuid"] for row in await _rows_for(db, "REQ-DUP")] == [first_uuid]
+
+    async def it_stores_no_second_row_when_only_the_submitter_case_differs(
+        self, db: asyncpg.Connection
+    ) -> None:
+        # The index is on lower(submitted_by): a byte-exact key would let one
+        # person file the same request under ana@, Ana@ and ANA@.
+        first_uuid = await insert_pending(
+            db, valid_reimbursement_item("REQ-CASE", submitted_by="ana@company.com")
+        )
+
+        with pytest.raises(asyncpg.UniqueViolationError):
+            async with db.transaction():
+                await insert_pending(
+                    db, valid_reimbursement_item("REQ-CASE", submitted_by="ANA@Company.com")
+                )
+
+        assert [row["uuid"] for row in await _rows_for(db, "REQ-CASE")] == [first_uuid]
+
+
+class DescribeInsertHumanReview:
+    async def it_stores_the_row_at_human_review_with_its_reason(self, db: asyncpg.Connection) -> None:
+        item = valid_reimbursement_item("REQ-REVIEW")
+        reason = "attempt 1 [db-insert] RuntimeError: connection reset"
+
+        uuid = await insert_human_review(db, item, reason)
+
+        row = await db.fetchrow("SELECT * FROM reimbursement WHERE uuid = $1", uuid)
+        assert row["status"] == "human-review"
+        assert row["decision_reason"] == reason
+
+    async def it_populates_the_identity_columns_and_the_original_payload(
+        self, db: asyncpg.Connection
+    ) -> None:
+        item = valid_reimbursement_item("REQ-REVIEW-FIELDS", amount=12.0)
+
+        uuid = await insert_human_review(db, item, "ceiling reached")
+
+        row = await db.fetchrow("SELECT * FROM reimbursement WHERE uuid = $1", uuid)
+        assert row["request_id"] == "REQ-REVIEW-FIELDS"
+        assert row["submitted_by"] == "person@example.com"
+        assert row["submitted_at"] == datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+        assert json.loads(row["original_payload"]) == item
+
+
+class DescribeIsDuplicate:
+    async def it_classifies_a_request_and_submitter_collision_as_a_duplicate(
+        self, db: asyncpg.Connection
+    ) -> None:
+        item = valid_reimbursement_item("REQ-IS-DUP")
+        await insert_pending(db, item)
+
+        with pytest.raises(asyncpg.UniqueViolationError) as caught:
+            async with db.transaction():
+                await insert_pending(db, item)
+
+        assert caught.value.constraint_name == "reimbursement_request_submitter_key"
+        assert is_duplicate(caught.value) is True
+
+    async def it_does_not_classify_a_primary_key_collision_as_a_duplicate(
+        self, db: asyncpg.Connection
+    ) -> None:
+        # A PK collision is a different failure entirely and must not take the
+        # silent-drop path — which a bare 23505 sqlstate check would let it.
+        uuid = uuid4()
+        await db.execute(_RAW_INSERT, uuid, "REQ-PK-FIRST")
+
+        with pytest.raises(asyncpg.UniqueViolationError) as caught:
+            async with db.transaction():
+                await db.execute(_RAW_INSERT, uuid, "REQ-PK-SECOND")
+
+        assert caught.value.constraint_name == "reimbursement_pkey"
+        assert is_duplicate(caught.value) is False
+
+    async def it_does_not_classify_an_unrelated_error_as_a_duplicate(self) -> None:
+        assert is_duplicate(RuntimeError("connection reset by peer")) is False
