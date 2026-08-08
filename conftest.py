@@ -9,9 +9,10 @@ entries, which the python_path plugin inserts before initial conftests load.
 """
 
 import os
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager
 
+import asyncpg
 import psycopg
 import pytest
 from helpers import (
@@ -75,3 +76,23 @@ def migrated_db(server_url: str) -> Iterator[str]:
     with disposable_database(server_url) as url:
         apply_migrations(url)
         yield url
+
+
+@pytest.fixture
+async def db(migrated_db: str) -> AsyncIterator[asyncpg.Connection]:
+    """One connection per test inside a transaction that is always rolled
+    back. The migrated schema is session-scoped and shared, so a test that
+    leaves a row behind would collide with the next one on the unique index.
+
+    Lives here rather than under one package's tests for the same reason
+    `server_url` does — `shared` and `publisher` both need it, and a
+    per-package copy is a fixture maintained in two places.
+    """
+    connection = await asyncpg.connect(migrated_db)
+    transaction = connection.transaction()
+    await transaction.start()
+    try:
+        yield connection
+    finally:
+        await transaction.rollback()
+        await connection.close()
