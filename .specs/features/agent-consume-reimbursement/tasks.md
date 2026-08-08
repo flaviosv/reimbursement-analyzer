@@ -15,7 +15,9 @@ without it.**
 **Spec**: `.specs/features/agent-consume-reimbursement/spec.md`
 **Design**: `.specs/features/agent-consume-reimbursement/design.md`
 **Risks**: `.specs/RISKS.md` (R-001, R-005, R-007)
-**Status**: Draft
+**Status**: Done — all 8 tasks implemented and committed
+(`47adda7`…`e15504f` on `feature/6_reimbursement_consumer`). Full gate:
+321 passed. Feature-level Verifier pending.
 
 ---
 
