@@ -1,8 +1,9 @@
 from uuid import UUID
 
 import asyncpg
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 from shared.config import MAX_BODY_BYTES, load_config
+from shared.errors import ReimbursementUuidMismatch
 
 from dependencies import get_pool
 from errors import MessageResponse
@@ -31,13 +32,13 @@ async def put_reimbursement(
     uuid: UUID, request: Request, pool: asyncpg.Pool = Depends(get_pool)
 ) -> MessageResponse:
     """Parse -> check body/path uuid consistency -> delegate to the use case
-    -> respond. No branching logic of its own beyond the uuid consistency
-    check — every other failure mode is a raise from validation.py or the
-    use case, caught by the app-wide handlers registered in errors.py."""
+    -> respond. Every failure mode, including the uuid consistency check, is
+    a raise of a typed exception from validation.py, this route, or the use
+    case, caught by the app-wide handlers registered in errors.py."""
     raw = await read_capped(request)
     review = validate_review(raw)
     if review.uuid is not None and review.uuid != uuid:
-        raise HTTPException(status_code=400, detail="body uuid does not match the path uuid")
+        raise ReimbursementUuidMismatch("body uuid does not match the path uuid")
 
     async with pool.acquire(timeout=load_config().database.acquire_timeout_seconds) as conn:
         if isinstance(review, ApproveReview):

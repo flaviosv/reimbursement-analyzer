@@ -35,6 +35,10 @@ class ReimbursementNotEligible(Exception):
     wrong status, or (reject only) missing receipts_value/date/currency."""
 
 
+class ReimbursementUuidMismatch(Exception):
+    """The review payload carried a uuid that disagrees with the path uuid."""
+
+
 def sanitize(exc: BaseException) -> str:
     """Render an exception for stdout: its type, plus whatever diagnostic
     shape is safe to include for that exception kind — never a raw value.

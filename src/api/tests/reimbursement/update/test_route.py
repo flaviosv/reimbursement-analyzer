@@ -166,6 +166,7 @@ class DescribePutReimbursement:
             response = await client.put(f"/api/v1/reimbursement/{uuid}", json=payload)
 
         assert response.status_code == 400
+        assert response.json() == {"msg": "body uuid does not match the path uuid"}
 
     async def it_returns_500_on_a_simulated_pool_failure(self, db: asyncpg.Connection) -> None:
         uuid = await _seed(db, "REQ-PUT-POOL-FAILURE")

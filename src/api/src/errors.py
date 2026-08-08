@@ -11,6 +11,7 @@ from shared.errors import (
     ReimbursementFilterInvalid,
     ReimbursementNotEligible,
     ReimbursementNotFound,
+    ReimbursementUuidMismatch,
     ReviewInvalid,
 )
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -63,6 +64,12 @@ async def _reimbursement_not_eligible_handler(
     return _msg_response(400, str(exc))
 
 
+async def _reimbursement_uuid_mismatch_handler(
+    request: Request, exc: ReimbursementUuidMismatch
+) -> JSONResponse:
+    return _msg_response(400, str(exc))
+
+
 async def _validation_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     # FastAPI's default here is 422 + {"detail": [...]}; replaced app-wide so
     # every route shares one error contract. Built from `loc`/`msg` only —
@@ -92,6 +99,7 @@ def register_handlers(app: FastAPI) -> None:
     app.add_exception_handler(ReviewInvalid, _review_invalid_handler)
     app.add_exception_handler(ReimbursementNotFound, _reimbursement_not_found_handler)
     app.add_exception_handler(ReimbursementNotEligible, _reimbursement_not_eligible_handler)
+    app.add_exception_handler(ReimbursementUuidMismatch, _reimbursement_uuid_mismatch_handler)
     app.add_exception_handler(RequestValidationError, _validation_handler)
     app.add_exception_handler(StarletteHTTPException, _http_exception_handler)
     app.add_exception_handler(Exception, _unhandled_exception_handler)
