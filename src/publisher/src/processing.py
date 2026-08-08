@@ -145,7 +145,12 @@ async def escalate_item(
         if repository.is_duplicate(exc):
             _log_duplicate(envelope, item, exc)
             return ItemOutcome.DUPLICATE
-        logger.error("item %d could not be escalated: %s", index, sanitize(exc))
+        logger.error(
+            "item %d request_id=%s could not be escalated: %s",
+            index,
+            _request_id(item),
+            sanitize(exc),
+        )
         failure_log.write(
             deps.config.failure_log,
             failure_record(
@@ -172,7 +177,12 @@ def _accepts(
     try:
         ReimbursementRequest.model_validate(item)
     except ValidationError as exc:
-        logger.error("item %d is not a valid request: %s", index, sanitize(exc))
+        logger.error(
+            "item %d request_id=%s is not a valid request: %s",
+            index,
+            _request_id(item),
+            sanitize(exc),
+        )
         failure_log.write(
             deps.config.failure_log,
             failure_record(
@@ -213,7 +223,13 @@ async def _requeue(
     stage: Stage,
     exc: Exception,
 ) -> ItemOutcome:
-    logger.error("item %d failed at stage %s: %s", index, stage, sanitize(exc))
+    logger.error(
+        "item %d request_id=%s failed at stage %s: %s",
+        index,
+        _request_id(item),
+        stage,
+        sanitize(exc),
+    )
     errors = [*envelope.errors, AttemptError.next(envelope.errors, stage, exc)]
     retried = RequestEnvelope(
         retry=envelope.retry + 1,

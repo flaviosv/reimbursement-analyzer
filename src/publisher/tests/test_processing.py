@@ -62,6 +62,14 @@ def _events(caplog: pytest.LogCaptureFixture, level: int) -> list[dict[str, Any]
     ]
 
 
+def _stdout_log(caplog: pytest.LogCaptureFixture) -> str:
+    """Only the module's own records. The failure log is a separate logger and
+    deliberately carries the payload verbatim (PUB-15 bounds stdout, not it)."""
+    return "\n".join(
+        record.getMessage() for record in caplog.records if record.name == processing.__name__
+    )
+
+
 def _failures(caplog: pytest.LogCaptureFixture) -> list[dict[str, Any]]:
     logger_name = load_config().failure_log.logger_name
     return [json.loads(record.message) for record in caplog.records if record.name == logger_name]
@@ -320,9 +328,25 @@ class DescribeTheRequeue:
         with caplog.at_level(logging.ERROR, logger=processing.__name__):
             await process_item(_deps(pool, FakeProducer()), _envelope([item]), 0, item)
 
-        logged = "\n".join(record.getMessage() for record in caplog.records)
+        logged = _stdout_log(caplog)
         assert "ana@company.com" not in logged
         assert "PostgresConnectionError" in logged
+
+    async def it_identifies_the_failed_item_by_its_request_id(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        item = valid_reimbursement_item(
+            "REQ-IDENTIFIED", submitted_by="ana@company.com", amount=93.5
+        )
+        pool = FakePool(insert_errors={"REQ-IDENTIFIED": asyncpg.PostgresConnectionError("reset")})
+
+        with caplog.at_level(logging.ERROR, logger=processing.__name__):
+            await process_item(_deps(pool, FakeProducer()), _envelope([item]), 0, item)
+
+        logged = _stdout_log(caplog)
+        assert "REQ-IDENTIFIED" in logged
+        assert "ana@company.com" not in logged
+        assert "93.5" not in logged
 
     async def it_falls_back_to_the_failure_log_when_the_requeue_itself_fails(
         self, caplog: pytest.LogCaptureFixture
@@ -452,6 +476,27 @@ class DescribeAMessagePastTheRetryCeiling:
             "submitted_at is in the future",
         ]
 
+    async def it_identifies_the_item_it_could_not_escalate_by_its_request_id(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        item = valid_reimbursement_item(
+            "REQ-CEIL-IDENTIFIED", submitted_by="ana@company.com", amount=93.5
+        )
+        pool = FakePool(
+            insert_errors={"REQ-CEIL-IDENTIFIED": asyncpg.PostgresConnectionError("reset")}
+        )
+
+        with caplog.at_level(logging.ERROR, logger=processing.__name__):
+            await handle_message(
+                _deps(pool, FakeProducer()),
+                _envelope([item], retry=4).model_dump_json().encode(),
+            )
+
+        logged = _stdout_log(caplog)
+        assert "REQ-CEIL-IDENTIFIED" in logged
+        assert "ana@company.com" not in logged
+        assert "93.5" not in logged
+
     async def it_publishes_nothing_when_the_escalation_insert_fails(self) -> None:
         item = valid_reimbursement_item("REQ-CEIL-DOWN-QUIET")
         pool = FakePool(
@@ -566,6 +611,20 @@ class DescribeAnInvalidItem:
         assert len(written) == 1
         assert written[0]["item"] == item
         assert written[0]["outcome"] == ItemOutcome.INVALID.value
+
+    async def it_is_identified_by_its_request_id_in_the_stdout_log(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        item = _invalid_item("REQ-INVALID-IDENTIFIED")
+
+        with caplog.at_level(logging.ERROR, logger=processing.__name__):
+            await handle_message(
+                _deps(FakePool(), FakeProducer()), _envelope([item]).model_dump_json().encode()
+            )
+
+        logged = _stdout_log(caplog)
+        assert "REQ-INVALID-IDENTIFIED" in logged
+        assert "not-an-email-at-all" not in logged
 
     async def it_gets_no_human_review_row_past_the_retry_ceiling(
         self, db: asyncpg.Connection
