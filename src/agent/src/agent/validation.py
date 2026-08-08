@@ -173,11 +173,14 @@ def _failure_record(
 ) -> dict[str, Any]:
     """The shape every last-resort record shares — carries the item's own
     identifying data and full error history, inside the same trust boundary
-    as the payload (mirrors publisher.processing.failure_record)."""
+    as the payload (mirrors publisher.processing.failure_record). The two
+    functions build genuinely different shapes (this one keys on uuid/retry,
+    publisher's on item_index/request_id/item) so they stay separate; only
+    the errors-rendering sub-expression — identical in both — is shared."""
     return {
         "event": event,
         "uuid": str(envelope.uuid),
         "retry": envelope.retry,
-        "errors": [error.model_dump(mode="json") for error in envelope.errors],
+        "errors": failure_log.render_errors(envelope.errors),
         **extra,
     }

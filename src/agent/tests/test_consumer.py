@@ -9,12 +9,13 @@ from uuid import uuid4
 
 import agent.consumer as consumer_module
 import pytest
-from agent.consumer import _install_signal_handlers, check_startup_config, managed_consumer, run
+from agent.consumer import check_startup_config, managed_consumer, run
 from agent.validation import Dependencies
 from agent_fakes import FakePool, FakeProducer
 from confluent_kafka.aio import AIOConsumer
 from shared.config import REIMBURSEMENT_TOPIC, Config, load_config
 from shared.models import ReimbursementEnvelope
+from shared.signals import install_shutdown_handlers
 
 pytestmark = pytest.mark.anyio
 
@@ -105,10 +106,13 @@ class BlockingProducer(FakeProducer):
 def _armed_signal_handlers(stopping: asyncio.Event) -> Iterator[None]:
     """Arm the real handlers, parking SIGTERM on a no-op first: with the
     handlers absent the default disposition kills the test runner instead of
-    failing the assertion."""
+    failing the assertion. Installation happens inside the try so a failure
+    during `install_shutdown_handlers` (e.g. one signal's `add_signal_handler`
+    raising) still restores SIGTERM's original disposition, rather than
+    leaking a corrupted one to every later test in the process."""
     previous = signal.signal(signal.SIGTERM, lambda *_: None)
-    _install_signal_handlers(stopping)
     try:
+        install_shutdown_handlers(stopping)
         yield
     finally:
         loop = asyncio.get_running_loop()

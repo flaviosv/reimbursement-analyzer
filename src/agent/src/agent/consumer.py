@@ -6,7 +6,6 @@ lives in validation.py, which needs no Kafka consumer to test.
 
 import asyncio
 import logging
-import signal
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -15,6 +14,7 @@ from dotenv import load_dotenv
 from shared.config import REIMBURSEMENT_TOPIC, Config, load_config
 from shared.producer import managed_producer
 from shared.reimbursement.repository import managed_pool
+from shared.signals import install_shutdown_handlers
 
 from agent.validation import Dependencies, handle_message
 
@@ -47,7 +47,10 @@ async def run(deps: Dependencies, consumer: AIOConsumer, stopping: asyncio.Event
     """One message at a time: handle it, then commit. A shutdown signal ends
     the loop only between messages, so the message in hand always finishes
     and commits — or, if interrupted mid-handling, its offset is never
-    committed and redelivery is absorbed by the ghost/duplicate-safe paths."""
+    committed, and redelivery is safe because the read-then-conditionally-
+    write shape (resolve, escalate) is naturally idempotent — there is no
+    dedicated duplicate-detection mechanism here, unlike the publisher's
+    unique-constraint-based one."""
     while not stopping.is_set():
         # consume() over poll(): AIOConsumer's own docs recommend it, and
         # num_messages=1 preserves the one-message-at-a-time semantics the
@@ -73,18 +76,12 @@ async def run(deps: Dependencies, consumer: AIOConsumer, stopping: asyncio.Event
         await consumer.commit(message=message, asynchronous=False)
 
 
-def _install_signal_handlers(stopping: asyncio.Event) -> None:
-    loop = asyncio.get_running_loop()
-    for received in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(received, stopping.set)
-
-
 async def _serve() -> None:
     config = load_config()
     check_startup_config(config)
 
     stopping = asyncio.Event()
-    _install_signal_handlers(stopping)
+    install_shutdown_handlers(stopping)
 
     async with (
         managed_pool(config.database) as pool,
