@@ -9,6 +9,7 @@ publisher.consumer.
 import json
 import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -16,9 +17,11 @@ import asyncpg
 from confluent_kafka.aio import AIOProducer
 from pydantic import ValidationError
 from shared import failure_log
-from shared.config import MAX_RETRY, Config
-from shared.errors import sanitize
-from shared.models import ReimbursementEnvelope
+from shared.config import MAX_RETRY, REIMBURSEMENT_TOPIC, Config
+from shared.errors import PublishFailed, sanitize
+from shared.models import AttemptError, ReimbursementEnvelope
+from shared.producer import publish
+from shared.reimbursement import repository
 from shared.reimbursement.use_cases.send_human_review import escalate_existing
 
 logger = logging.getLogger(__name__)
@@ -111,7 +114,58 @@ async def _escalate(deps: Dependencies, envelope: ReimbursementEnvelope) -> Mess
 
 
 async def _resolve(deps: Dependencies, envelope: ReimbursementEnvelope) -> MessageOutcome:
-    raise NotImplementedError  # completed in the next task (resolve-by-uuid, staleness, requeue)
+    """The retry<=3 path: resolve the row by uuid, tolerate a ghost (R-001),
+    and apply the staleness guard. Never raises."""
+    try:
+        async with deps.pool.acquire() as conn:
+            row = await repository.get_by_uuid(conn, envelope.uuid)
+    except Exception as exc:
+        return await _requeue(deps, envelope, exc)
+
+    if row is None:
+        # Ghost (R-001): not an error. Retrying can never resolve a genuine
+        # ghost — the row will never appear — so treating it as retryable
+        # would eventually pollute human-review with rows that don't exist.
+        logger.info(
+            json.dumps({"event": GHOST_DROPPED_EVENT, "uuid": str(envelope.uuid), "retry": envelope.retry})
+        )
+        return MessageOutcome.GHOST
+
+    if envelope.published_at < row["updated_at"]:
+        logger.info(json.dumps({"event": STALE_IGNORED_EVENT, "uuid": str(envelope.uuid)}))
+        return MessageOutcome.STALE
+
+    logger.info(json.dumps({"event": RESOLVED_EVENT, "uuid": str(envelope.uuid)}))
+    return MessageOutcome.RESOLVED
+
+
+async def _requeue(
+    deps: Dependencies, envelope: ReimbursementEnvelope, exc: Exception
+) -> MessageOutcome:
+    """A transient failure while resolving: republish to `Reimbursement`
+    itself (the only topic the agent owns) with retry+1 and the error
+    history appended. Never raises."""
+    logger.error("uuid=%s resolve failed: %s", envelope.uuid, sanitize(exc))
+    errors = [*envelope.errors, AttemptError.next(envelope.errors, "resolve", exc)]
+    retried = ReimbursementEnvelope(
+        uuid=envelope.uuid, retry=envelope.retry + 1, published_at=datetime.now(UTC), errors=errors
+    )
+    try:
+        await publish(
+            deps.producer,
+            REIMBURSEMENT_TOPIC,
+            retried.model_dump_json().encode(),
+            deps.config.kafka.publish_timeout_seconds,
+        )
+    except PublishFailed as requeue_exc:
+        failure_log.write(
+            deps.config.failure_log,
+            _failure_record(
+                RESOLVE_FAILED_EVENT, envelope, error=str(exc), requeue_error=str(requeue_exc)
+            ),
+        )
+        return MessageOutcome.LOGGED
+    return MessageOutcome.REQUEUED
 
 
 def _failure_record(
