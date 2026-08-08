@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from datetime import date
 from decimal import Decimal
 from uuid import UUID, uuid4
@@ -176,7 +177,10 @@ class DescribePutReimbursement:
         assert response.status_code == 400
         assert response.json() == {"msg": "body uuid does not match the path uuid"}
 
-    async def it_returns_500_on_a_simulated_pool_failure(self, db: asyncpg.Connection) -> None:
+    async def it_returns_500_on_a_simulated_pool_failure(
+        self, db: asyncpg.Connection, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.ERROR, logger="errors")
         uuid = await _seed(db, "REQ-PUT-POOL-FAILURE")
 
         async with _build_client(FakePool(db, acquire_error=RuntimeError("connection reset"))) as client:
@@ -184,6 +188,7 @@ class DescribePutReimbursement:
 
         assert response.status_code == 500
         assert response.json() == {"msg": "internal error"}
+        assert "connection reset" in caplog.text
 
     async def it_lets_exactly_one_of_two_concurrent_puts_win(self, migrated_db: str) -> None:
         # A real asyncpg pool (not FakePool's single locked connection): the
