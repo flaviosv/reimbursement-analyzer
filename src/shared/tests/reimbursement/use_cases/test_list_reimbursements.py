@@ -45,14 +45,14 @@ class DescribeListReimbursements:
     async def it_delegates_to_fetch_reimbursement_page_and_returns_real_rows_unchanged(
         self, db: asyncpg.Connection
     ) -> None:
-        # Scoped by a status no other test in the full suite commits outside
-        # its own rolled-back transaction (see DescribeFetchReimbursementPage's
-        # same note in test_repository.py) — an exclusive-ownership assumption
-        # over the whole table would be flaky.
+        # Membership, not exact-set: other pre-existing integration tests
+        # (e.g. agent's, REVIEW-09) commit real, undeletable human-review
+        # rows to this same session-scoped migrated_db.
         uuid = await insert_pending(db, valid_reimbursement_item("REQ-LIST-DELEGATE"))
         await db.execute("UPDATE reimbursement SET status = 'human-review' WHERE uuid = $1", uuid)
 
         rows = await list_reimbursements(db, statuses=["human-review"], limit=10, offset=0)
 
-        assert [row["uuid"] for row in rows] == [uuid]
-        assert rows[0]["request_id"] == "REQ-LIST-DELEGATE"
+        by_uuid = {row["uuid"]: row for row in rows}
+        assert uuid in by_uuid
+        assert by_uuid[uuid]["request_id"] == "REQ-LIST-DELEGATE"

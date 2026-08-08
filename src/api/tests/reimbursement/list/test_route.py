@@ -167,7 +167,12 @@ class DescribeGetReimbursement:
         async with _build_client(FakePool(db)) as client:
             response = await client.get("/api/v1/reimbursement", params={"status": "human-review"})
 
-        assert [item["request_id"] for item in response.json()["data"]] == ["REQ-SINGLE-A"]
+        # Membership, not exact-set: other pre-existing integration tests
+        # (e.g. agent's, REVIEW-09) commit real, undeletable human-review
+        # rows to this same session-scoped migrated_db.
+        request_ids = {item["request_id"] for item in response.json()["data"]}
+        assert "REQ-SINGLE-A" in request_ids
+        assert "REQ-SINGLE-B" not in request_ids
 
     async def it_filters_to_multiple_comma_separated_statuses(self, db: asyncpg.Connection) -> None:
         await _seed_reimbursement(db, "REQ-MULTI-A", status="human-review")
@@ -179,7 +184,10 @@ class DescribeGetReimbursement:
                 "/api/v1/reimbursement", params={"status": "human-review,auto-rejected"}
             )
 
-        assert {item["request_id"] for item in response.json()["data"]} == {"REQ-MULTI-A", "REQ-MULTI-B"}
+        # Subset, not exact-set: see it_filters_to_a_single_status above.
+        request_ids = {item["request_id"] for item in response.json()["data"]}
+        assert {"REQ-MULTI-A", "REQ-MULTI-B"} <= request_ids
+        assert "REQ-MULTI-C" not in request_ids
 
     async def it_includes_pending_rows_when_status_is_omitted(self, db: asyncpg.Connection) -> None:
         await _seed_reimbursement(db, "REQ-ALL-PENDING", status="pending")
