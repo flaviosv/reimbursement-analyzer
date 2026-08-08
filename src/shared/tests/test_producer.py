@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 from shared.errors import PublishFailed
-from shared.kafka import managed_producer, publish
+from shared.producer import managed_producer, publish
 
 pytestmark = pytest.mark.anyio
 

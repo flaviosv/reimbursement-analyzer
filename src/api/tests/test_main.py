@@ -38,12 +38,6 @@ class DescribeLifespan:
 
         assert app.state.producer._is_closed is True
 
-    def it_sets_the_kafka_config_on_app_state(self) -> None:
-        app = _build_app()
-
-        with TestClient(app):
-            assert app.state.kafka_config.bootstrap_servers
-
 
 class DescribeGetProducer:
     def it_returns_the_apps_producer_instance(self) -> None:

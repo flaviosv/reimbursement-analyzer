@@ -520,7 +520,13 @@ rather than a distinct status code or handler path.
 ### AD-022 — `KafkaConfig` frozen dataclass replaces free-function config; `publish()` becomes a generic `shared.kafka` helper; `api/kafka.py` renamed `api/producer.py`
 
 **Date:** 2026-08-08
-**Status:** Active (amends AD-019 — see its amendment note)
+**Status:** Amended by AD-023 (loader shape, module name) — 2026-08-08
+
+**Amendment note:** AD-023 replaces this ADR's `KafkaConfig.from_env()`
+classmethod with a single module-level `load_config()` function (the user's
+own established pattern from another project), and renames `shared.kafka`
+to `shared.producer`. Everything below describes the shape as of this
+ADR's original decision; AD-023 is the current shape.
 
 Second round of PR #4 review (14 new comments, all from the reviewer, none
 replies to prior threads) drove three related changes:
@@ -582,6 +588,53 @@ shape `design.md` proposes for its own AD-016 — that gap (noted in AD-019's
 original text) is unchanged by this ADR; `design.md` still needs a pass
 against current `main`/branch state before its Tasks phase starts.
 
+### AD-023 — Single cached `load_config()` loader replaces `KafkaConfig.from_env()`; `shared.kafka` renamed `shared.producer`
+
+**Date:** 2026-08-08
+**Status:** Active (amends AD-022 — see its amendment note)
+
+`shared.config` now follows the user's own established pattern from another
+project (`chatbot/core/config/config.py`): every dataclass is a plain data
+holder with no `from_env()`/env-reading logic of its own; a single
+`@lru_cache(maxsize=1)` module-level `load_config() -> Config` function does
+every `os.getenv()` read in one place and returns a root `Config` dataclass
+(`Config.kafka: KafkaConfig` today; future shared-kernel config domains
+nest alongside it as the root grows). `KafkaConfig.from_env()` is gone —
+any layer that needs Kafka settings calls `load_config().kafka`. Reading is
+memoised process-wide (once per process, not once per call), which is why
+`api/producer.py`'s `get_kafka_config()` dropped its `Request` parameter
+and its `app.state.kafka_config` stash entirely — it's now a stateless
+`load_config().kafka`, no longer something `main.py`'s `lifespan()` needs
+to construct and hand down. `shared.kafka` is renamed `shared.producer`
+(user request) — no behavior change, `managed_producer`/`publish` are
+unchanged.
+
+**Why:** direct user request to match a pattern already proven in another
+codebase, plus "any layer can use it" — a single retrieval function is
+easier to depend on from a future service than a per-dataclass
+classmethod convention that would need reinventing for every new config
+domain (`RedisConfig`, `DbConfig`, ... whatever `publisher-consume-request`
+or later features need).
+
+**Testing implication:** `load_config()`'s module-level cache persists for
+the life of the Python process, which is normally the whole pytest run —
+without intervention, whichever test calls it first would freeze the
+`os.environ` view every later test sees, silently defeating any
+`monkeypatch.setenv(...)`. Both `src/shared/tests/conftest.py` (new) and
+`src/api/tests/conftest.py` now carry an autouse `load_config.cache_clear()`
+fixture so every test starts from a clean cache. Anyone adding a new test
+tree under `src/*/tests` that touches `shared.config` needs the same
+fixture — pytest's per-directory `conftest.py` scoping does not fan this
+autouse fixture out to sibling trees automatically.
+
+**Implication for `publisher-consume-request`:** the loader-function
+pattern (not per-class `from_env()`) is now the shape to match if that
+feature adds its own config needs — nest a new dataclass field onto
+`Config` and read it inside `load_config()`, don't invent a parallel
+`Settings.from_env()` convention. `design.md`'s AD-016 (frozen pydantic
+`Settings` models) diverges from this further than AD-022 already noted;
+revisit before that design is approved.
+
 ---
 
 ## Handoff
@@ -605,10 +658,11 @@ touches `api` or `shared` next:** AD-018 (flat `api` layout, `package =
 false`), AD-019 (config/errors classes/kafka producer factory moved to
 `shared` — amended by AD-022), AD-020 (body ceiling 25 MiB → 1 MiB), AD-021
 (`PublishFailed` broad-except pattern), AD-022 (`KafkaConfig` dataclass,
-`shared.kafka.publish()`, `api/kafka.py` → `api/producer.py`,
-`payload.py` → `reimbursement/create/`). Read these before assuming any
-file path or import from the original `api-post-reimbursement`
-spec/design docs is still accurate — several are now stale (see below).
+`api/kafka.py` → `api/producer.py`, `payload.py` → `reimbursement/create/`
+— amended by AD-023), AD-023 (single cached `load_config()` loader,
+`shared.kafka` → `shared.producer`). Read these before assuming any file
+path or import from the original `api-post-reimbursement` spec/design
+docs is still accurate — several are now stale (see below).
 
 **In flight:** `publisher-consume-request` — spec (42 requirements), context,
 and `design.md` drafted. Awaiting design approval before Tasks. No code yet.
@@ -618,7 +672,7 @@ AD-013 / AD-014 / AD-015 were ratified in the prior session, and
 deferred. `design.md` proposes **AD-016** (single centralised config in
 `shared`, frozen `Settings` models + `from_env()`) and **AD-017** (`asyncpg`
 pool + implicit-transaction pattern) — **still reserved, not appended**,
-pending approval. AD-018 through AD-022 above deliberately did not claim
+pending approval. AD-018 through AD-023 above deliberately did not claim
 these numbers.
 
 **`design.md` is now partially stale — read before approving or starting

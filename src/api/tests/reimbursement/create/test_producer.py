@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -88,13 +89,13 @@ class DescribePublish:
         with pytest.raises(PublishFailed, match="RuntimeError: Local: Message timed out"):
             await publish(fake, b"[]", ["REQ-1"], kafka_config)
 
-    async def it_forwards_the_configured_publish_timeout(self) -> None:
+    async def it_forwards_the_configured_publish_timeout(self, kafka_config: KafkaConfig) -> None:
         # The mechanism itself (asyncio.wait_for racing the delivery future)
-        # is covered at shared.kafka.publish's own test level — this proves
-        # only that the wrapper forwards config.publish_timeout_seconds
+        # is covered at shared.producer.publish's own test level — this
+        # proves only that the wrapper forwards config.publish_timeout_seconds
         # rather than hardcoding its own.
         fake = _NeverResolvesFakeProducer()
-        fast_timeout_config = KafkaConfig(publish_timeout_seconds=0.05)
+        fast_timeout_config = replace(kafka_config, publish_timeout_seconds=0.05)
 
         with pytest.raises(PublishFailed, match="TimeoutError"):
             await publish(fake, b"[]", ["REQ-1"], fast_timeout_config)

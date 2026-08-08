@@ -4,7 +4,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from helpers import valid_reimbursement_item
-from shared.config import KafkaConfig
+from shared.config import load_config
 
 from errors import register_handlers
 from main import app as real_app
@@ -19,7 +19,7 @@ def _build_client(fake) -> TestClient:
     register_handlers(app)
     app.include_router(router)
     app.dependency_overrides[get_producer] = lambda: fake
-    app.dependency_overrides[get_kafka_config] = lambda: KafkaConfig()
+    app.dependency_overrides[get_kafka_config] = lambda: load_config().kafka
     return TestClient(app)
 
 

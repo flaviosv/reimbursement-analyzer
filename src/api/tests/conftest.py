@@ -13,7 +13,16 @@ from helpers import (
     with_database,
 )
 from migrate import apply_migrations
+from shared.config import load_config
 from testcontainers.community.postgres import PostgresContainer
+
+
+@pytest.fixture(autouse=True)
+def _clear_config_cache() -> None:
+    # load_config() is @lru_cache'd for production (read env once, reuse
+    # forever) — without this, whichever test calls it first would poison
+    # every later test's view of the environment for the rest of the run.
+    load_config.cache_clear()
 
 
 @contextmanager

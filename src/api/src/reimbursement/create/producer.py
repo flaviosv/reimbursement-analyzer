@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from confluent_kafka.aio import AIOProducer
 from shared.config import REQUEST_TOPIC, KafkaConfig
 from shared.errors import PublishFailed
-from shared.kafka import publish as publish_to_kafka
+from shared.producer import publish as publish_to_kafka
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ def build_envelope(raw: bytes, published_at: datetime) -> bytes:
 
 
 async def publish(producer: AIOProducer, raw: bytes, request_ids: list[str], config: KafkaConfig) -> None:
-    """Build the envelope and hand it to shared.kafka.publish, the
+    """Build the envelope and hand it to shared.producer.publish, the
     technology-agnostic publisher. request_ids are never part of the
     published payload — they exist only so a delivery failure can be logged
     against the business IDs it affects."""
