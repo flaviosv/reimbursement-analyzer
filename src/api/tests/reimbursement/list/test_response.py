@@ -67,3 +67,33 @@ class DescribeReimbursementListItemFromRecord:
         item = ReimbursementListItem.from_record(record)
 
         assert item.last_human_review is None
+
+    def it_validates_a_freshly_inserted_pending_row_with_all_nullable_fields_null(
+        self,
+    ) -> None:
+        record = {
+            **_BASE_RECORD,
+            "submitted_by": None,
+            "submitted_at": None,
+            "status": "pending",
+            "receipts_value": None,
+            "receipts_date": None,
+            "currency": None,
+            "decision_reason": None,
+            "hr_status": None,
+            "hr_reviewed_by": None,
+            "hr_reason": None,
+            "hr_created_at": None,
+        }
+
+        item = ReimbursementListItem.from_record(record)
+
+        assert item.submitted_by is None
+        assert item.submitted_at is None
+        assert item.original_payload == {"amount": 93.5, "currency": "BRL"}
+        assert item.status == "pending"
+        assert item.receipts_value is None
+        assert item.receipts_date is None
+        assert item.currency is None
+        assert item.decision_reason is None
+        assert item.last_human_review is None
