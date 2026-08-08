@@ -199,6 +199,10 @@ async def find_reimbursement_state(conn: asyncpg.Connection, uuid: UUID) -> asyn
 async def record_human_review_decision(
     conn: asyncpg.Connection, reimbursement_uuid: UUID, status: str, reviewed_by: str, reason: str
 ) -> UUID:
+    """Called only from review_reimbursement's transaction, after a
+    successful approve()/reject(), to append the audit-trail row those two
+    functions don't write themselves. The returned uuid is currently unused
+    by any caller."""
     return await conn.fetchval(
         _RECORD_HUMAN_REVIEW_DECISION, reimbursement_uuid, status, reviewed_by, reason
     )
