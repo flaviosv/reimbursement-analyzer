@@ -34,7 +34,7 @@ class DescribeAttemptError:
         assert entry.error_type == "PublishFailed"
         assert entry.message == "broker unreachable"
 
-    def it_rejects_a_stage_outside_the_two_named_ones(self) -> None:
+    def it_rejects_a_stage_outside_the_named_ones(self) -> None:
         with pytest.raises(ValidationError):
             AttemptError(
                 attempt=1,
@@ -84,6 +84,11 @@ class DescribeAttemptErrorNext:
 
         assert [entry.attempt for entry in history] == [1, 2, 3]
         assert [entry.stage for entry in history] == ["db-insert", "publish", "db-insert"]
+
+    def it_accepts_the_agent_resolve_stage(self) -> None:
+        entry = AttemptError.next([], "resolve", RuntimeError("boom"))
+
+        assert entry.stage == "resolve"
 
 
 class DescribeRequestEnvelopeErrors:

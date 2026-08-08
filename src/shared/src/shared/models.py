@@ -11,7 +11,7 @@ from pydantic import (
     StringConstraints,
 )
 
-Stage = Literal["db-insert", "publish"]
+Stage = Literal["db-insert", "publish", "resolve"]
 
 
 def _require_str(value: object) -> object:
