@@ -1,3 +1,4 @@
+import logging
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -122,6 +123,20 @@ class DescribeGetReimbursement:
         assert response.status_code == 400
         assert "msg" in response.json()
 
+    async def it_returns_400_when_limit_is_not_an_integer(self, db: asyncpg.Connection) -> None:
+        async with _build_client(FakePool(db)) as client:
+            response = await client.get("/api/v1/reimbursement", params={"limit": "abc"})
+
+        assert response.status_code == 400
+        assert "msg" in response.json()
+
+    async def it_returns_400_when_offset_is_not_an_integer(self, db: asyncpg.Connection) -> None:
+        async with _build_client(FakePool(db)) as client:
+            response = await client.get("/api/v1/reimbursement", params={"offset": "abc"})
+
+        assert response.status_code == 400
+        assert "msg" in response.json()
+
     async def it_returns_200_with_an_empty_list_when_nothing_matches(self, db: asyncpg.Connection) -> None:
         async with _build_client(FakePool(db)) as client:
             response = await client.get("/api/v1/reimbursement", params={"status": "auto-rejected"})
@@ -167,6 +182,20 @@ class DescribeGetReimbursement:
         assert response.status_code == 400
         assert "msg" in response.json()
 
+    async def it_returns_400_when_one_segment_of_a_comma_list_is_invalid(
+        self, db: asyncpg.Connection
+    ) -> None:
+        # spec.md's own Independent Test for LIST-05/07: one invalid segment
+        # among otherwise-valid ones must still invalidate the whole filter,
+        # not just be silently dropped.
+        async with _build_client(FakePool(db)) as client:
+            response = await client.get(
+                "/api/v1/reimbursement", params={"status": "human-review,pending"}
+            )
+
+        assert response.status_code == 400
+        assert "msg" in response.json()
+
     async def it_returns_400_for_a_repeated_status_query_param(self, db: asyncpg.Connection) -> None:
         async with _build_client(FakePool(db)) as client:
             response = await client.get(
@@ -195,12 +224,17 @@ class DescribeGetReimbursement:
         assert by_uuid[str(with_review)]["last_human_review"]["reason"] == "second look"
         assert by_uuid[str(without_review)]["last_human_review"] is None
 
-    async def it_returns_500_on_a_simulated_pool_failure(self, db: asyncpg.Connection) -> None:
+    async def it_returns_500_on_a_simulated_pool_failure(
+        self, db: asyncpg.Connection, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.ERROR, logger="errors")
+
         async with _build_client(FakePool(db, acquire_error=RuntimeError("connection reset"))) as client:
             response = await client.get("/api/v1/reimbursement")
 
         assert response.status_code == 500
         assert response.json() == {"msg": "internal error"}
+        assert "connection reset" in caplog.text
 
 
 class DescribeTheRealApp:

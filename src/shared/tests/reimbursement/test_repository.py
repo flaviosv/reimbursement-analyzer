@@ -291,6 +291,26 @@ class DescribeFetchReimbursementPage:
 
         assert page == []
 
+    async def it_returns_an_empty_list_when_offset_is_beyond_the_total_row_count(
+        self, db: asyncpg.Connection
+    ) -> None:
+        await _seed_reimbursement(db, "REQ-OFFSET-BEYOND", status="auto-rejected")
+
+        page = await fetch_reimbursement_page(db, statuses=["auto-rejected"], limit=100, offset=1000)
+
+        assert page == []
+
+    async def it_does_not_duplicate_rows_for_a_repeated_status_in_the_filter(
+        self, db: asyncpg.Connection
+    ) -> None:
+        await _seed_reimbursement(db, "REQ-DUP-STATUS", status="auto-rejected")
+
+        page = await fetch_reimbursement_page(
+            db, statuses=["auto-rejected", "auto-rejected"], limit=100, offset=0
+        )
+
+        assert [row["request_id"] for row in page] == ["REQ-DUP-STATUS"]
+
     async def it_populates_last_human_review_when_present_and_null_when_absent(
         self, db: asyncpg.Connection
     ) -> None:
@@ -325,6 +345,31 @@ class DescribeFetchReimbursementPage:
         page = await fetch_reimbursement_page(db, statuses=["auto-approved"], limit=100, offset=0)
 
         assert [row["uuid"] for row in page] == [newest, middle, oldest]
+
+    async def it_orders_results_by_created_at_descending_on_the_no_filter_path(
+        self, db: asyncpg.Connection
+    ) -> None:
+        # A single-status filter can be served by the
+        # reimbursement_status_created_idx (status, created_at DESC) index
+        # scan, which incidentally preserves DESC order even without the
+        # query's own explicit ORDER BY — see validation.md's surviving
+        # mutant. Mixed statuses force the $1::text[] IS NULL no-filter
+        # branch, which that index cannot serve; a seq scan without ORDER BY
+        # returns rows in roughly insertion (ascending) order, so this is the
+        # one path where dropping ORDER BY actually flips the result.
+        base = datetime(2026, 6, 1, tzinfo=UTC)
+        oldest = await _seed_reimbursement(db, "REQ-ORDER-NOFILTER-OLD", status="pending", created_at=base)
+        middle = await _seed_reimbursement(
+            db, "REQ-ORDER-NOFILTER-MID", status="human-review", created_at=base + timedelta(hours=12)
+        )
+        newest = await _seed_reimbursement(
+            db, "REQ-ORDER-NOFILTER-NEW", status="auto-rejected", created_at=base + timedelta(days=1)
+        )
+
+        page = await fetch_reimbursement_page(db, statuses=None, limit=1000, offset=0)
+        own_rows = [row["uuid"] for row in page if row["uuid"] in {oldest, middle, newest}]
+
+        assert own_rows == [newest, middle, oldest]
 
 
 class DescribeApprove:
