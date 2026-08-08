@@ -1,14 +1,14 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from reimbursement.list.params import LimitQuery, OffsetQuery, StatusQuery, parse_status_filter
+from reimbursement.list.params import LimitQuery, OffsetQuery, parse_status_filter
 
 
 def _build_app() -> FastAPI:
     app = FastAPI()
 
     @app.get("/params")
-    def _echo(limit: LimitQuery = 100, offset: OffsetQuery = 0, status: StatusQuery = None) -> dict:
-        return {"limit": limit, "offset": offset, "status": status}
+    def _echo(limit: LimitQuery = 100, offset: OffsetQuery = 0) -> dict:
+        return {"limit": limit, "offset": offset}
 
     return app
 
@@ -19,7 +19,7 @@ class DescribeListQueryDefaults:
 
         response = client.get("/params")
 
-        assert response.json() == {"limit": 100, "offset": 0, "status": None}
+        assert response.json() == {"limit": 100, "offset": 0}
 
 
 class DescribeParseStatusFilter:

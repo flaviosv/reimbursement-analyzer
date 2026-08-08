@@ -1,6 +1,9 @@
+import asyncio
 import os
 from secrets import token_hex
 from urllib.parse import urlsplit, urlunsplit
+
+import asyncpg
 
 # Matches the postgres service in docker-compose.yml, so tests exercise the
 # same major version the stack runs.
@@ -54,3 +57,43 @@ def valid_reimbursement_item(request_id: str = "REQ-0001", **extra: object) -> d
         "submitted_at": "2026-01-01T12:00:00Z",
         **extra,
     }
+
+
+class _FakePoolAcquisition:
+    def __init__(self, pool: "FakePool") -> None:
+        self.pool = pool
+
+    async def __aenter__(self) -> asyncpg.Connection:
+        if self.pool.acquire_error is not None:
+            raise self.pool.acquire_error
+        await self.pool.lock.acquire()
+        return self.pool.connection
+
+    async def __aexit__(self, *exc_info: object) -> bool:
+        self.pool.lock.release()
+        return False
+
+
+class FakePool:
+    """Hands out the one real connection a `db` fixture owns, so route-level
+    tests exercise genuine Postgres query/transaction semantics instead of a
+    fake's own idea of them — adapted from
+    `publisher/tests/fakes.py::RealPool`'s "real connection behind a lock"
+    pattern, pool-shaped so `Depends(get_pool)` can be overridden with it
+    directly. Reachable by bare name via the workspace `pythonpath` (like
+    `valid_reimbursement_item` above), not a conftest fixture, so both
+    `reimbursement/list/` and `reimbursement/update/` test packages can reuse
+    the same class without duplicating it (AD-009 rules out a cross-conftest
+    import).
+
+    `acquire_error`, when set, is raised on every `acquire()` instead of
+    yielding the connection — how a route test forces a genuine 500 without
+    an actually broken database."""
+
+    def __init__(self, connection: asyncpg.Connection, *, acquire_error: Exception | None = None) -> None:
+        self.connection = connection
+        self.acquire_error = acquire_error
+        self.lock = asyncio.Lock()
+
+    def acquire(self, *, timeout: float | None = None) -> _FakePoolAcquisition:
+        return _FakePoolAcquisition(self)
