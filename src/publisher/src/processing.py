@@ -35,7 +35,7 @@ class _LazyJSON:
     record — never on a call whose level isn't enabled. `logger.info(json
     .dumps(...))` paid the serialization cost unconditionally even when
     INFO was disabled, on a path that fires once per item and can repeat
-    many times over on redelivery (P7)."""
+    many times over on redelivery."""
 
     __slots__ = ("_value",)
 
@@ -118,6 +118,20 @@ async def handle_message(deps: Dependencies, raw: bytes | None) -> list[ItemOutc
     return await _fan_out(deps, envelope, handler)
 
 
+def _failure_record(
+    event: str, index: int, item: Any, errors: list[AttemptError], **extra: Any
+) -> dict[str, Any]:
+    """The shape every last-resort record shares."""
+    return {
+        "event": event,
+        "item_index": index,
+        "request_id": _request_id(item),
+        "item": item,
+        "errors": [error.model_dump(mode="json") for error in errors],
+        **extra,
+    }
+
+
 def _malformed_message_record(raw: bytes, exc: ValidationError) -> dict[str, Any]:
     """One failure-log entry per recoverable item, not one blob.
 
@@ -183,9 +197,9 @@ async def process_item(
         # Also catches a COMMIT that fails *after* a successful publish (the
         # transaction's implicit commit runs when the `async with` block in
         # _insert_and_publish exits) — mislabeled "db-insert" below even
-        # though the insert itself succeeded. Accepted as-is alongside R5,
-        # which covers the same edge case's consequence (a second row on
-        # redelivery, with a different uuid than the one already published).
+        # though the insert itself succeeded. Accepted as-is: a redelivery
+        # then produces a second row with a different uuid than the one
+        # already published, the same consequence a plain publish failure has.
         if repository.is_duplicate(exc):
             _log_duplicate(envelope, item, exc)
             return ItemOutcome.DUPLICATE
@@ -201,12 +215,11 @@ async def escalate_item(
     if not _accepts(deps, envelope, index, item):
         return ItemOutcome.INVALID
     try:
-        # A12 flagged this transaction as redundant for a single INSERT —
-        # that's true for atomicity, but wrong for isolation: without it, a
-        # caught UniqueViolationError below poisons the connection's
-        # enclosing transaction state (verified: removing this broke duplicate-
-        # collision handling under the shared-connection test setup). The
-        # transaction acts as a savepoint boundary, not an atomicity guard.
+        # This transaction looks redundant for a single INSERT — it isn't:
+        # without it, a caught UniqueViolationError below poisons the
+        # connection's enclosing transaction state (removing it broke
+        # duplicate-collision handling under the shared-connection test
+        # setup). It acts as a savepoint boundary, not an atomicity guard.
         async with deps.pool.acquire(timeout=deps.config.database.acquire_timeout_seconds) as conn:
             async with conn.transaction():
                 await send_human_review(
@@ -224,7 +237,7 @@ async def escalate_item(
         )
         failure_log.write(
             deps.config.failure_log,
-            failure_log.build_record(
+            _failure_record(
                 ESCALATION_FAILED_EVENT,
                 index,
                 item,
@@ -256,7 +269,7 @@ def _accepts(
         )
         failure_log.write(
             deps.config.failure_log,
-            failure_log.build_record(
+            _failure_record(
                 INVALID_ITEM_EVENT,
                 index,
                 item,
@@ -317,7 +330,7 @@ async def _requeue(
     except PublishFailed as requeue_exc:
         failure_log.write(
             deps.config.failure_log,
-            failure_log.build_record(
+            _failure_record(
                 ITEM_FAILED_EVENT,
                 index,
                 item,

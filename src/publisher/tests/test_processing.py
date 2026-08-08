@@ -16,6 +16,7 @@ from processing import (
     EMPTY_PAYLOAD_EVENT,
     Dependencies,
     ItemOutcome,
+    _failure_record,
     handle_message,
     process_item,
 )
@@ -93,9 +94,8 @@ class DescribeHandleMessage:
     async def it_logs_and_skips_a_null_valued_record_rather_than_crashing(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        # A tombstone/null-value record crashed the consumer permanently:
-        # `raw.decode(...)` on None (H2/S1, reproduced by execution in both
-        # code-review and tests-code-review).
+        # A tombstone/null-value record crashed the consumer permanently
+        # via `raw.decode(...)` on None.
         pool, producer = FakePool(), FakeProducer()
 
         with caplog.at_level(logging.CRITICAL, logger=load_config().failure_log.logger_name):
@@ -131,10 +131,9 @@ class DescribeHandleMessage:
         # Saturation, not merely a bound: a sequential implementation would
         # also satisfy "never exceeds 10" while breaking AD-013's timing.
         # (A wall-clock timing variant of this test previously lived here
-        # too — removed as flaky under load (5-way corroborated in
-        # tests-code-review: P1/M12/C3/I1, reproduced failing under real
-        # contention) and redundant: this assertion already proves the same
-        # saturation guarantee deterministically, with no clock involved.)
+        # too — removed as flaky under real contention and redundant: this
+        # assertion already proves the same saturation guarantee
+        # deterministically, with no clock involved.)
         assert pool.max_in_flight == limit
 
     async def it_starts_every_item_rather_than_dropping_those_past_the_limit(self) -> None:
@@ -220,9 +219,8 @@ class DescribeTheReimbursementMessage:
         self,
     ) -> None:
         # An item that failed twice then succeeds on the third attempt must
-        # still hand the Agent that history — it was the only construction
-        # site, and it silently dropped `errors` (H1/Q16, proven by mutation:
-        # adding this field back left every prior test green).
+        # still hand the Agent that history — this was the only construction
+        # site, and it silently dropped `errors`.
         item = valid_reimbursement_item("REQ-HANDOFF")
         pool, producer = FakePool(), FakeProducer()
         history = _three_failures()[:2]
@@ -855,3 +853,23 @@ class DescribeAnEmptyPayload:
 
         assert _failures(caplog) == []
         assert [record for record in caplog.records if record.levelno >= logging.ERROR] == []
+
+
+class DescribeFailureRecord:
+    def it_carries_the_event_index_request_id_item_and_errors(self) -> None:
+        error = _error(1, "db-insert")
+        item = {"request_id": "REQ-1", "submitted_by": "person@example.com"}
+
+        record = _failure_record("some.event", 2, item, [error], outcome="logged")
+
+        assert record["event"] == "some.event"
+        assert record["item_index"] == 2
+        assert record["request_id"] == "REQ-1"
+        assert record["item"] == item
+        assert record["errors"] == [error.model_dump(mode="json")]
+        assert record["outcome"] == "logged"
+
+    def it_returns_none_for_request_id_when_the_item_is_not_a_dict(self) -> None:
+        record = _failure_record("some.event", 0, "not-a-dict", [])
+
+        assert record["request_id"] is None
