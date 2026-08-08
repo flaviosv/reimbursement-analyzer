@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from uuid import uuid4
@@ -9,6 +10,7 @@ _BASE_RECORD = {
     "request_id": "REQ-1",
     "submitted_by": "person@example.com",
     "submitted_at": datetime(2026, 1, 1, 12, 0, tzinfo=UTC),
+    "original_payload": json.dumps({"amount": 93.5, "currency": "BRL"}),
     "status": "human-approved",
     "receipts_value": Decimal("93.50"),
     "receipts_date": date(2026, 1, 2),
@@ -38,6 +40,7 @@ class DescribeReimbursementListItemFromRecord:
         assert item.request_id == "REQ-1"
         assert item.submitted_by == "person@example.com"
         assert item.submitted_at == _BASE_RECORD["submitted_at"]
+        assert item.original_payload == {"amount": 93.5, "currency": "BRL"}
         assert item.status == "human-approved"
         assert item.receipts_value == Decimal("93.50")
         assert item.receipts_date == date(2026, 1, 2)

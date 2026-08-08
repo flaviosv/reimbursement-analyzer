@@ -1,6 +1,7 @@
+import json
 from datetime import date
 from decimal import Decimal
-from typing import Literal, Self
+from typing import Any, Literal, Self
 from uuid import UUID
 
 import asyncpg
@@ -19,6 +20,7 @@ class ReimbursementListItem(BaseModel):
     request_id: str
     submitted_by: str | None
     submitted_at: AwareDatetime | None
+    original_payload: dict[str, Any]
     status: str
     receipts_value: Decimal | None
     receipts_date: date | None
@@ -47,6 +49,7 @@ class ReimbursementListItem(BaseModel):
             request_id=record["request_id"],
             submitted_by=record["submitted_by"],
             submitted_at=record["submitted_at"],
+            original_payload=json.loads(record["original_payload"]),
             status=record["status"],
             receipts_value=record["receipts_value"],
             receipts_date=record["receipts_date"],

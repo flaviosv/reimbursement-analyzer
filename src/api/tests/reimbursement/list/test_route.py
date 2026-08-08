@@ -1,16 +1,17 @@
+import json
 import logging
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import UUID, uuid4
 
 import asyncpg
 import httpx
 import pytest
+from dependencies import get_pool
+from errors import register_handlers
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from helpers import FakePool
-
-from dependencies import get_pool
-from errors import register_handlers
 from main import app as real_app
 from reimbursement.list.route import router
 
@@ -18,7 +19,7 @@ pytestmark = pytest.mark.anyio
 
 _SEED_REIMBURSEMENT = """
     INSERT INTO reimbursement (uuid, request_id, original_payload, status, created_at)
-    VALUES ($1, $2, '{}'::jsonb, $3, $4)
+    VALUES ($1, $2, $3::text::jsonb, $4, $5)
 """
 
 _SEED_HUMAN_REVIEW = """
@@ -33,9 +34,17 @@ async def _seed_reimbursement(
     *,
     status: str = "human-review",
     created_at: datetime | None = None,
+    original_payload: dict[str, Any] | None = None,
 ) -> UUID:
     uuid = uuid4()
-    await db.execute(_SEED_REIMBURSEMENT, uuid, request_id, status, created_at or datetime.now(UTC))
+    await db.execute(
+        _SEED_REIMBURSEMENT,
+        uuid,
+        request_id,
+        json.dumps(original_payload or {}),
+        status,
+        created_at or datetime.now(UTC),
+    )
     return uuid
 
 
@@ -223,6 +232,18 @@ class DescribeGetReimbursement:
 
         assert by_uuid[str(with_review)]["last_human_review"]["reason"] == "second look"
         assert by_uuid[str(without_review)]["last_human_review"] is None
+
+    async def it_includes_the_original_payload_as_a_parsed_json_object(
+        self, db: asyncpg.Connection
+    ) -> None:
+        payload = {"amount": 93.5, "currency": "BRL"}
+        uuid = await _seed_reimbursement(db, "REQ-PAYLOAD", original_payload=payload)
+
+        async with _build_client(FakePool(db)) as client:
+            response = await client.get("/api/v1/reimbursement")
+        by_uuid = {item["uuid"]: item for item in response.json()["data"]}
+
+        assert by_uuid[str(uuid)]["original_payload"] == payload
 
     async def it_returns_500_on_a_simulated_pool_failure(
         self, db: asyncpg.Connection, caplog: pytest.LogCaptureFixture
