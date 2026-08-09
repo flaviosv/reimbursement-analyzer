@@ -98,23 +98,14 @@ def get_graph() -> CompiledStateGraph:
 LANGFUSE_FALLBACK_EVENT = "reimbursement.langfuse_fallback"
 
 
+@lru_cache(maxsize=1)
 def _langfuse_handlers() -> list[Any]:
     """AGD-23/24: every LLM invocation traced via LangFuse, durable
-    `failure_log` fallback when LangFuse is unreachable.
-
-    # SPEC_DEVIATION: design.md's Tech Decisions table assumes `langfuse`
-    # is an installed dependency and wires `CallbackHandler()` directly.
-    # It is not in `pyproject.toml` — no task in this feature's list (T6
-    # added only `langchain-ollama`) adds it, and adding a new dependency
-    # is out of this batch's scope (T13's own "Where" is agent.py only).
-    # Reason: "unreachable" (AGD-24's own fallback trigger) is read here to
-    # include "not installed" — the same already-shipped file/stdout log
-    # sink both cases fall back to, so graph construction never hard-fails
-    # on a dependency this feature's task list never scheduled. Adding the
-    # real `langfuse` dependency (AGD-23's own tracing) is a follow-up
-    # pending an explicit decision, not a silent omission — this fallback
-    # (AGD-24) only durably records that no trace was captured.
-    """
+    `failure_log` fallback when LangFuse is unreachable. Memoized like
+    `get_graph()` (AD-023) — `CallbackHandler()` wraps a long-lived client,
+    not a per-request call, so it's built once per process rather than once
+    per message; also means the "unavailable" fallback logs at most once per
+    process instead of flooding `failure_log` on every message."""
     try:
         from langfuse.langchain import CallbackHandler
     except ImportError:

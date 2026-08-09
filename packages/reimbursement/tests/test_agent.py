@@ -281,3 +281,47 @@ class DescribeGraphRouting:
         assert not any("apply_policies" in line for line in lines)
         assert not any("analysis" in line for line in lines)
         assert any("apply_agent_decision" in line for line in lines)
+
+
+class DescribeBuildGraph:
+    def it_wires_the_real_ollama_bound_models_into_the_expected_node_set(self) -> None:
+        # No monkeypatching: proves the real body (init_chat_model calls,
+        # config.ollama_model/ollama_base_url plumbing, schema binding)
+        # constructs without error — every other test substitutes build_graph
+        # or _wire's node set entirely.
+        graph = agent.build_graph()
+
+        assert set(graph.get_graph().nodes.keys()) == {
+            "__start__",
+            "__end__",
+            "extract_fields",
+            "validate",
+            "apply_policies",
+            "analysis",
+            "apply_agent_decision",
+        }
+
+
+class DescribeDecide:
+    async def it_threads_the_langfuse_callback_handlers_into_graph_ainvoke(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[dict] = []
+
+        class _FakeGraph:
+            async def ainvoke(self, state: dict, config: dict) -> dict:
+                calls.append(config)
+                return {"status": "auto-approved"}
+
+        monkeypatch.setattr(agent, "get_graph", lambda: _FakeGraph())
+        expected_handlers = agent._langfuse_handlers()
+        conn = object()
+
+        result = await agent.decide(
+            Reimbursement(uuid=uuid4(), original_payload={}), conn
+        )
+
+        assert result == {"status": "auto-approved"}
+        assert len(calls) == 1
+        assert calls[0]["callbacks"] == expected_handlers
+        assert calls[0]["configurable"] == {"conn": conn}
