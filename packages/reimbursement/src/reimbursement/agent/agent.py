@@ -16,6 +16,8 @@ import asyncpg
 from langchain.chat_models import init_chat_model
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
+from shared import failure_log
+from shared.config import load_config
 from shared.models import Reimbursement
 from shared.reimbursement.use_cases.apply_decision import apply_decision
 
@@ -85,9 +87,12 @@ def get_graph() -> CompiledStateGraph:
     return build_graph()
 
 
+LANGFUSE_FALLBACK_EVENT = "reimbursement.langfuse_fallback"
+
+
 def _langfuse_handlers() -> list[Any]:
-    """AGD-23/24: every LLM invocation traced via LangFuse, file-log
-    fallback when LangFuse is unreachable.
+    """AGD-23/24: every LLM invocation traced via LangFuse, durable
+    `failure_log` fallback when LangFuse is unreachable.
 
     # SPEC_DEVIATION: design.md's Tech Decisions table assumes `langfuse`
     # is an installed dependency and wires `CallbackHandler()` directly.
@@ -98,18 +103,32 @@ def _langfuse_handlers() -> list[Any]:
     # include "not installed" — the same already-shipped file/stdout log
     # sink both cases fall back to, so graph construction never hard-fails
     # on a dependency this feature's task list never scheduled. Adding the
-    # real `langfuse` dependency is a follow-up, not a silent omission.
+    # real `langfuse` dependency (AGD-23's own tracing) is a follow-up
+    # pending an explicit decision, not a silent omission — this fallback
+    # (AGD-24) only durably records that no trace was captured.
     """
     try:
         from langfuse.langchain import CallbackHandler
     except ImportError:
         logger.info("FLOW: langfuse not installed; LLM trace falls back to file logging")
+        failure_log.write(
+            load_config().failure_log,
+            {"event": LANGFUSE_FALLBACK_EVENT, "reason": "langfuse not installed"},
+        )
         return []
 
     try:
         return [CallbackHandler()]
-    except Exception:
+    except Exception as exc:
         logger.exception("FLOW: langfuse handler unavailable; LLM trace falls back to file logging")
+        failure_log.write(
+            load_config().failure_log,
+            {
+                "event": LANGFUSE_FALLBACK_EVENT,
+                "reason": "langfuse handler unavailable",
+                "error": str(exc),
+            },
+        )
         return []
 
 
