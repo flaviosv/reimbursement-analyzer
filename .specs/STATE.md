@@ -395,7 +395,7 @@ otherwise it starves under load instead of failing loudly (**R-005**).
 ### AD-018 — Flat `api` layout: `src/api/src/*.py`, `api` is a virtual (uninstalled) workspace member
 
 **Date:** 2026-08-08
-**Status:** Active
+**Status:** Amended by AD-031 (build backend: uv_build → setuptools) — 2026-08-09
 
 `src/api/src/api/` (the doubled path AD-009 originally described) is
 flattened to `src/api/src/*.py` — no `api/` package directory. `src/api/pyproject.toml`
@@ -748,7 +748,7 @@ one-member abstraction layer is ceremony, and this is a tracked bet.
 ### AD-026 — `publisher` flattens to `src/publisher/src`, a virtual workspace member
 
 **Date:** 2026-08-08
-**Status:** Active
+**Status:** Amended by AD-031 (build backend: uv_build → setuptools) — 2026-08-09
 **Follows:** AD-018 (same mechanism, applied to a second service)
 
 `src/publisher/src/publisher/` collapses to loose modules under
@@ -909,6 +909,75 @@ implementation. Fixed as part of PR review remediation: the duplicate
 definition is deleted from `shared.reimbursement.repository`, both agent
 import sites now import from `shared.db`, and a repo-wide grep confirms a
 single definition remains.
+
+---
+
+### AD-031 — `api`/`publisher`/`reimbursement` switch build backend from `uv_build` to `setuptools` (`package-dir` mapping); cross-package test helpers consolidate into `shared.testing`
+
+**Date:** 2026-08-09
+**Status:** Active
+**Amends:** AD-018 (`api` flat layout) and AD-026 (`publisher` flattens) —
+same flat-on-disk intent preserved, different build-backend mechanism.
+
+**Root cause:** `reimbursement` (renamed from `agent`, kept flat per the
+AD-018/AD-026 precedent) and `publisher` both had flat, bare `config.py`/
+`consumer.py` modules. A single `uv run pytest` invocation across both put
+every service's `src/` on one shared `sys.path` in one process; Python
+caches imports by bare name in `sys.modules` process-wide, so once `config`
+resolved to one package's file, every `from config import X` elsewhere in
+that same pytest session — including inside the *other* package's own
+code — got that same cached module. Confirmed empirically:
+`uv run pytest src/reimbursement src/publisher` failed immediately with
+`ImportError: cannot import name 'load_agent_config' from 'config'`
+(resolved to `publisher`'s `config.py`).
+
+**Resolution:** `api`, `publisher`, and `reimbursement` each switch
+`[build-system]` from `uv_build` to `setuptools`, adding
+`[tool.setuptools.package-dir] <pkg> = "src"`. This gives each real,
+dotted-import namespacing (`api.main`, `publisher.consumer`,
+`reimbursement.config`, etc.) while keeping the exact same flat
+`src/<pkg>/src/*.py` layout on disk — no directory moves, no doubled path.
+`setuptools`' `package-dir`-mapped explicit-layout discovery auto-detects
+nested subpackages (e.g. `api.reimbursement.create`,
+`reimbursement.agent.nodes`) with a single config line, no manual `packages`
+list.
+
+**Rejected alternatives** (both explicitly ruled out with the user before
+this design was chosen):
+1. Reverting to `uv_build`'s doubled-path convention
+   (`src/<pkg>/src/<pkg>/*.py`, AD-018/AD-026's pre-flatten shape) — verified
+   via Context7 against `uv_build`'s own source (`find_roots`) that it
+   cannot decouple an import name from a same-named directory even in
+   `namespace = true` mode, so this was the only way `uv_build` could give
+   real namespacing. The user rejected the doubled path outright.
+2. Pytest-only isolation — a standalone, nested `[tool.pytest.ini_options]`
+   per package plus a `--confcutdir` override reaching into `api/tests/`.
+   Rejected because it made `reimbursement`'s tests depend on `api`'s
+   private test tree, which the user does not want; it also required a
+   second Postgres testcontainer or new orchestration tooling to keep the
+   workspace-root `conftest.py`'s shared fixtures reachable.
+
+**Side effect — test-helper consolidation:** `valid_reimbursement_item` and
+the generic DB-provisioning utilities (`POSTGRES_IMAGE`,
+`MAINTENANCE_DATABASE`, `database_name`, `with_database`, `maintenance_url`,
+`disposable_database_name`, `guard_is_test_database`) previously lived in
+`api/tests/helpers.py`, reached by `publisher`'s, `reimbursement`'s, and
+`shared`'s own tests, and by the workspace-root `conftest.py`, via bare-name
+`pythonpath` resolution. A real installed `api` package no longer offers
+that resolution to sibling packages, so these moved into `shared.testing` —
+a normal package import every service already reaches — reconciling
+`seed_reimbursement`'s signature to add `original_payload` support in the
+process. `api`-specific fakes (`FakePool`, `_build_client`,
+`valid_approve_payload`, `valid_reject_payload`) stayed local to
+`api/tests/helpers.py`.
+
+**Practical effect:** the root `pyproject.toml`'s
+`[tool.pytest.ini_options]` collapses back to one unified config covering
+all four packages (`testpaths = ["src/api", "src/publisher",
+"src/reimbursement", "src/shared"]`), restoring the single
+shared-Postgres-testcontainer architecture with zero new test-orchestration
+tooling. `uv run pytest` at the workspace root runs all four packages
+together again — 447 tests passed, the actual proof the collision is gone.
 
 ---
 

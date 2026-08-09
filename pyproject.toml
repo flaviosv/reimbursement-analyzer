@@ -32,7 +32,7 @@ reimbursement = { workspace = true }
 # explicitly so a tests directory added to any of them is never silently
 # uncollected. reimbursement no longer needs its own standalone
 # src/reimbursement/pyproject.toml [tool.pytest.ini_options] (AD-026 flagged
-# the risk; AD-030 records this resolution): all three services are real,
+# the risk; AD-031 records this resolution): all three services are real,
 # dotted-namespaced packages now (setuptools + package-dir), so
 # publisher.config/reimbursement.config etc. no longer collide on a shared
 # bare module name the way flat config.py/consumer.py did.
