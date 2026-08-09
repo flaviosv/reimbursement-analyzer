@@ -254,7 +254,7 @@ class DescribeTheDecisionGraph:
                 "extract_fields": ExtractFields(model=extract_model, prompt=EXTRACT_FIELDS_PROMPT),
                 "validate": Validate(),
                 "apply_policies": ApplyPolicies(apply_decision=apply_decision),
-                "analysis": Analysis(model=analysis_model, prompt=ANALYSIS_PROMPT),
+                "analysis": Analysis(model=analysis_model, prompt=ANALYSIS_PROMPT, model_name="llama3.2"),
                 "apply_agent_decision": ApplyAgentDecision(apply_decision=apply_decision),
             }
             return agent_module._wire(nodes)

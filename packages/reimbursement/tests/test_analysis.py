@@ -19,7 +19,7 @@ class DescribeAnalysis:
         model = FakeStructuredModel(
             result=GuardrailVerdict(consistent=True, reasoning="amount matches receipt text")
         )
-        node = Analysis(model=model, prompt=PLACEHOLDER_PROMPT)
+        node = Analysis(model=model, prompt=PLACEHOLDER_PROMPT, model_name="llama3.2")
 
         # A None "configurable" proves this node never reaches for a
         # conn/apply_decision dependency — it would raise on a subscript of
@@ -32,6 +32,8 @@ class DescribeAnalysis:
         assert result["decision_reason"] == "amount matches receipt text"
         assert any("FLOW: Executing 'analysis' node" in r.message for r in caplog.records)
         assert any("guardrail_verdict=True" in r.message for r in caplog.records)
+        # AGD-23/24: attributes which model authored this decision_reason.
+        assert any("model=llama3.2" in r.message for r in caplog.records)
 
     async def it_routes_to_human_review_on_a_contradictory_verdict_with_the_guardrails_own_reasoning(
         self,
@@ -41,7 +43,7 @@ class DescribeAnalysis:
                 consistent=False, reasoning="claimed amount contradicts the OCR total"
             )
         )
-        node = Analysis(model=model, prompt=PLACEHOLDER_PROMPT)
+        node = Analysis(model=model, prompt=PLACEHOLDER_PROMPT, model_name="llama3.2")
 
         result = await node(_state(), {"configurable": None})
 
@@ -51,7 +53,7 @@ class DescribeAnalysis:
 
     async def it_invokes_the_guardrail_exactly_once(self) -> None:
         model = FakeStructuredModel(result=GuardrailVerdict(consistent=True, reasoning="ok"))
-        node = Analysis(model=model, prompt=PLACEHOLDER_PROMPT)
+        node = Analysis(model=model, prompt=PLACEHOLDER_PROMPT, model_name="llama3.2")
 
         await node(_state(), {"configurable": None})
 
@@ -61,7 +63,7 @@ class DescribeAnalysis:
         # R-011's interim floor (validation.py's _decide) is the layer that
         # catches this — the node itself must not swallow it.
         model = FakeStructuredModel(error=RuntimeError("ollama unreachable"))
-        node = Analysis(model=model, prompt=PLACEHOLDER_PROMPT)
+        node = Analysis(model=model, prompt=PLACEHOLDER_PROMPT, model_name="llama3.2")
 
         with pytest.raises(RuntimeError, match="ollama unreachable"):
             await node(_state(), {"configurable": None})

@@ -23,9 +23,13 @@ class GuardrailVerdict(BaseModel):
 
 
 class Analysis:
-    def __init__(self, model: Runnable, prompt: ChatPromptTemplate) -> None:
+    def __init__(self, model: Runnable, prompt: ChatPromptTemplate, model_name: str) -> None:
         self._model = model
         self._prompt = prompt
+        # AGD-23/24's LangFuse trace already captures the full prompt/
+        # response per call; this is the durable, no-cross-reference-needed
+        # record of which model authored this specific decision_reason.
+        self._model_name = model_name
 
     async def __call__(self, state: State, config: RunnableConfig) -> dict[str, Any]:
         logger.info("FLOW: Executing 'analysis' node")
@@ -35,7 +39,12 @@ class Analysis:
         verdict = await self._model.ainvoke(messages)
 
         status = "auto-approved" if verdict.consistent else "human-review"
-        logger.info("FLOW: analysis guardrail_verdict=%s status=%s", verdict.consistent, status)
+        logger.info(
+            "FLOW: analysis guardrail_verdict=%s status=%s model=%s",
+            verdict.consistent,
+            status,
+            self._model_name,
+        )
 
         return {
             "guardrail_verdict": verdict.consistent,

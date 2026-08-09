@@ -85,7 +85,7 @@ def build_graph() -> CompiledStateGraph:
         "extract_fields": ExtractFields(model=extract_model, prompt=EXTRACT_FIELDS_PROMPT),
         "validate": Validate(),
         "apply_policies": ApplyPolicies(apply_decision=apply_decision),
-        "analysis": Analysis(model=analysis_model, prompt=ANALYSIS_PROMPT),
+        "analysis": Analysis(model=analysis_model, prompt=ANALYSIS_PROMPT, model_name=config.ollama_model),
         "apply_agent_decision": ApplyAgentDecision(apply_decision=apply_decision),
     }
     return _wire(nodes)

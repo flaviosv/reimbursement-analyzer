@@ -45,7 +45,7 @@ class _Fakes:
             "extract_fields": ExtractFields(model=self.extract_model, prompt=EXTRACT_FIELDS_PROMPT),
             "validate": Validate(),
             "apply_policies": ApplyPolicies(apply_decision=self.apply_policies_decision),
-            "analysis": Analysis(model=self.analysis_model, prompt=ANALYSIS_PROMPT),
+            "analysis": Analysis(model=self.analysis_model, prompt=ANALYSIS_PROMPT, model_name="llama3.2"),
             "apply_agent_decision": ApplyAgentDecision(
                 apply_decision=self.apply_agent_decision_decision
             ),
