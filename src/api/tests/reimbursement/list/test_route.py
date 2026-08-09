@@ -1,8 +1,5 @@
-import json
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Any
-from uuid import UUID, uuid4
 
 import asyncpg
 import httpx
@@ -11,61 +8,11 @@ from dependencies import get_pool
 from errors import register_handlers
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from helpers import FakePool
+from helpers import FakePool, seed_human_review, seed_reimbursement
 from main import app as real_app
 from reimbursement.list.route import router
 
 pytestmark = pytest.mark.anyio
-
-_SEED_REIMBURSEMENT = """
-    INSERT INTO reimbursement (uuid, request_id, original_payload, status, created_at)
-    VALUES ($1, $2, $3::text::jsonb, $4, $5)
-"""
-
-_SEED_HUMAN_REVIEW = """
-    INSERT INTO human_review (uuid, reimbursement_uuid, status, reviewed_by, reason, created_at)
-    VALUES ($1, $2, $3, $4, $5, $6)
-"""
-
-
-async def _seed_reimbursement(
-    db: asyncpg.Connection,
-    request_id: str,
-    *,
-    status: str = "human-review",
-    created_at: datetime | None = None,
-    original_payload: dict[str, Any] | None = None,
-) -> UUID:
-    uuid = uuid4()
-    await db.execute(
-        _SEED_REIMBURSEMENT,
-        uuid,
-        request_id,
-        json.dumps(original_payload or {}),
-        status,
-        created_at or datetime.now(UTC),
-    )
-    return uuid
-
-
-async def _seed_human_review(
-    db: asyncpg.Connection,
-    reimbursement_uuid: UUID,
-    *,
-    status: str = "approved",
-    reviewed_by: str = "reviewer@example.com",
-    reason: str = "looks good",
-    created_at: datetime | None = None,
-) -> None:
-    await db.execute(
-        _SEED_HUMAN_REVIEW,
-        uuid4(),
-        reimbursement_uuid,
-        status,
-        reviewed_by,
-        reason,
-        created_at or datetime.now(UTC),
-    )
 
 
 def _build_client(pool: FakePool) -> httpx.AsyncClient:
@@ -91,8 +38,8 @@ class DescribeGetReimbursement:
         self, db: asyncpg.Connection
     ) -> None:
         base = datetime(2026, 6, 1, tzinfo=UTC)
-        older = await _seed_reimbursement(db, "REQ-DEFAULT-OLD", status="auto-approved", created_at=base)
-        newer = await _seed_reimbursement(
+        older = await seed_reimbursement(db, "REQ-DEFAULT-OLD", status="auto-approved", created_at=base)
+        newer = await seed_reimbursement(
             db, "REQ-DEFAULT-NEW", status="auto-approved", created_at=base + timedelta(hours=1)
         )
 
@@ -105,7 +52,7 @@ class DescribeGetReimbursement:
     async def it_applies_a_custom_limit_and_offset(self, db: asyncpg.Connection) -> None:
         base = datetime(2026, 6, 1, tzinfo=UTC)
         uuids = [
-            await _seed_reimbursement(
+            await seed_reimbursement(
                 db, f"REQ-PAGE-{n}", status="auto-approved", created_at=base + timedelta(minutes=n)
             )
             for n in range(5)
@@ -161,8 +108,8 @@ class DescribeGetReimbursement:
         assert response.json()["data"] == []
 
     async def it_filters_to_a_single_status(self, db: asyncpg.Connection) -> None:
-        await _seed_reimbursement(db, "REQ-SINGLE-A", status="human-review")
-        await _seed_reimbursement(db, "REQ-SINGLE-B", status="auto-rejected")
+        await seed_reimbursement(db, "REQ-SINGLE-A", status="human-review")
+        await seed_reimbursement(db, "REQ-SINGLE-B", status="auto-rejected")
 
         async with _build_client(FakePool(db)) as client:
             response = await client.get("/api/v1/reimbursement", params={"status": "human-review"})
@@ -175,9 +122,9 @@ class DescribeGetReimbursement:
         assert "REQ-SINGLE-B" not in request_ids
 
     async def it_filters_to_multiple_comma_separated_statuses(self, db: asyncpg.Connection) -> None:
-        await _seed_reimbursement(db, "REQ-MULTI-A", status="human-review")
-        await _seed_reimbursement(db, "REQ-MULTI-B", status="auto-rejected")
-        await _seed_reimbursement(db, "REQ-MULTI-C", status="auto-approved")
+        await seed_reimbursement(db, "REQ-MULTI-A", status="human-review")
+        await seed_reimbursement(db, "REQ-MULTI-B", status="auto-rejected")
+        await seed_reimbursement(db, "REQ-MULTI-C", status="auto-approved")
 
         async with _build_client(FakePool(db)) as client:
             response = await client.get(
@@ -190,8 +137,8 @@ class DescribeGetReimbursement:
         assert "REQ-MULTI-C" not in request_ids
 
     async def it_includes_pending_rows_when_status_is_omitted(self, db: asyncpg.Connection) -> None:
-        await _seed_reimbursement(db, "REQ-ALL-PENDING", status="pending")
-        await _seed_reimbursement(db, "REQ-ALL-APPROVED", status="human-approved")
+        await seed_reimbursement(db, "REQ-ALL-PENDING", status="pending")
+        await seed_reimbursement(db, "REQ-ALL-APPROVED", status="human-approved")
 
         async with _build_client(FakePool(db)) as client:
             response = await client.get("/api/v1/reimbursement")
@@ -244,14 +191,14 @@ class DescribeGetReimbursement:
     async def it_includes_the_last_human_review_when_present_and_null_when_absent(
         self, db: asyncpg.Connection
     ) -> None:
-        with_review = await _seed_reimbursement(db, "REQ-HR-PRESENT", status="human-approved")
-        await _seed_human_review(
+        with_review = await seed_reimbursement(db, "REQ-HR-PRESENT", status="human-approved")
+        await seed_human_review(
             db, with_review, reason="first look", created_at=datetime(2026, 5, 1, tzinfo=UTC)
         )
-        await _seed_human_review(
+        await seed_human_review(
             db, with_review, reason="second look", created_at=datetime(2026, 5, 2, tzinfo=UTC)
         )
-        without_review = await _seed_reimbursement(db, "REQ-HR-ABSENT", status="human-review")
+        without_review = await seed_reimbursement(db, "REQ-HR-ABSENT", status="human-review")
 
         async with _build_client(FakePool(db)) as client:
             response = await client.get("/api/v1/reimbursement")
@@ -264,7 +211,7 @@ class DescribeGetReimbursement:
         self, db: asyncpg.Connection
     ) -> None:
         payload = {"amount": 93.5, "currency": "BRL"}
-        uuid = await _seed_reimbursement(db, "REQ-PAYLOAD", original_payload=payload)
+        uuid = await seed_reimbursement(db, "REQ-PAYLOAD", original_payload=payload)
 
         async with _build_client(FakePool(db)) as client:
             response = await client.get("/api/v1/reimbursement")

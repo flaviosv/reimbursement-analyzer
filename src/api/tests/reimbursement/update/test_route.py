@@ -1,34 +1,19 @@
 import asyncio
 import logging
-from datetime import date
-from decimal import Decimal
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import asyncpg
 import httpx
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-from helpers import FakePool
-
 from dependencies import get_pool
 from errors import register_handlers
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from helpers import FakePool, seed_reimbursement, seed_reimbursement_with_receipts
 from main import app as real_app
 from reimbursement.update.route import router
 
 pytestmark = pytest.mark.anyio
-
-_SEED_REIMBURSEMENT = """
-    INSERT INTO reimbursement (uuid, request_id, original_payload, status)
-    VALUES ($1, $2, '{}'::jsonb, $3)
-"""
-
-_SEED_REIMBURSEMENT_WITH_RECEIPTS = """
-    INSERT INTO reimbursement (
-        uuid, request_id, original_payload, status, receipts_value, receipts_date, currency
-    )
-    VALUES ($1, $2, '{}'::jsonb, $3, $4, $5, $6)
-"""
 
 _APPROVE_PAYLOAD = {
     "status": "approved",
@@ -46,20 +31,6 @@ _REJECT_PAYLOAD = {
 }
 
 
-async def _seed(db: asyncpg.Connection, request_id: str, *, status: str = "human-review") -> UUID:
-    uuid = uuid4()
-    await db.execute(_SEED_REIMBURSEMENT, uuid, request_id, status)
-    return uuid
-
-
-async def _seed_with_receipts(db: asyncpg.Connection, request_id: str, *, status: str = "human-review") -> UUID:
-    uuid = uuid4()
-    await db.execute(
-        _SEED_REIMBURSEMENT_WITH_RECEIPTS, uuid, request_id, status, Decimal("100.00"), date(2026, 1, 1), "BRL"
-    )
-    return uuid
-
-
 def _build_client(pool: FakePool) -> httpx.AsyncClient:
     # httpx.AsyncClient + ASGITransport, not TestClient: TestClient drives
     # the app from a separate thread with its own event loop, and the real
@@ -75,7 +46,7 @@ def _build_client(pool: FakePool) -> httpx.AsyncClient:
 
 class DescribePutReimbursement:
     async def it_approves_an_eligible_row_and_returns_200(self, db: asyncpg.Connection) -> None:
-        uuid = await _seed(db, "REQ-PUT-APPROVE-OK")
+        uuid = await seed_reimbursement(db, "REQ-PUT-APPROVE-OK")
 
         async with _build_client(FakePool(db)) as client:
             response = await client.put(f"/api/v1/reimbursement/{uuid}", json=_APPROVE_PAYLOAD)
@@ -86,7 +57,7 @@ class DescribePutReimbursement:
         assert status == "human-approved"
 
     async def it_returns_422_when_a_required_approve_field_is_missing(self, db: asyncpg.Connection) -> None:
-        uuid = await _seed(db, "REQ-PUT-APPROVE-MISSING")
+        uuid = await seed_reimbursement(db, "REQ-PUT-APPROVE-MISSING")
         payload = {k: v for k, v in _APPROVE_PAYLOAD.items() if k != "receipts_value"}
 
         async with _build_client(FakePool(db)) as client:
@@ -96,7 +67,7 @@ class DescribePutReimbursement:
         assert response.json() == {"msg": "approved.receipts_value: Field required"}
 
     async def it_returns_422_for_a_malformed_receipts_currency(self, db: asyncpg.Connection) -> None:
-        uuid = await _seed(db, "REQ-PUT-APPROVE-BAD-CURRENCY")
+        uuid = await seed_reimbursement(db, "REQ-PUT-APPROVE-BAD-CURRENCY")
         payload = {**_APPROVE_PAYLOAD, "receipts_currency": "brl"}
 
         async with _build_client(FakePool(db)) as client:
@@ -113,7 +84,7 @@ class DescribePutReimbursement:
         # AD-027 §1 (.specs/STATE.md) + spec.md's P1 "Approve a rejected or
         # human-review reimbursement" story: overturning a rejection into
         # an approval is intentional, not an ELIGIBLE_STATUSES bug.
-        uuid = await _seed(db, "REQ-PUT-APPROVE-OVERTURN", status="auto-rejected")
+        uuid = await seed_reimbursement(db, "REQ-PUT-APPROVE-OVERTURN", status="auto-rejected")
 
         async with _build_client(FakePool(db)) as client:
             response = await client.put(f"/api/v1/reimbursement/{uuid}", json=_APPROVE_PAYLOAD)
@@ -123,7 +94,7 @@ class DescribePutReimbursement:
         assert status == "human-approved"
 
     async def it_returns_400_when_approving_an_ineligible_status(self, db: asyncpg.Connection) -> None:
-        uuid = await _seed(db, "REQ-PUT-APPROVE-INELIGIBLE", status="human-approved")
+        uuid = await seed_reimbursement(db, "REQ-PUT-APPROVE-INELIGIBLE", status="human-approved")
 
         async with _build_client(FakePool(db)) as client:
             response = await client.put(f"/api/v1/reimbursement/{uuid}", json=_APPROVE_PAYLOAD)
@@ -132,7 +103,7 @@ class DescribePutReimbursement:
         assert response.json() == {"msg": f"reimbursement {uuid} is not eligible for this decision"}
 
     async def it_rejects_an_eligible_complete_row_and_returns_200(self, db: asyncpg.Connection) -> None:
-        uuid = await _seed_with_receipts(db, "REQ-PUT-REJECT-OK")
+        uuid = await seed_reimbursement_with_receipts(db, "REQ-PUT-REJECT-OK")
 
         async with _build_client(FakePool(db)) as client:
             response = await client.put(f"/api/v1/reimbursement/{uuid}", json=_REJECT_PAYLOAD)
@@ -142,7 +113,7 @@ class DescribePutReimbursement:
         assert status == "human-rejected"
 
     async def it_returns_422_when_approved_by_is_missing_on_reject(self, db: asyncpg.Connection) -> None:
-        uuid = await _seed_with_receipts(db, "REQ-PUT-REJECT-MISSING")
+        uuid = await seed_reimbursement_with_receipts(db, "REQ-PUT-REJECT-MISSING")
         payload = {k: v for k, v in _REJECT_PAYLOAD.items() if k != "approved_by"}
 
         async with _build_client(FakePool(db)) as client:
@@ -161,7 +132,7 @@ class DescribePutReimbursement:
         assert response.json() == {"msg": f"no reimbursement with uuid {unknown_uuid}"}
 
     async def it_returns_400_when_rejecting_an_ineligible_status(self, db: asyncpg.Connection) -> None:
-        uuid = await _seed_with_receipts(db, "REQ-PUT-REJECT-INELIGIBLE", status="human-approved")
+        uuid = await seed_reimbursement_with_receipts(db, "REQ-PUT-REJECT-INELIGIBLE", status="human-approved")
 
         async with _build_client(FakePool(db)) as client:
             response = await client.put(f"/api/v1/reimbursement/{uuid}", json=_REJECT_PAYLOAD)
@@ -172,7 +143,7 @@ class DescribePutReimbursement:
         assert status == "human-approved"
 
     async def it_returns_400_when_rejecting_an_incomplete_entity(self, db: asyncpg.Connection) -> None:
-        uuid = await _seed(db, "REQ-PUT-REJECT-INCOMPLETE")
+        uuid = await seed_reimbursement(db, "REQ-PUT-REJECT-INCOMPLETE")
 
         async with _build_client(FakePool(db)) as client:
             response = await client.put(f"/api/v1/reimbursement/{uuid}", json=_REJECT_PAYLOAD)
@@ -184,7 +155,7 @@ class DescribePutReimbursement:
         # AD-027 §1 (.specs/STATE.md) + spec.md's P1 "Reject a reimbursement
         # under review" story ("...or re-reject an auto-rejected/
         # human-rejected one"): intentional, not an ELIGIBLE_STATUSES bug.
-        uuid = await _seed_with_receipts(db, "REQ-PUT-REJECT-REREJECT", status="human-rejected")
+        uuid = await seed_reimbursement_with_receipts(db, "REQ-PUT-REJECT-REREJECT", status="human-rejected")
 
         async with _build_client(FakePool(db)) as client:
             response = await client.put(f"/api/v1/reimbursement/{uuid}", json=_REJECT_PAYLOAD)
@@ -196,7 +167,7 @@ class DescribePutReimbursement:
     async def it_returns_400_when_the_body_uuid_does_not_match_the_path_uuid(
         self, db: asyncpg.Connection
     ) -> None:
-        uuid = await _seed(db, "REQ-PUT-UUID-MISMATCH")
+        uuid = await seed_reimbursement(db, "REQ-PUT-UUID-MISMATCH")
         payload = {**_APPROVE_PAYLOAD, "uuid": str(uuid4())}
 
         async with _build_client(FakePool(db)) as client:
@@ -206,7 +177,7 @@ class DescribePutReimbursement:
         assert response.json() == {"msg": "body uuid does not match the path uuid"}
 
     async def it_approves_when_the_body_uuid_matches_the_path_uuid(self, db: asyncpg.Connection) -> None:
-        uuid = await _seed(db, "REQ-PUT-UUID-MATCH")
+        uuid = await seed_reimbursement(db, "REQ-PUT-UUID-MATCH")
         payload = {**_APPROVE_PAYLOAD, "uuid": str(uuid)}
 
         async with _build_client(FakePool(db)) as client:
@@ -220,7 +191,7 @@ class DescribePutReimbursement:
         self, db: asyncpg.Connection, caplog: pytest.LogCaptureFixture
     ) -> None:
         caplog.set_level(logging.ERROR, logger="errors")
-        uuid = await _seed(db, "REQ-PUT-POOL-FAILURE")
+        uuid = await seed_reimbursement(db, "REQ-PUT-POOL-FAILURE")
 
         async with _build_client(FakePool(db, acquire_error=RuntimeError("connection reset"))) as client:
             response = await client.put(f"/api/v1/reimbursement/{uuid}", json=_APPROVE_PAYLOAD)
@@ -236,8 +207,7 @@ class DescribePutReimbursement:
         # single shared connection can't exercise concurrently.
         pool = await asyncpg.create_pool(dsn=migrated_db, min_size=2, max_size=2)
         try:
-            uuid = uuid4()
-            await pool.execute(_SEED_REIMBURSEMENT, uuid, "REQ-PUT-CONCURRENT", "human-review")
+            uuid = await seed_reimbursement(pool, "REQ-PUT-CONCURRENT")
             app = FastAPI()
             register_handlers(app)
             app.include_router(router)
@@ -284,16 +254,7 @@ class DescribePutReimbursement:
         # unavoidable trade-off the approve version above accepts.
         pool = await asyncpg.create_pool(dsn=migrated_db, min_size=2, max_size=2)
         try:
-            uuid = uuid4()
-            await pool.execute(
-                _SEED_REIMBURSEMENT_WITH_RECEIPTS,
-                uuid,
-                "REQ-PUT-CONCURRENT-REJECT",
-                "human-review",
-                Decimal("100.00"),
-                date(2026, 1, 1),
-                "BRL",
-            )
+            uuid = await seed_reimbursement_with_receipts(pool, "REQ-PUT-CONCURRENT-REJECT")
             app = FastAPI()
             register_handlers(app)
             app.include_router(router)

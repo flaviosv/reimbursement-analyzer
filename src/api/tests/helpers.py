@@ -1,7 +1,12 @@
 import asyncio
+import json
 import os
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from secrets import token_hex
+from typing import Any
 from urllib.parse import urlsplit, urlunsplit
+from uuid import UUID, uuid4
 
 import asyncpg
 
@@ -59,8 +64,86 @@ def valid_reimbursement_item(request_id: str = "REQ-0001", **extra: object) -> d
     }
 
 
+_SEED_REIMBURSEMENT = """
+    INSERT INTO reimbursement (uuid, request_id, original_payload, status, created_at)
+    VALUES ($1, $2, $3::text::jsonb, $4, $5)
+"""
+
+_SEED_REIMBURSEMENT_WITH_RECEIPTS = """
+    INSERT INTO reimbursement (
+        uuid, request_id, original_payload, status, receipts_value, receipts_date, currency
+    )
+    VALUES ($1, $2, '{}'::jsonb, $3, $4, $5, $6)
+"""
+
+_SEED_HUMAN_REVIEW = """
+    INSERT INTO human_review (uuid, reimbursement_uuid, status, reviewed_by, reason, created_at)
+    VALUES ($1, $2, $3, $4, $5, $6)
+"""
+
+
+async def seed_reimbursement(
+    db: asyncpg.Connection,
+    request_id: str,
+    *,
+    status: str = "human-review",
+    created_at: datetime | None = None,
+    original_payload: dict[str, Any] | None = None,
+) -> UUID:
+    """Row-level seed shared by reimbursement/list and reimbursement/update's
+    own route tests (AD-009 rules out a cross-conftest import, see FakePool
+    below) — both need a reimbursement row present without going through the
+    real POST/PUT flow, just at different states of it."""
+    uuid = uuid4()
+    await db.execute(
+        _SEED_REIMBURSEMENT,
+        uuid,
+        request_id,
+        json.dumps(original_payload or {}),
+        status,
+        created_at or datetime.now(UTC),
+    )
+    return uuid
+
+
+async def seed_reimbursement_with_receipts(
+    db: asyncpg.Connection,
+    request_id: str,
+    *,
+    status: str = "human-review",
+    receipts_value: Decimal = Decimal("100.00"),
+    receipts_date: date = date(2026, 1, 1),
+    currency: str = "BRL",
+) -> UUID:
+    uuid = uuid4()
+    await db.execute(
+        _SEED_REIMBURSEMENT_WITH_RECEIPTS, uuid, request_id, status, receipts_value, receipts_date, currency
+    )
+    return uuid
+
+
+async def seed_human_review(
+    db: asyncpg.Connection,
+    reimbursement_uuid: UUID,
+    *,
+    status: str = "approved",
+    reviewed_by: str = "reviewer@example.com",
+    reason: str = "looks good",
+    created_at: datetime | None = None,
+) -> None:
+    await db.execute(
+        _SEED_HUMAN_REVIEW,
+        uuid4(),
+        reimbursement_uuid,
+        status,
+        reviewed_by,
+        reason,
+        created_at or datetime.now(UTC),
+    )
+
+
 class _FakePoolAcquisition:
-    def __init__(self, pool: "FakePool") -> None:
+    def __init__(self, pool: FakePool) -> None:
         self.pool = pool
 
     async def __aenter__(self) -> asyncpg.Connection:

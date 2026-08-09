@@ -18,6 +18,11 @@ from shared.reimbursement.repository import (
     reject,
     update_human_review,
 )
+from shared.testing import (
+    seed_human_review,
+    seed_reimbursement,
+    seed_reimbursement_with_receipts,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -26,72 +31,11 @@ _RAW_INSERT = """
     VALUES ($1, $2, '{}'::jsonb)
 """
 
-_SEED_REIMBURSEMENT = """
-    INSERT INTO reimbursement (uuid, request_id, original_payload, status, created_at)
-    VALUES ($1, $2, '{}'::jsonb, $3, $4)
-"""
-
-_SEED_HUMAN_REVIEW = """
-    INSERT INTO human_review (uuid, reimbursement_uuid, status, reviewed_by, reason, created_at)
-    VALUES ($1, $2, $3, $4, $5, $6)
-"""
-
-_SEED_REIMBURSEMENT_WITH_RECEIPTS = """
-    INSERT INTO reimbursement (
-        uuid, request_id, original_payload, status, receipts_value, receipts_date, currency
-    )
-    VALUES ($1, $2, '{}'::jsonb, $3, $4, $5, $6)
-"""
-
 _ELIGIBLE_STATUSES = ["human-review", "auto-rejected", "human-rejected"]
 
 
 async def _rows_for(db: asyncpg.Connection, request_id: str) -> list[asyncpg.Record]:
     return await db.fetch("SELECT * FROM reimbursement WHERE request_id = $1", request_id)
-
-
-async def _seed_reimbursement(
-    db: asyncpg.Connection, request_id: str, *, status: str = "pending", created_at: datetime | None = None
-) -> UUID:
-    uuid = uuid4()
-    await db.execute(_SEED_REIMBURSEMENT, uuid, request_id, status, created_at or datetime.now(UTC))
-    return uuid
-
-
-async def _seed_human_review(
-    db: asyncpg.Connection,
-    reimbursement_uuid: UUID,
-    *,
-    status: str = "approved",
-    reviewed_by: str = "reviewer@example.com",
-    reason: str = "looks good",
-    created_at: datetime | None = None,
-) -> None:
-    await db.execute(
-        _SEED_HUMAN_REVIEW,
-        uuid4(),
-        reimbursement_uuid,
-        status,
-        reviewed_by,
-        reason,
-        created_at or datetime.now(UTC),
-    )
-
-
-async def _seed_reimbursement_with_receipts(
-    db: asyncpg.Connection,
-    request_id: str,
-    *,
-    status: str = "human-review",
-    receipts_value: Decimal | None = Decimal("100.00"),
-    receipts_date: date | None = date(2026, 1, 1),
-    currency: str | None = "BRL",
-) -> UUID:
-    uuid = uuid4()
-    await db.execute(
-        _SEED_REIMBURSEMENT_WITH_RECEIPTS, uuid, request_id, status, receipts_value, receipts_date, currency
-    )
-    return uuid
 
 
 class DescribeInsertPending:
@@ -239,7 +183,7 @@ class DescribeFetchReimbursementPage:
         # same shared migrated_db outside this test's rollback — an
         # exclusive-ownership assumption over the whole table would be flaky.
         uuids = [
-            await _seed_reimbursement(
+            await seed_reimbursement(
                 db, f"REQ-PAGE-{n}", status="auto-approved", created_at=base + timedelta(minutes=n)
             )
             for n in range(5)
@@ -252,8 +196,8 @@ class DescribeFetchReimbursementPage:
         assert [row["uuid"] for row in page] == expected
 
     async def it_filters_to_a_single_status(self, db: asyncpg.Connection) -> None:
-        await _seed_reimbursement(db, "REQ-SINGLE-A", status="human-review")
-        await _seed_reimbursement(db, "REQ-SINGLE-B", status="auto-rejected")
+        await seed_reimbursement(db, "REQ-SINGLE-A", status="human-review")
+        await seed_reimbursement(db, "REQ-SINGLE-B", status="auto-rejected")
 
         page = await fetch_reimbursement_page(db, statuses=["human-review"], limit=100, offset=0)
 
@@ -265,9 +209,9 @@ class DescribeFetchReimbursementPage:
         assert "REQ-SINGLE-B" not in request_ids
 
     async def it_filters_to_multiple_statuses_via_any(self, db: asyncpg.Connection) -> None:
-        await _seed_reimbursement(db, "REQ-MULTI-A", status="human-review")
-        await _seed_reimbursement(db, "REQ-MULTI-B", status="auto-rejected")
-        await _seed_reimbursement(db, "REQ-MULTI-C", status="auto-approved")
+        await seed_reimbursement(db, "REQ-MULTI-A", status="human-review")
+        await seed_reimbursement(db, "REQ-MULTI-B", status="auto-rejected")
+        await seed_reimbursement(db, "REQ-MULTI-C", status="auto-approved")
 
         page = await fetch_reimbursement_page(
             db, statuses=["human-review", "auto-rejected"], limit=100, offset=0
@@ -281,8 +225,8 @@ class DescribeFetchReimbursementPage:
     async def it_returns_every_status_including_pending_when_no_filter_is_given(
         self, db: asyncpg.Connection
     ) -> None:
-        await _seed_reimbursement(db, "REQ-ALL-PENDING", status="pending")
-        await _seed_reimbursement(db, "REQ-ALL-APPROVED", status="human-approved")
+        await seed_reimbursement(db, "REQ-ALL-PENDING", status="pending")
+        await seed_reimbursement(db, "REQ-ALL-APPROVED", status="human-approved")
 
         # No filter means the whole table, so — unlike the status-scoped tests
         # above — this can't isolate itself from other tests' committed rows
@@ -295,7 +239,7 @@ class DescribeFetchReimbursementPage:
         assert by_request_id["REQ-ALL-APPROVED"]["status"] == "human-approved"
 
     async def it_returns_an_empty_list_when_nothing_matches(self, db: asyncpg.Connection) -> None:
-        await _seed_reimbursement(db, "REQ-EMPTY", status="pending")
+        await seed_reimbursement(db, "REQ-EMPTY", status="pending")
 
         page = await fetch_reimbursement_page(db, statuses=["auto-rejected"], limit=100, offset=0)
 
@@ -304,7 +248,7 @@ class DescribeFetchReimbursementPage:
     async def it_returns_an_empty_list_when_offset_is_beyond_the_total_row_count(
         self, db: asyncpg.Connection
     ) -> None:
-        await _seed_reimbursement(db, "REQ-OFFSET-BEYOND", status="auto-rejected")
+        await seed_reimbursement(db, "REQ-OFFSET-BEYOND", status="auto-rejected")
 
         page = await fetch_reimbursement_page(db, statuses=["auto-rejected"], limit=100, offset=1000)
 
@@ -313,7 +257,7 @@ class DescribeFetchReimbursementPage:
     async def it_does_not_duplicate_rows_for_a_repeated_status_in_the_filter(
         self, db: asyncpg.Connection
     ) -> None:
-        await _seed_reimbursement(db, "REQ-DUP-STATUS", status="auto-rejected")
+        await seed_reimbursement(db, "REQ-DUP-STATUS", status="auto-rejected")
 
         page = await fetch_reimbursement_page(
             db, statuses=["auto-rejected", "auto-rejected"], limit=100, offset=0
@@ -324,14 +268,14 @@ class DescribeFetchReimbursementPage:
     async def it_populates_last_human_review_when_present_and_null_when_absent(
         self, db: asyncpg.Connection
     ) -> None:
-        with_review = await _seed_reimbursement(db, "REQ-HR-PRESENT", status="human-approved")
-        await _seed_human_review(
+        with_review = await seed_reimbursement(db, "REQ-HR-PRESENT", status="human-approved")
+        await seed_human_review(
             db, with_review, reason="first look", created_at=datetime(2026, 5, 1, tzinfo=UTC)
         )
-        await _seed_human_review(
+        await seed_human_review(
             db, with_review, reason="second look", created_at=datetime(2026, 5, 2, tzinfo=UTC)
         )
-        without_review = await _seed_reimbursement(db, "REQ-HR-ABSENT", status="human-review")
+        without_review = await seed_reimbursement(db, "REQ-HR-ABSENT", status="human-review")
 
         page = await fetch_reimbursement_page(db, statuses=None, limit=100, offset=0)
         by_uuid = {row["uuid"]: row for row in page}
@@ -344,11 +288,11 @@ class DescribeFetchReimbursementPage:
 
     async def it_orders_results_by_created_at_descending(self, db: asyncpg.Connection) -> None:
         base = datetime(2026, 5, 1, tzinfo=UTC)
-        oldest = await _seed_reimbursement(db, "REQ-ORDER-OLD", status="auto-approved", created_at=base)
-        middle = await _seed_reimbursement(
+        oldest = await seed_reimbursement(db, "REQ-ORDER-OLD", status="auto-approved", created_at=base)
+        middle = await seed_reimbursement(
             db, "REQ-ORDER-MID", status="auto-approved", created_at=base + timedelta(hours=12)
         )
-        newest = await _seed_reimbursement(
+        newest = await seed_reimbursement(
             db, "REQ-ORDER-NEW", status="auto-approved", created_at=base + timedelta(days=1)
         )
 
@@ -368,11 +312,11 @@ class DescribeFetchReimbursementPage:
         # returns rows in roughly insertion (ascending) order, so this is the
         # one path where dropping ORDER BY actually flips the result.
         base = datetime(2026, 6, 1, tzinfo=UTC)
-        oldest = await _seed_reimbursement(db, "REQ-ORDER-NOFILTER-OLD", status="pending", created_at=base)
-        middle = await _seed_reimbursement(
+        oldest = await seed_reimbursement(db, "REQ-ORDER-NOFILTER-OLD", status="pending", created_at=base)
+        middle = await seed_reimbursement(
             db, "REQ-ORDER-NOFILTER-MID", status="human-review", created_at=base + timedelta(hours=12)
         )
-        newest = await _seed_reimbursement(
+        newest = await seed_reimbursement(
             db, "REQ-ORDER-NOFILTER-NEW", status="auto-rejected", created_at=base + timedelta(days=1)
         )
 
@@ -386,7 +330,7 @@ class DescribeApprove:
     async def it_succeeds_on_an_eligible_row_and_returns_the_updated_row(
         self, db: asyncpg.Connection
     ) -> None:
-        uuid = await _seed_reimbursement(db, "REQ-APPROVE-ELIGIBLE", status="human-review")
+        uuid = await seed_reimbursement(db, "REQ-APPROVE-ELIGIBLE", status="human-review")
 
         row = await approve(
             db,
@@ -405,7 +349,7 @@ class DescribeApprove:
         assert row["decision_reason"] == "looks good"
 
     async def it_returns_none_on_an_ineligible_status(self, db: asyncpg.Connection) -> None:
-        uuid = await _seed_reimbursement(db, "REQ-APPROVE-INELIGIBLE", status="human-approved")
+        uuid = await seed_reimbursement(db, "REQ-APPROVE-INELIGIBLE", status="human-approved")
 
         row = await approve(
             db,
@@ -426,7 +370,7 @@ class DescribeReject:
     async def it_succeeds_when_all_three_receipt_fields_are_already_set(
         self, db: asyncpg.Connection
     ) -> None:
-        uuid = await _seed_reimbursement_with_receipts(db, "REQ-REJECT-COMPLETE", status="human-review")
+        uuid = await seed_reimbursement_with_receipts(db, "REQ-REJECT-COMPLETE", status="human-review")
 
         row = await reject(db, uuid, eligible_statuses=_ELIGIBLE_STATUSES, reason="bad receipt")
 
@@ -436,7 +380,7 @@ class DescribeReject:
     async def it_returns_none_when_any_receipt_field_is_null_even_on_an_eligible_status(
         self, db: asyncpg.Connection
     ) -> None:
-        uuid = await _seed_reimbursement(db, "REQ-REJECT-INCOMPLETE", status="human-review")
+        uuid = await seed_reimbursement(db, "REQ-REJECT-INCOMPLETE", status="human-review")
 
         row = await reject(db, uuid, eligible_statuses=_ELIGIBLE_STATUSES, reason="bad receipt")
 
@@ -467,7 +411,7 @@ class DescribeReject:
         # one all-or-nothing test — a partial row (e.g. only receipts_value
         # set) must still fail, or a future AND→OR regression would slip
         # through undetected by the all-null / all-set cases alone.
-        uuid = await _seed_reimbursement_with_receipts(
+        uuid = await seed_reimbursement_with_receipts(
             db,
             request_id,
             status="human-review",
@@ -490,7 +434,7 @@ class DescribeFindReimbursementState:
         assert state is None
 
     async def it_returns_the_row_for_a_known_uuid(self, db: asyncpg.Connection) -> None:
-        uuid = await _seed_reimbursement(db, "REQ-FIND-STATE", status="auto-rejected")
+        uuid = await seed_reimbursement(db, "REQ-FIND-STATE", status="auto-rejected")
 
         state = await find_reimbursement_state(db, uuid)
 
@@ -502,7 +446,7 @@ class DescribeRecordHumanReviewDecision:
     async def it_inserts_exactly_one_human_review_row_with_the_given_fields(
         self, db: asyncpg.Connection
     ) -> None:
-        uuid = await _seed_reimbursement(db, "REQ-RECORD-DECISION", status="human-review")
+        uuid = await seed_reimbursement(db, "REQ-RECORD-DECISION", status="human-review")
 
         await record_human_review_decision(db, uuid, "approved", "reviewer@example.com", "all good")
 

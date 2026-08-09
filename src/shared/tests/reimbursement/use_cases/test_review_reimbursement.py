@@ -1,7 +1,7 @@
 import asyncio
 from datetime import date
 from decimal import Decimal
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import asyncpg
 import pytest
@@ -10,39 +10,14 @@ from shared.reimbursement.use_cases.review_reimbursement import (
     approve_reimbursement,
     reject_reimbursement,
 )
+from shared.testing import seed_reimbursement, seed_reimbursement_with_receipts
 
 pytestmark = pytest.mark.anyio
-
-_SEED_REIMBURSEMENT = """
-    INSERT INTO reimbursement (uuid, request_id, original_payload, status)
-    VALUES ($1, $2, '{}'::jsonb, $3)
-"""
-
-_SEED_REIMBURSEMENT_WITH_RECEIPTS = """
-    INSERT INTO reimbursement (
-        uuid, request_id, original_payload, status, receipts_value, receipts_date, currency
-    )
-    VALUES ($1, $2, '{}'::jsonb, $3, $4, $5, $6)
-"""
-
-
-async def _seed(db: asyncpg.Connection, request_id: str, *, status: str = "human-review") -> UUID:
-    uuid = uuid4()
-    await db.execute(_SEED_REIMBURSEMENT, uuid, request_id, status)
-    return uuid
-
-
-async def _seed_with_receipts(db: asyncpg.Connection, request_id: str, *, status: str = "human-review") -> UUID:
-    uuid = uuid4()
-    await db.execute(
-        _SEED_REIMBURSEMENT_WITH_RECEIPTS, uuid, request_id, status, Decimal("100.00"), date(2026, 1, 1), "BRL"
-    )
-    return uuid
 
 
 class DescribeApproveReimbursement:
     async def it_approves_an_eligible_row_and_records_the_decision(self, db: asyncpg.Connection) -> None:
-        uuid = await _seed(db, "REQ-UC-APPROVE-OK")
+        uuid = await seed_reimbursement(db, "REQ-UC-APPROVE-OK")
 
         row = await approve_reimbursement(
             db,
@@ -87,7 +62,7 @@ class DescribeApproveReimbursement:
     async def it_raises_reimbursement_not_eligible_for_an_ineligible_status(
         self, db: asyncpg.Connection
     ) -> None:
-        uuid = await _seed(db, "REQ-UC-APPROVE-INELIGIBLE", status="human-approved")
+        uuid = await seed_reimbursement(db, "REQ-UC-APPROVE-INELIGIBLE", status="human-approved")
 
         with pytest.raises(ReimbursementNotEligible):
             await approve_reimbursement(
@@ -113,7 +88,7 @@ class DescribeApproveReimbursement:
         # human-review reimbursement" story: all three source statuses are
         # explicitly, intentionally PUT-eligible for approval — overturning
         # a rejection is a deliberate reviewer override, not a bug.
-        uuid = await _seed(db, f"REQ-UC-APPROVE-OVERTURN-{starting_status}", status=starting_status)
+        uuid = await seed_reimbursement(db, f"REQ-UC-APPROVE-OVERTURN-{starting_status}", status=starting_status)
 
         row = await approve_reimbursement(
             db,
@@ -134,7 +109,7 @@ class DescribeRejectReimbursement:
     async def it_rejects_an_eligible_complete_row_and_records_the_decision(
         self, db: asyncpg.Connection
     ) -> None:
-        uuid = await _seed_with_receipts(db, "REQ-UC-REJECT-OK")
+        uuid = await seed_reimbursement_with_receipts(db, "REQ-UC-REJECT-OK")
 
         row = await reject_reimbursement(db, uuid, reason="bad receipt", approved_by="reviewer@example.com")
 
@@ -149,7 +124,7 @@ class DescribeRejectReimbursement:
     async def it_raises_reimbursement_not_eligible_for_an_ineligible_status(
         self, db: asyncpg.Connection
     ) -> None:
-        uuid = await _seed_with_receipts(db, "REQ-UC-REJECT-INELIGIBLE", status="human-approved")
+        uuid = await seed_reimbursement_with_receipts(db, "REQ-UC-REJECT-INELIGIBLE", status="human-approved")
 
         with pytest.raises(ReimbursementNotEligible):
             await reject_reimbursement(db, uuid, reason="x", approved_by="a@example.com")
@@ -162,7 +137,7 @@ class DescribeRejectReimbursement:
     async def it_raises_reimbursement_not_eligible_when_the_entity_is_incomplete(
         self, db: asyncpg.Connection
     ) -> None:
-        uuid = await _seed(db, "REQ-UC-REJECT-INCOMPLETE")
+        uuid = await seed_reimbursement(db, "REQ-UC-REJECT-INCOMPLETE")
 
         with pytest.raises(ReimbursementNotEligible):
             await reject_reimbursement(db, uuid, reason="x", approved_by="a@example.com")
@@ -179,7 +154,7 @@ class DescribeRejectReimbursement:
         # human-rejected one"): re-rejecting an already-rejected row is
         # explicitly, intentionally PUT-eligible, not an accidental
         # ELIGIBLE_STATUSES overreach.
-        uuid = await _seed_with_receipts(
+        uuid = await seed_reimbursement_with_receipts(
             db, f"REQ-UC-REJECT-REREJECT-{starting_status}", status=starting_status
         )
 
@@ -200,7 +175,7 @@ class DescribeTransactionAtomicity:
     async def it_rolls_back_the_approve_status_change_when_the_review_write_fails(
         self, db: asyncpg.Connection, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        uuid = await _seed(db, "REQ-UC-TX-APPROVE-ROLLBACK")
+        uuid = await seed_reimbursement(db, "REQ-UC-TX-APPROVE-ROLLBACK")
 
         async def _boom(*_args: object, **_kwargs: object) -> None:
             raise RuntimeError("simulated failure between the two writes")
@@ -228,7 +203,7 @@ class DescribeTransactionAtomicity:
     async def it_rolls_back_the_reject_status_change_when_the_review_write_fails(
         self, db: asyncpg.Connection, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        uuid = await _seed_with_receipts(db, "REQ-UC-TX-REJECT-ROLLBACK")
+        uuid = await seed_reimbursement_with_receipts(db, "REQ-UC-TX-REJECT-ROLLBACK")
 
         async def _boom(*_args: object, **_kwargs: object) -> None:
             raise RuntimeError("simulated failure between the two writes")
@@ -256,8 +231,7 @@ class DescribeReviewReimbursementConcurrency:
         conn_a = await asyncpg.connect(migrated_db)
         conn_b = await asyncpg.connect(migrated_db)
         try:
-            uuid = uuid4()
-            await conn_a.execute(_SEED_REIMBURSEMENT, uuid, "REQ-UC-CONCURRENT", "human-review")
+            uuid = await seed_reimbursement(conn_a, "REQ-UC-CONCURRENT")
 
             results = await asyncio.gather(
                 approve_reimbursement(
@@ -325,16 +299,7 @@ class DescribeReviewReimbursementConcurrency:
         conn_a = await asyncpg.connect(migrated_db)
         conn_b = await asyncpg.connect(migrated_db)
         try:
-            uuid = uuid4()
-            await conn_a.execute(
-                _SEED_REIMBURSEMENT_WITH_RECEIPTS,
-                uuid,
-                "REQ-UC-CONCURRENT-REJECT",
-                "human-review",
-                Decimal("100.00"),
-                date(2026, 1, 1),
-                "BRL",
-            )
+            uuid = await seed_reimbursement_with_receipts(conn_a, "REQ-UC-CONCURRENT-REJECT")
 
             results = await asyncio.gather(
                 reject_reimbursement(conn_a, uuid, reason="a", approved_by="a@example.com"),
