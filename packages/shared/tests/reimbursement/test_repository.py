@@ -8,6 +8,7 @@ import pytest
 from shared.testing import valid_reimbursement_item
 from shared.reimbursement.repository import (
     approve,
+    fetch_reimbursement_by_uuid,
     fetch_reimbursement_page,
     find_reimbursement_state,
     get_by_uuid,
@@ -324,6 +325,41 @@ class DescribeFetchReimbursementPage:
         own_rows = [row["uuid"] for row in page if row["uuid"] in {oldest, middle, newest}]
 
         assert own_rows == [newest, middle, oldest]
+
+
+class DescribeFetchReimbursementByUuid:
+    async def it_populates_last_human_review_when_one_exists(self, db: asyncpg.Connection) -> None:
+        uuid = await seed_reimbursement(db, "REQ-BYUUID-HR-PRESENT", status="human-approved")
+        await seed_human_review(
+            db, uuid, reason="first look", created_at=datetime(2026, 5, 1, tzinfo=UTC)
+        )
+        await seed_human_review(
+            db, uuid, reason="second look", created_at=datetime(2026, 5, 2, tzinfo=UTC)
+        )
+
+        row = await fetch_reimbursement_by_uuid(db, uuid)
+
+        assert row is not None
+        assert row["uuid"] == uuid
+        # Most recent by created_at, never a history/count.
+        assert row["hr_reason"] == "second look"
+        assert row["hr_status"] == "approved"
+
+    async def it_sets_hr_columns_to_null_when_no_human_review_exists(
+        self, db: asyncpg.Connection
+    ) -> None:
+        uuid = await seed_reimbursement(db, "REQ-BYUUID-HR-ABSENT", status="human-review")
+
+        row = await fetch_reimbursement_by_uuid(db, uuid)
+
+        assert row is not None
+        assert row["hr_status"] is None
+        assert row["hr_reason"] is None
+
+    async def it_returns_none_for_a_uuid_that_matches_no_row(self, db: asyncpg.Connection) -> None:
+        row = await fetch_reimbursement_by_uuid(db, uuid4())
+
+        assert row is None
 
 
 class DescribeApprove:

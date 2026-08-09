@@ -3,7 +3,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from uuid import uuid4
 
-from api.reimbursement.list.response import ReimbursementListItem
+from api.reimbursement.response import ReimbursementDetailResponse, ReimbursementItem
 
 _BASE_RECORD = {
     "uuid": uuid4(),
@@ -22,7 +22,7 @@ _BASE_RECORD = {
 }
 
 
-class DescribeReimbursementListItemFromRecord:
+class DescribeReimbursementItemFromRecord:
     def it_builds_last_human_review_and_round_trips_every_column_when_hr_columns_are_populated(
         self,
     ) -> None:
@@ -34,7 +34,7 @@ class DescribeReimbursementListItemFromRecord:
             "hr_created_at": datetime(2026, 1, 3, tzinfo=UTC),
         }
 
-        item = ReimbursementListItem.from_record(record)
+        item = ReimbursementItem.from_record(record)
 
         assert item.uuid == _BASE_RECORD["uuid"]
         assert item.request_id == "REQ-1"
@@ -64,7 +64,7 @@ class DescribeReimbursementListItemFromRecord:
             "hr_created_at": None,
         }
 
-        item = ReimbursementListItem.from_record(record)
+        item = ReimbursementItem.from_record(record)
 
         assert item.last_human_review is None
 
@@ -86,7 +86,7 @@ class DescribeReimbursementListItemFromRecord:
             "hr_created_at": None,
         }
 
-        item = ReimbursementListItem.from_record(record)
+        item = ReimbursementItem.from_record(record)
 
         assert item.submitted_by is None
         assert item.submitted_at is None
@@ -97,3 +97,22 @@ class DescribeReimbursementListItemFromRecord:
         assert item.currency is None
         assert item.decision_reason is None
         assert item.last_human_review is None
+
+
+class DescribeReimbursementDetailResponse:
+    def it_round_trips_msg_and_data_on_model_dump(self) -> None:
+        record = {
+            **_BASE_RECORD,
+            "hr_status": None,
+            "hr_reviewed_by": None,
+            "hr_reason": None,
+            "hr_created_at": None,
+        }
+        item = ReimbursementItem.from_record(record)
+
+        response = ReimbursementDetailResponse(msg="reimbursement found", data=item)
+        dumped = response.model_dump()
+
+        assert dumped["msg"] == "reimbursement found"
+        assert dumped["data"]["uuid"] == _BASE_RECORD["uuid"]
+        assert dumped["data"]["status"] == "human-approved"

@@ -11,6 +11,7 @@ from shared.producer import managed_producer
 
 from api.errors import register_handlers
 from api.reimbursement.create.route import router as reimbursement_router
+from api.reimbursement.get.route import router as get_reimbursement_router
 from api.reimbursement.list.route import router as list_reimbursement_router
 from api.reimbursement.update.route import router as update_reimbursement_router
 
@@ -34,6 +35,7 @@ app = FastAPI(lifespan=lifespan)
 register_handlers(app)
 app.include_router(reimbursement_router)
 app.include_router(list_reimbursement_router)
+app.include_router(get_reimbursement_router)
 app.include_router(update_reimbursement_router)
 
 

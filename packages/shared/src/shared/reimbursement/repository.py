@@ -39,11 +39,9 @@ _UPDATE_HUMAN_REVIEW = """
 
 # hr_*-prefixed columns: r.* already carries its own status/created_at, so
 # the LATERAL side needs distinct aliases to avoid a name collision on the
-# returned Record. $1::text[] IS NULL takes the no-filter path; ANY($1)
-# matches any status in the caller's whitelist-gated list, single or multi.
-_FETCH_REIMBURSEMENT_PAGE = """
-    SELECT
-        r.*,
+# returned Record. Shared by both queries below via f-string interpolation
+# so the enrichment logic can't drift between them.
+_HR_LATERAL_ENRICHMENT = """r.*,
         hr.status AS hr_status,
         hr.reviewed_by AS hr_reviewed_by,
         hr.reason AS hr_reason,
@@ -55,10 +53,24 @@ _FETCH_REIMBURSEMENT_PAGE = """
         WHERE reimbursement_uuid = r.uuid
         ORDER BY created_at DESC
         LIMIT 1
-    ) hr ON true
+    ) hr ON true"""
+
+# $1::text[] IS NULL takes the no-filter path; ANY($1)
+# matches any status in the caller's whitelist-gated list, single or multi.
+_FETCH_REIMBURSEMENT_PAGE = f"""
+    SELECT
+        {_HR_LATERAL_ENRICHMENT}
     WHERE ($1::text[] IS NULL OR r.status = ANY($1))
     ORDER BY r.created_at DESC
     LIMIT $2 OFFSET $3
+"""
+
+# Kept as its own statement (rather than a uuid-filtered branch of the page
+# query above) so each statement stays single-purpose.
+_FETCH_REIMBURSEMENT_BY_UUID = f"""
+    SELECT
+        {_HR_LATERAL_ENRICHMENT}
+    WHERE r.uuid = $1
 """
 
 # Column is `currency`, not `receipts_currency` — the parameter/keyword stays
@@ -160,6 +172,13 @@ async def fetch_reimbursement_page(
     `human_review` (if any) via a LATERAL join. Pure SQL, no validation —
     trusts its caller to have already gated `statuses`/`limit`/`offset`."""
     return await conn.fetch(_FETCH_REIMBURSEMENT_PAGE, statuses, limit, offset)
+
+
+async def fetch_reimbursement_by_uuid(conn: asyncpg.Connection, uuid: UUID) -> asyncpg.Record | None:
+    """Single-row equivalent of fetch_reimbursement_page(): the row paired
+    with its most recent human_review (if any) via the same LATERAL join.
+    None on no match."""
+    return await conn.fetchrow(_FETCH_REIMBURSEMENT_BY_UUID, uuid)
 
 
 async def approve(
