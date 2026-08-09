@@ -37,11 +37,13 @@ class DescribePutReimbursement:
         status = await db.fetchval("SELECT status FROM reimbursement WHERE uuid = $1", uuid)
         assert status == "human-approved"
 
-    async def it_returns_422_when_a_required_approve_field_is_missing(self, db: asyncpg.Connection) -> None:
-        uuid = await seed_reimbursement(db, "REQ-PUT-APPROVE-MISSING")
+    async def it_returns_422_when_a_required_approve_field_is_missing(self) -> None:
+        # FakePool(None): validate_review() raises before pool.acquire() is
+        # ever reached, so no real row or connection is needed here.
+        uuid = uuid4()
         payload = {k: v for k, v in _APPROVE_PAYLOAD.items() if k != "receipts_value"}
 
-        async with _build_client(FakePool(db)) as client:
+        async with _build_client(FakePool(None)) as client:
             response = await client.put(f"/api/v1/reimbursement/{uuid}", json=payload)
 
         assert response.status_code == 422
@@ -93,11 +95,13 @@ class DescribePutReimbursement:
         status = await db.fetchval("SELECT status FROM reimbursement WHERE uuid = $1", uuid)
         assert status == "human-rejected"
 
-    async def it_returns_422_when_approved_by_is_missing_on_reject(self, db: asyncpg.Connection) -> None:
-        uuid = await seed_reimbursement_with_receipts(db, "REQ-PUT-REJECT-MISSING")
+    async def it_returns_422_when_approved_by_is_missing_on_reject(self) -> None:
+        # FakePool(None): validate_review() raises before pool.acquire() is
+        # ever reached, so no real row or connection is needed here.
+        uuid = uuid4()
         payload = {k: v for k, v in _REJECT_PAYLOAD.items() if k != "approved_by"}
 
-        async with _build_client(FakePool(db)) as client:
+        async with _build_client(FakePool(None)) as client:
             response = await client.put(f"/api/v1/reimbursement/{uuid}", json=payload)
 
         assert response.status_code == 422
