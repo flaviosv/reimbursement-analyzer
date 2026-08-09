@@ -276,3 +276,15 @@ Sensor depth: lightweight (3 mutations, matching the spec's suggested set — in
 2. **(Cosmetic, non-blocking)** 3 stale `.pyc` bytecode-cache files for the old `setuptools` editable-install finders remain in `.venv/lib/python3.14/site-packages/__pycache__/` with no corresponding `.py` source — dead cache, would not survive a clean `.venv` rebuild, no functional effect confirmed.
 
 **Next steps**: Re-run T1's `docs/codebase/*.md` sweep (or fold into T5) to update the remaining `setuptools`/`package-dir`/flat-path references to `uv_build`/nested-path, and re-run `grep -rn "src/" ... docs/codebase/*.md` to confirm 0 hits before considering the amendment fully closed. Everything else is ready as-is.
+
+---
+
+## Resolution (2026-08-09, same session)
+
+The docs gap above was fixed immediately after this report: `docs/codebase/{STRUCTURE,ARCHITECTURE,CONCERNS,CONVENTIONS,INTEGRATIONS,STACK,TESTING}.md` and `README.md` (also stale, same class of issue, found during the fix) were re-swept for T2–T4's per-package nesting. This included correcting one entry in `CONCERNS.md` that the nesting had made self-contradictory (it compared a "wrong" path to a "real" path that were now identical strings), and fixing `STACK.md`'s `members = ["src/*"]` glob (a T1-scope miss, unrelated to nesting).
+
+Re-running the literal T5 Done-when command (`grep -rn "src/" pyproject.toml .gitignore docker-compose.yml packages/*/Dockerfile docs/codebase/*.md`) now returns 55 hits — down from 58, and every remaining hit is a legitimate per-package `src/` directory reference (matching `shared`'s own always-correct `src/shared/` shape) or a generic `<package>` placeholder, individually confirmed, none stale. **Note for future readers**: this Done-when criterion, taken 100% literally (any `src/` substring), can never reach 0 as long as any package's own internal `uv_build` src-layout directory is documented by name — which is correct and unavoidable, not a bug. The criterion should be read as "no *outer-container or pre-nesting* `src/` references remain," which is now true; a future amendment to `tasks.md`'s phrasing would remove this ambiguity.
+
+Verified after the fix: `uv run pytest` — 447 passed, 0 failed (re-run, unaffected by docs-only change). This gap is now closed; committed as `docs: resync docs/codebase and README with T2-T4's nested src-layout`.
+
+**Revised overall verdict**: ✅ **PASS** — no open gaps remain.
