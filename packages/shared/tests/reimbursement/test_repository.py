@@ -177,11 +177,10 @@ class DescribeIsDuplicate:
 
 class DescribeFetchReimbursementPage:
     async def it_returns_the_requested_page_slice_via_limit_and_offset(self, db: asyncpg.Connection) -> None:
-        # Far-future base: unlike the human-review-scoped tests below, exact
-        # LIMIT/OFFSET order can't be made robust with a membership check —
-        # it has to out-rank whatever `now()` an unrelated real commit (e.g.
-        # the agent's own decision-graph integration test, which persists a
-        # genuine auto-approved row) lands at in this same shared migrated_db.
+        # Far-future base: out-ranks whatever `now()` an unrelated real
+        # commit (e.g. the agent's own decision-graph integration test,
+        # which persists a genuine auto-approved row into this same shared
+        # migrated_db) lands at.
         base = datetime(2099, 5, 1, tzinfo=UTC)
         # Scoped by status: other tests in the full suite (e.g. create's real
         # broker roundtrip) commit real, uncontrolled `pending` rows into this
@@ -193,12 +192,26 @@ class DescribeFetchReimbursementPage:
             )
             for n in range(5)
         ]
-        # created_at DESC → newest first: [4, 3, 2, 1, 0]; offset=1, limit=2 → [3, 2]
-        expected = [uuids[3], uuids[2]]
 
-        page = await fetch_reimbursement_page(db, statuses=["auto-approved"], limit=2, offset=1)
+        # Locate this test's own rows within the real, full DESC order first
+        # — rather than assuming they land at absolute offset 0 — so an
+        # unrelated row sorting even further out (e.g. a copy of this same
+        # far-future-base trick elsewhere) shifts the computed offset
+        # instead of silently breaking a hardcoded one.
+        full_order = [
+            row["uuid"]
+            for row in await fetch_reimbursement_page(db, statuses=["auto-approved"], limit=100, offset=0)
+        ]
+        own_start = full_order.index(uuids[4])  # newest of this test's own 5 rows
+        # DESC → newest first: [4, 3, 2, 1, 0]; offset=1, limit=2 relative to
+        # this test's own block → [3, 2].
+        expected = full_order[own_start + 1 : own_start + 3]
 
-        assert [row["uuid"] for row in page] == expected
+        page = await fetch_reimbursement_page(
+            db, statuses=["auto-approved"], limit=2, offset=own_start + 1
+        )
+
+        assert [row["uuid"] for row in page] == expected == [uuids[3], uuids[2]]
 
     async def it_filters_to_a_single_status(self, db: asyncpg.Connection) -> None:
         await seed_reimbursement(db, "REQ-SINGLE-A", status="human-review")
