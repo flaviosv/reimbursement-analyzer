@@ -1,7 +1,16 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, EmailStr
-from shared.errors import BatchInvalid, PayloadTooLarge, PublishFailed
+from shared.errors import (
+    BatchInvalid,
+    PayloadTooLarge,
+    PublishFailed,
+    ReimbursementFilterInvalid,
+    ReimbursementNotEligible,
+    ReimbursementNotFound,
+    ReimbursementUuidMismatch,
+    ReviewInvalid,
+)
 
 from errors import register_handlers
 
@@ -25,6 +34,26 @@ def _build_app() -> FastAPI:
     @app.get("/raise/publish-failed")
     def _raise_publish_failed() -> None:
         raise PublishFailed("Local: Message timed out")
+
+    @app.get("/raise/reimbursement-filter-invalid")
+    def _raise_reimbursement_filter_invalid() -> None:
+        raise ReimbursementFilterInvalid("status: must be one of pending, approved, rejected")
+
+    @app.get("/raise/review-invalid")
+    def _raise_review_invalid() -> None:
+        raise ReviewInvalid("status: must be one of approved, rejected")
+
+    @app.get("/raise/reimbursement-not-found")
+    def _raise_reimbursement_not_found() -> None:
+        raise ReimbursementNotFound("no reimbursement matches the given uuid")
+
+    @app.get("/raise/reimbursement-not-eligible")
+    def _raise_reimbursement_not_eligible() -> None:
+        raise ReimbursementNotEligible("reimbursement is not in a reviewable state")
+
+    @app.get("/raise/reimbursement-uuid-mismatch")
+    def _raise_reimbursement_uuid_mismatch() -> None:
+        raise ReimbursementUuidMismatch("payload uuid disagrees with the path uuid")
 
     @app.get("/raise/http-exception")
     def _raise_http_exception() -> None:
@@ -67,6 +96,46 @@ class DescribeRegisterHandlers:
 
         assert response.status_code == 500
         assert response.json() == {"msg": "failed to publish request"}
+
+    def it_returns_400_with_msg_for_reimbursement_filter_invalid(self) -> None:
+        client = TestClient(_build_app())
+
+        response = client.get("/raise/reimbursement-filter-invalid")
+
+        assert response.status_code == 400
+        assert response.json() == {"msg": "status: must be one of pending, approved, rejected"}
+
+    def it_returns_422_with_msg_for_review_invalid(self) -> None:
+        client = TestClient(_build_app())
+
+        response = client.get("/raise/review-invalid")
+
+        assert response.status_code == 422
+        assert response.json() == {"msg": "status: must be one of approved, rejected"}
+
+    def it_returns_404_with_msg_for_reimbursement_not_found(self) -> None:
+        client = TestClient(_build_app())
+
+        response = client.get("/raise/reimbursement-not-found")
+
+        assert response.status_code == 404
+        assert response.json() == {"msg": "no reimbursement matches the given uuid"}
+
+    def it_returns_400_with_msg_for_reimbursement_not_eligible(self) -> None:
+        client = TestClient(_build_app())
+
+        response = client.get("/raise/reimbursement-not-eligible")
+
+        assert response.status_code == 400
+        assert response.json() == {"msg": "reimbursement is not in a reviewable state"}
+
+    def it_returns_400_with_msg_for_reimbursement_uuid_mismatch(self) -> None:
+        client = TestClient(_build_app())
+
+        response = client.get("/raise/reimbursement-uuid-mismatch")
+
+        assert response.status_code == 400
+        assert response.json() == {"msg": "payload uuid disagrees with the path uuid"}
 
     def it_reshapes_a_starlette_http_exception_into_the_msg_contract(self) -> None:
         client = TestClient(_build_app())

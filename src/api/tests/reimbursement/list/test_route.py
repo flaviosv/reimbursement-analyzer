@@ -1,0 +1,211 @@
+import logging
+from datetime import UTC, datetime, timedelta
+from functools import partial
+
+import asyncpg
+import pytest
+from fastapi.testclient import TestClient
+from helpers import FakePool, seed_human_review, seed_reimbursement
+from helpers import _build_client as _shared_build_client
+from main import app as real_app
+from reimbursement.list.route import router
+
+pytestmark = pytest.mark.anyio
+
+_build_client = partial(_shared_build_client, router)
+
+_INVALID_QUERY_CASES = [
+    pytest.param("limit=501", "limit must be between 0 and 500", id="limit-exceeds-ceiling"),
+    pytest.param("offset=-1", "offset must not be negative", id="offset-negative"),
+    pytest.param("limit=-1", "limit must be between 0 and 500", id="limit-negative"),
+    pytest.param(
+        "limit=abc", "query.limit: Input should be a valid integer", id="limit-not-an-integer"
+    ),
+    pytest.param(
+        "offset=abc", "query.offset: Input should be a valid integer", id="offset-not-an-integer"
+    ),
+    # "pending" is a real status column value (AD-003, see
+    # shared/src/shared/reimbursement/use_cases/list_reimbursements.py),
+    # deliberately excluded from the client-facing status whitelist.
+    pytest.param(
+        "status=pending", "status must be one of", id="status-pending-excluded-from-whitelist"
+    ),
+    # spec.md's own Independent Test for LIST-05/07: one invalid segment
+    # among otherwise-valid ones must still invalidate the whole filter,
+    # not just be silently dropped.
+    pytest.param(
+        "status=human-review,pending",
+        "status must be one of",
+        id="status-one-segment-of-comma-list-invalid",
+    ),
+    pytest.param(
+        "status=human-review&status=auto-rejected",
+        "status must be supplied once, comma-separated for multiple values",
+        id="status-repeated-query-param",
+    ),
+]
+
+
+class DescribeGetReimbursement:
+    async def it_returns_200_with_rows_ordered_created_at_desc_by_default(
+        self, db: asyncpg.Connection
+    ) -> None:
+        base = datetime(2026, 6, 1, tzinfo=UTC)
+        older = await seed_reimbursement(db, "REQ-DEFAULT-OLD", status="auto-approved", created_at=base)
+        newer = await seed_reimbursement(
+            db, "REQ-DEFAULT-NEW", status="auto-approved", created_at=base + timedelta(hours=1)
+        )
+
+        async with _build_client(FakePool(db)) as client:
+            response = await client.get("/api/v1/reimbursement", params={"status": "auto-approved"})
+
+        assert response.status_code == 200
+        assert [item["uuid"] for item in response.json()["data"]] == [str(newer), str(older)]
+
+    async def it_applies_a_custom_limit_and_offset(self, db: asyncpg.Connection) -> None:
+        base = datetime(2026, 6, 1, tzinfo=UTC)
+        uuids = [
+            await seed_reimbursement(
+                db, f"REQ-PAGE-{n}", status="auto-approved", created_at=base + timedelta(minutes=n)
+            )
+            for n in range(5)
+        ]
+
+        async with _build_client(FakePool(db)) as client:
+            response = await client.get(
+                "/api/v1/reimbursement", params={"limit": 2, "offset": 1, "status": "auto-approved"}
+            )
+
+        assert [item["uuid"] for item in response.json()["data"]] == [str(uuids[3]), str(uuids[2])]
+
+    @pytest.mark.parametrize("query_string, expected_message_fragment", _INVALID_QUERY_CASES)
+    async def it_returns_400_with_a_message_naming_the_invalid_query_param(
+        self, query_string: str, expected_message_fragment: str
+    ) -> None:
+        # FakePool(None): every case here fails one of list_reimbursements'
+        # own gates (or FastAPI's query-type coercion) before any query
+        # ever touches a connection -- no real `db`/`migrated_db` fixture
+        # needed, mirroring test_list_reimbursements.py's own
+        # `list_reimbursements(None, ...)` pattern one layer down.
+        async with _build_client(FakePool(None)) as client:
+            response = await client.get(f"/api/v1/reimbursement?{query_string}")
+
+        assert response.status_code == 400
+        assert expected_message_fragment in response.json()["msg"]
+
+    async def it_returns_200_with_an_empty_list_when_nothing_matches(self, db: asyncpg.Connection) -> None:
+        async with _build_client(FakePool(db)) as client:
+            response = await client.get("/api/v1/reimbursement", params={"status": "auto-rejected"})
+
+        assert response.status_code == 200
+        assert response.json()["data"] == []
+
+    async def it_filters_to_a_single_status(self, db: asyncpg.Connection) -> None:
+        await seed_reimbursement(db, "REQ-SINGLE-A", status="human-review")
+        await seed_reimbursement(db, "REQ-SINGLE-B", status="auto-rejected")
+
+        async with _build_client(FakePool(db)) as client:
+            response = await client.get("/api/v1/reimbursement", params={"status": "human-review"})
+
+        # Membership, not exact-set: other pre-existing integration tests
+        # (e.g. agent's, REVIEW-09) commit real, undeletable human-review
+        # rows to this same session-scoped migrated_db.
+        request_ids = {item["request_id"] for item in response.json()["data"]}
+        assert "REQ-SINGLE-A" in request_ids
+        assert "REQ-SINGLE-B" not in request_ids
+
+    async def it_filters_to_multiple_comma_separated_statuses(self, db: asyncpg.Connection) -> None:
+        await seed_reimbursement(db, "REQ-MULTI-A", status="human-review")
+        await seed_reimbursement(db, "REQ-MULTI-B", status="auto-rejected")
+        await seed_reimbursement(db, "REQ-MULTI-C", status="auto-approved")
+
+        async with _build_client(FakePool(db)) as client:
+            response = await client.get(
+                "/api/v1/reimbursement", params={"status": "human-review,auto-rejected"}
+            )
+
+        # Subset, not exact-set: see it_filters_to_a_single_status above.
+        request_ids = {item["request_id"] for item in response.json()["data"]}
+        assert {"REQ-MULTI-A", "REQ-MULTI-B"} <= request_ids
+        assert "REQ-MULTI-C" not in request_ids
+
+    async def it_includes_pending_rows_when_status_is_omitted(self, db: asyncpg.Connection) -> None:
+        await seed_reimbursement(db, "REQ-ALL-PENDING", status="pending")
+        await seed_reimbursement(db, "REQ-ALL-APPROVED", status="human-approved")
+
+        async with _build_client(FakePool(db)) as client:
+            response = await client.get("/api/v1/reimbursement")
+
+        # Subset, not exact-set: the update-route and use-case concurrency
+        # tests (REVIEW-09) commit real, undeletable rows to this same
+        # session-scoped migrated_db — human_review is append-only (DB
+        # trigger) and FK-RESTRICTs deleting its parent reimbursement row,
+        # so a no-filter query can legitimately see extra rows depending on
+        # test order. Scoped to what this test itself seeded, like the
+        # concurrency tests' own count(*) assertions are scoped to their uuid.
+        request_ids = {item["request_id"] for item in response.json()["data"]}
+        assert {"REQ-ALL-PENDING", "REQ-ALL-APPROVED"} <= request_ids
+
+    async def it_includes_the_last_human_review_when_present_and_null_when_absent(
+        self, db: asyncpg.Connection
+    ) -> None:
+        with_review = await seed_reimbursement(db, "REQ-HR-PRESENT", status="human-approved")
+        await seed_human_review(
+            db, with_review, reason="first look", created_at=datetime(2026, 5, 1, tzinfo=UTC)
+        )
+        await seed_human_review(
+            db, with_review, reason="second look", created_at=datetime(2026, 5, 2, tzinfo=UTC)
+        )
+        without_review = await seed_reimbursement(db, "REQ-HR-ABSENT", status="human-review")
+
+        async with _build_client(FakePool(db)) as client:
+            response = await client.get("/api/v1/reimbursement")
+        by_uuid = {item["uuid"]: item for item in response.json()["data"]}
+
+        assert by_uuid[str(with_review)]["last_human_review"]["reason"] == "second look"
+        assert by_uuid[str(without_review)]["last_human_review"] is None
+
+    async def it_includes_the_original_payload_as_a_parsed_json_object(
+        self, db: asyncpg.Connection
+    ) -> None:
+        payload = {"amount": 93.5, "currency": "BRL"}
+        uuid = await seed_reimbursement(db, "REQ-PAYLOAD", original_payload=payload)
+
+        async with _build_client(FakePool(db)) as client:
+            response = await client.get("/api/v1/reimbursement")
+        by_uuid = {item["uuid"]: item for item in response.json()["data"]}
+
+        assert by_uuid[str(uuid)]["original_payload"] == payload
+
+    async def it_returns_500_on_a_simulated_pool_failure(
+        self, db: asyncpg.Connection, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.ERROR, logger="errors")
+
+        async with _build_client(FakePool(db, acquire_error=RuntimeError("connection reset"))) as client:
+            response = await client.get("/api/v1/reimbursement")
+
+        assert response.status_code == 500
+        assert response.json() == {"msg": "internal error"}
+        assert "connection reset" in caplog.text
+
+
+class DescribeTheRealApp:
+    def it_serves_the_route_through_the_apps_actual_lifespan_and_wiring(
+        self, migrated_db: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Every other test in this file builds its own throwaway FastAPI() +
+        # register_handlers() + router, backed by a FakePool. This one proves
+        # the real api.main.app — lifespan (incl. T4's get_pool DB wiring),
+        # register_handlers, and router wired together exactly as production
+        # runs it — also serves this route correctly. Plain TestClient is
+        # safe here (unlike DescribeGetReimbursement above): the pool is
+        # constructed fresh inside TestClient's own loop via the real
+        # lifespan, never handed in from this test's loop.
+        monkeypatch.setenv("DATABASE_URL", migrated_db)
+
+        with TestClient(real_app) as client:
+            response = client.get("/api/v1/reimbursement")
+
+        assert response.status_code == 200
+        assert isinstance(response.json()["data"], list)

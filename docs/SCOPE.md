@@ -159,11 +159,15 @@
         - Values: `auto-approved` | `human-approved` | `human-review` | `auto-rejected` | `human-rejected`
         - Not required
         - Default = empty
+        - Accepts more than one value, comma-separated (e.g.
+          `status=human-review,auto-rejected`), matching any of the listed
+          statuses — see AD-028 in .specs/STATE.md
 - Return the last `Human Review` if any
 - **Responses**
-    - 200
+    - 200 (a filter matching zero rows is still `200` with an empty `data`
+      array — the list endpoint never 404s; the `404` originally listed here
+      is dropped as a spec error — see AD-027 in .specs/STATE.md)
     - 400
-    - 404
     - 500
         - Response body
         ```json
@@ -177,11 +181,26 @@
 
 ### PUT /api/v1/reimbursement/:uuid 
 - Only recheable for `Reimbursement` in `Human-Rejected` or `Auto-Rejected` or `Human-Review` status
+  (confirmed as literally listed — the Decisions section's "not possible to
+  Human-Approve if rejected" note below refers to the already-*approved*
+  statuses, not to `Human-Rejected` — see AD-027 in .specs/STATE.md)
 - Accept approval of rejected `Human Review`
     Do not override the existing record, create a new one
+    (means the `human_review` row — already DB-enforced append-only by the
+    `human_review_append_only` trigger. `reimbursement.status` is updated in
+    place; no second `reimbursement` row is ever created — see AD-027)
 - The final status must be propagated to the `Reimbursement Entity`
 - For an approval, all the fields from the payload are required
+  (this is also the completeness gate for `receipts_value`/`receipts_date`/
+  `receipts_currency` — those columns being NULL on a `Human Review` row is
+  expected, and this payload rule is what backfills them; no additional
+  application-level gate exists beyond it — see AD-027)
 - For rejecting, just the `reason` and `approved_by` are required
+  (the reject payload has no field for `receipts_value`/`receipts_date`/
+  `receipts_currency` — so, unlike approval, rejecting does not backfill
+  them. A reject is blocked with `400` unless all three are already
+  non-null on the `Reimbursement` entity, so a finalized record is never
+  left incomplete — see AD-027 addendum in .specs/STATE.md)
 - **Payload**
     ```json
     {
@@ -196,6 +215,8 @@
     ```
 - **Responses**
     - 200
+    - 404 (amended — added: unknown `uuid`. Not in the original list despite
+      PUT operating on a path parameter — see AD-027 in .specs/STATE.md)
     - 422
     - 400
     - 500
@@ -326,10 +347,23 @@
     - It wasn't considered in this project the possible extraction of data from `raw_ocr_text` or other possible fields via probabilistic layer / ETL, even though would be a good practice for Data Analyzes
 - Human Review
     - If the system tries to `Human-Approve` without the fields below present in the `Reimbursement` entity, it's gonna be blocked, all those fields are mandatory to have the data consistent
+      (resolved: no fields beyond what's already required — the PUT payload's
+      own required-for-approval fields backfill `receipts_value`/
+      `receipts_date`/`receipts_currency`, and `submitted_by`/`submitted_at`
+      are already guaranteed non-null by `POST /api/v1/reimbursement`'s own
+      validation. No separate application-level completeness gate exists —
+      see AD-027 in .specs/STATE.md)
     -  It's possible to `Human-Approve`if the `Reimbursement`is in `Human-Rejected` or `Auto-Rejected` or `Human-Review`
         - It has been decided to let the `Auto-Rejected` to ba `Human-Approved` to allow the system recover from the possible agent errors
     - It's not possible to `Human-Approve` if the `Reimbursement` is rejected, as it's not possible assure the system can get back the money 
         - This is an edge caase not covered by this project
+        (clarified: "rejected" here means the already-*approved* statuses —
+        `Auto-Approved`/`Human-Approved` — since only disbursed money can't be
+        clawed back. `Human-Rejected` remains PUT-eligible per the bullet
+        above — see AD-027 in .specs/STATE.md)
+
+
+- Adding failures to the log is an ultimate resource and must be monitores by tools such as fluentd
 
 # Phase 2
 - Human Review Evaluator

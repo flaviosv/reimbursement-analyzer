@@ -1,3 +1,4 @@
+import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
@@ -37,6 +38,29 @@ class DescribeLifespan:
             assert app.state.producer._is_closed is False
 
         assert app.state.producer._is_closed is True
+
+    def it_constructs_the_pool_with_min_size_zero(
+        self, migrated_db: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # pool_min_size=0 is a deliberate override of DatabaseConfig's own
+        # default (2) — see main.lifespan's `replace(config.database,
+        # pool_min_size=0)`. Assert it against the app's real pool rather
+        # than a mock, the same way DescribeTheRealApp tests exercise the
+        # real lifespan wiring elsewhere in this suite.
+        monkeypatch.setenv("DATABASE_URL", migrated_db)
+        app = _build_app()
+
+        with TestClient(app):
+            assert app.state.pool.get_min_size() == 0
+
+    def it_closes_the_pool_on_shutdown(self, migrated_db: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DATABASE_URL", migrated_db)
+        app = _build_app()
+
+        with TestClient(app):
+            assert app.state.pool.is_closing() is False
+
+        assert app.state.pool.is_closing() is True
 
 
 class DescribeGetProducer:

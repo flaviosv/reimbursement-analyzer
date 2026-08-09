@@ -15,6 +15,30 @@ class PublishFailed(Exception):
     within the publish timeout."""
 
 
+class ReimbursementFilterInvalid(Exception):
+    """The requested status/limit/offset combination failed the list use
+    case's gate: an out-of-whitelist status value, or an out-of-bounds
+    limit/offset."""
+
+
+class ReviewInvalid(Exception):
+    """The review payload failed its own shape contract (missing/malformed
+    field, or an unrecognized status value)."""
+
+
+class ReimbursementNotFound(Exception):
+    """No reimbursement row matches the given uuid."""
+
+
+class ReimbursementNotEligible(Exception):
+    """The row exists but its current state doesn't allow this decision —
+    wrong status, or (reject only) missing receipts_value/date/currency."""
+
+
+class ReimbursementUuidMismatch(Exception):
+    """The review payload carried a uuid that disagrees with the path uuid."""
+
+
 def sanitize(exc: BaseException) -> str:
     """Render an exception for stdout: its type, plus whatever diagnostic
     shape is safe to include for that exception kind — never a raw value.

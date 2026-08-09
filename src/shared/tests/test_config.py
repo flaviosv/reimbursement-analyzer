@@ -1,6 +1,7 @@
 import pytest
 from shared.config import (
     KAFKA_MAX_MESSAGE_BYTES,
+    MAX_LIST_LIMIT,
     MAX_RETRY,
     REIMBURSEMENT_TOPIC,
     load_config,
@@ -79,6 +80,9 @@ class DescribeWireConstants:
         # exact topic name, and SCOPE.md:215 sets the ceiling at "retry > 3".
         assert REIMBURSEMENT_TOPIC == "Reimbursement"
         assert MAX_RETRY == 3
+
+    def it_sets_the_list_endpoint_pagination_ceiling(self) -> None:
+        assert MAX_LIST_LIMIT == 500
 
 
 class DescribeDatabaseConfig:

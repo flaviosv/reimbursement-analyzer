@@ -13,8 +13,8 @@ from contextlib import asynccontextmanager
 from confluent_kafka.aio import AIOConsumer
 from dotenv import load_dotenv
 from shared.config import REQUEST_TOPIC, Config, load_config
+from shared.db import managed_pool
 from shared.producer import managed_producer
-from shared.reimbursement.repository import managed_pool
 
 from config import PublisherConfig, load_publisher_config
 from processing import MESSAGE_HANDLED_EVENT, Dependencies, _LazyJSON, handle_message

@@ -4,7 +4,16 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from shared.errors import BatchInvalid, PayloadTooLarge, PublishFailed
+from shared.errors import (
+    BatchInvalid,
+    PayloadTooLarge,
+    PublishFailed,
+    ReimbursementFilterInvalid,
+    ReimbursementNotEligible,
+    ReimbursementNotFound,
+    ReimbursementUuidMismatch,
+    ReviewInvalid,
+)
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 logger = logging.getLogger(__name__)
@@ -35,6 +44,32 @@ async def _publish_failed_handler(request: Request, exc: PublishFailed) -> JSONR
     return _msg_response(500, "failed to publish request")
 
 
+async def _reimbursement_filter_invalid_handler(
+    request: Request, exc: ReimbursementFilterInvalid
+) -> JSONResponse:
+    return _msg_response(400, str(exc))
+
+
+async def _review_invalid_handler(request: Request, exc: ReviewInvalid) -> JSONResponse:
+    return _msg_response(422, str(exc))
+
+
+async def _reimbursement_not_found_handler(request: Request, exc: ReimbursementNotFound) -> JSONResponse:
+    return _msg_response(404, str(exc))
+
+
+async def _reimbursement_not_eligible_handler(
+    request: Request, exc: ReimbursementNotEligible
+) -> JSONResponse:
+    return _msg_response(400, str(exc))
+
+
+async def _reimbursement_uuid_mismatch_handler(
+    request: Request, exc: ReimbursementUuidMismatch
+) -> JSONResponse:
+    return _msg_response(400, str(exc))
+
+
 async def _validation_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     # FastAPI's default here is 422 + {"detail": [...]}; replaced app-wide so
     # every route shares one error contract. Built from `loc`/`msg` only —
@@ -60,6 +95,11 @@ def register_handlers(app: FastAPI) -> None:
     app.add_exception_handler(PayloadTooLarge, _payload_too_large_handler)
     app.add_exception_handler(BatchInvalid, _batch_invalid_handler)
     app.add_exception_handler(PublishFailed, _publish_failed_handler)
+    app.add_exception_handler(ReimbursementFilterInvalid, _reimbursement_filter_invalid_handler)
+    app.add_exception_handler(ReviewInvalid, _review_invalid_handler)
+    app.add_exception_handler(ReimbursementNotFound, _reimbursement_not_found_handler)
+    app.add_exception_handler(ReimbursementNotEligible, _reimbursement_not_eligible_handler)
+    app.add_exception_handler(ReimbursementUuidMismatch, _reimbursement_uuid_mismatch_handler)
     app.add_exception_handler(RequestValidationError, _validation_handler)
     app.add_exception_handler(StarletteHTTPException, _http_exception_handler)
     app.add_exception_handler(Exception, _unhandled_exception_handler)

@@ -19,9 +19,9 @@ from shared.config import (
     Config,
     load_config,
 )
+from shared.db import managed_pool
 from shared.models import RequestEnvelope
 from shared.producer import managed_producer, publish
-from shared.reimbursement.repository import managed_pool
 
 pytestmark = [pytest.mark.integration, pytest.mark.anyio]
 

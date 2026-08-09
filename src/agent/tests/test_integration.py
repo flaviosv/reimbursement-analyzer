@@ -18,9 +18,10 @@ from agent.validation import (
 from confluent_kafka import KafkaException, TopicPartition
 from helpers import valid_reimbursement_item
 from shared.config import REIMBURSEMENT_TOPIC, Config, load_config
+from shared.db import managed_pool
 from shared.models import ReimbursementEnvelope
 from shared.producer import managed_producer, publish
-from shared.reimbursement.repository import insert_pending, managed_pool
+from shared.reimbursement.repository import insert_pending
 
 pytestmark = [pytest.mark.integration, pytest.mark.anyio]
 
