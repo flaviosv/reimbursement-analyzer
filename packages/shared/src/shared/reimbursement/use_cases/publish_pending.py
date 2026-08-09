@@ -36,13 +36,23 @@ async def publish_pending(
     """Insert `item`, let it commit, then publish its `Reimbursement` message.
 
     No transaction spans the publish (AD-033, amending AD-017 for this unit
-    of work only): `insert_pending` commits on its own, and a publish
-    failure is compensated by an explicit delete rather than a rollback.
-    Every delete outcome (removed, no-op, or itself failed) is durably
-    logged before this re-raises `PublishFailed` for the caller's existing
-    requeue path (`publisher.processing._requeue`) — unchanged by this.
+    of work only): the insert commits on its own, well before the publish is
+    attempted, and a publish failure is compensated by an explicit delete
+    rather than a rollback. Every delete outcome (removed, no-op, or itself
+    failed) is durably logged before this re-raises `PublishFailed` for the
+    caller's existing requeue path (`publisher.processing._requeue`) —
+    unchanged by this.
+
+    The insert itself is still wrapped in its own `conn.transaction()`, the
+    same defensive pattern `escalate_item.send_human_review` already uses
+    (AD-017) for the identical reason: a caught `UniqueViolationError`
+    without it poisons the connection's enclosing transaction state instead
+    of staying contained (a savepoint boundary, not an atomicity guard —
+    this closes and commits before the publish call begins, so it does not
+    reopen the window AD-033 removes).
     """
-    uuid = await insert_pending(conn, item)
+    async with conn.transaction():
+        uuid = await insert_pending(conn, item)
     message = ReimbursementEnvelope(
         uuid=uuid, retry=0, published_at=datetime.now(UTC), errors=errors
     )

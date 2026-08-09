@@ -76,6 +76,12 @@ class FakeConnection:
     async def fetchval(self, statement: str, *args: Any) -> UUID:
         return await self.pool.insert(args)
 
+    async def execute(self, statement: str, *args: Any) -> str:
+        # Only caller today is the compensating delete_pending() — a
+        # publish-failure test that doesn't care about delete outcomes still
+        # needs this to not crash, so it always reports success.
+        return "DELETE 1"
+
 
 class FakePool:
     """Stands in for an asyncpg pool. `insert_errors` fails the insert of the

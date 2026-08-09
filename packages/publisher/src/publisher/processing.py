@@ -194,12 +194,10 @@ async def process_item(
     except PublishFailed as exc:
         return await _requeue(deps, envelope, index, item, "publish", exc)
     except Exception as exc:
-        # Also catches a COMMIT that fails *after* a successful publish (the
-        # transaction's implicit commit runs when the `async with` block in
-        # _insert_and_publish exits) — mislabeled "db-insert" below even
-        # though the insert itself succeeded. Accepted as-is: a redelivery
-        # then produces a second row with a different uuid than the one
-        # already published, the same consequence a plain publish failure has.
+        # Scoped to the insert's own failure only (AD-033): a PublishFailed
+        # is always caught by the branch above, and there is no commit step
+        # left that could fail *after* a successful publish — insert_pending
+        # already committed before the publish was even attempted.
         if repository.is_duplicate(exc):
             _log_duplicate(envelope, item, exc)
             return ItemOutcome.DUPLICATE
@@ -285,17 +283,21 @@ def _accepts(
 async def _insert_and_publish(
     deps: Dependencies, envelope: RequestEnvelope, item: dict[str, Any]
 ) -> None:
+    # No transaction spans the publish (AD-033, amending AD-017 for this unit
+    # of work only): insert_pending commits on its own, and a publish
+    # failure is compensated by an explicit delete inside publish_pending
+    # rather than a rollback (PUB-09 — same "no row survives a publish
+    # failure" outcome, different mechanism).
     async with deps.pool.acquire(timeout=deps.config.database.acquire_timeout_seconds) as conn:
-        # The publish sits *inside* the transaction, so a delivery failure
-        # rolls the insert back without an explicit rollback call (PUB-09).
-        async with conn.transaction():
-            await publish_pending(
-                conn,
-                deps.producer,
-                item,
-                envelope.errors,
-                deps.config.kafka.publish_timeout_seconds,
-            )
+        await publish_pending(
+            conn,
+            deps.producer,
+            item,
+            envelope.errors,
+            deps.config.kafka.publish_timeout_seconds,
+            deps.config.failure_log,
+            envelope.retry,
+        )
 
 
 async def _requeue(

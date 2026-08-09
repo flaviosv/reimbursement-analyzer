@@ -1197,6 +1197,61 @@ own unique-constraint path is untouched by this change).
 
 ---
 
+### AD-034 — `publish_pending`'s insert still gets its own `conn.transaction()`, closed before the publish is attempted — a savepoint boundary, not a re-introduced dual-write window
+
+**Date:** 2026-08-09
+**Status:** Active
+**Amends:** AD-033 (implementation-level refinement, discovered during that feature's Execute phase — not a reversal: AC1's actual requirement, "no transaction spans the publish call," still holds exactly)
+
+`design.md`'s Architecture Overview describes the insert and the compensating
+delete as "auto-committing statements... uninstrumented by any transaction."
+Implementing that literally (a bare `insert_pending(conn, item)` call with no
+`conn.transaction()` at all) surfaced a real defect during Execute: a real
+Postgres `UniqueViolationError` raised by the insert, when not caught inside
+its own transaction/savepoint, poisons whatever transaction context already
+encloses the connection — any subsequent statement on that same connection
+then fails with `InFailedSQLTransactionError` until the enclosing transaction
+ends. This is not hypothetical: `packages/publisher/tests/test_processing.py`'s
+`DescribeADuplicateItem::it_drops_the_item_without_storing_a_second_row`
+reproduced it directly (`RealPool` shares one connection wrapped in the `db`
+fixture's own outer transaction). `escalate_item.send_human_review` already
+documents and defends against this identical class of failure for its own
+INSERT (`processing.py:218-221`): "without it, a caught UniqueViolationError
+below poisons the connection's enclosing transaction state... It acts as a
+savepoint boundary, not an atomicity guard."
+
+**Resolution:** `publish_pending` wraps only `insert_pending`'s call in
+`async with conn.transaction():`, committing (or rolling back to the
+savepoint, when nested inside an already-open transaction) before `publish()`
+is ever called. `delete_pending` is deliberately NOT given the same
+wrapper — a `DELETE` has no constraint to violate, so the realistic AC6
+failure mode (a broken connection) leaves nothing for a savepoint to
+protect, and adding one would be unjustified complexity for a risk that
+doesn't exist.
+
+**Why:** AD-033's actual, binding guarantee is "no transaction spans the
+Kafka publish call" (spec.md AC1) — a transaction that opens and fully closes
+around one single INSERT statement, strictly before the publish is attempted,
+does not reopen that window; it is observably identical, at the wire level,
+to a bare autocommitted statement in production (where no outer transaction
+exists to nest inside). The only place the distinction is visible is when a
+connection is already inside a transaction — production's `pool.acquire()`
+connections never are, but the test suite's shared-connection fixtures
+sometimes are, and a future caller might be too. Matching `escalate_item`'s
+already-established precedent is the smaller, more consistent fix than either
+leaving a real defect in place or inventing a different pattern for the same
+problem.
+
+**Implication:** `shared.reimbursement.use_cases.publish_pending`'s docstring
+records this explicitly so a future reader doesn't "simplify" it back to a
+bare insert call and reintroduce the poisoned-transaction defect. No spec.md
+or design.md text needed correction — AC1's literal requirement was never
+violated, only the Architecture Overview's more casual "uninstrumented by any
+transaction" phrasing was more literal than the implementation ended up
+being.
+
+---
+
 ## Handoff
 
 **Last updated:** 2026-08-08

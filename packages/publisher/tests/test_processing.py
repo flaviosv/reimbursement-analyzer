@@ -232,7 +232,7 @@ class DescribeTheReimbursementMessage:
         assert [entry["stage"] for entry in published["errors"]] == [error.stage for error in history]
 
 
-class DescribeTheItemTransaction:
+class DescribeInsertThenPublish:
     async def it_commits_exactly_one_pending_row_when_both_steps_succeed(
         self, db: asyncpg.Connection
     ) -> None:
@@ -251,6 +251,10 @@ class DescribeTheItemTransaction:
         assert row["submitted_by"] == "person@example.com"
 
     async def it_leaves_no_row_behind_when_the_publish_fails(self, db: asyncpg.Connection) -> None:
+        # No transaction to roll back anymore (AD-033) — the row is gone via
+        # publish_pending's explicit compensating delete instead. The
+        # observable outcome PUB-09 names (no row survives a publish
+        # failure) is unchanged, only the mechanism is.
         item = valid_reimbursement_item("REQ-ROLLBACK")
         producer = FakeProducer(errors={REIMBURSEMENT_TOPIC: RuntimeError("broker unreachable")})
 
