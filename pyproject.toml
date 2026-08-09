@@ -20,6 +20,7 @@ dev = [
     "httpx>=0.28.1",
     "pytest>=9.1.1",
     "testcontainers[kafka,postgres]>=4.15.0",
+    "pylint>=4.0.6",
 ]
 
 [tool.uv.sources]
