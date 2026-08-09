@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from functools import partial
 from uuid import uuid4
 
 import asyncpg
@@ -10,6 +11,7 @@ from errors import register_handlers
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from helpers import FakePool, seed_reimbursement, seed_reimbursement_with_receipts
+from helpers import _build_client as _shared_build_client
 from main import app as real_app
 from reimbursement.update.route import router
 
@@ -31,17 +33,7 @@ _REJECT_PAYLOAD = {
 }
 
 
-def _build_client(pool: FakePool) -> httpx.AsyncClient:
-    # httpx.AsyncClient + ASGITransport, not TestClient: TestClient drives
-    # the app from a separate thread with its own event loop, and the real
-    # asyncpg connection FakePool wraps is bound to *this* test's own loop
-    # (the `db` fixture's) — see reimbursement/list/test_route.py's own note.
-    app = FastAPI()
-    register_handlers(app)
-    app.include_router(router)
-    app.dependency_overrides[get_pool] = lambda: pool
-    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
-    return httpx.AsyncClient(transport=transport, base_url="http://test")
+_build_client = partial(_shared_build_client, router)
 
 
 class DescribePutReimbursement:

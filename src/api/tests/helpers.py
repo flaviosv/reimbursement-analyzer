@@ -9,6 +9,10 @@ from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID, uuid4
 
 import asyncpg
+import httpx
+from dependencies import get_pool
+from errors import register_handlers
+from fastapi import APIRouter, FastAPI
 
 # Matches the postgres service in docker-compose.yml, so tests exercise the
 # same major version the stack runs.
@@ -180,3 +184,28 @@ class FakePool:
 
     def acquire(self, *, timeout: float | None = None) -> _FakePoolAcquisition:
         return _FakePoolAcquisition(self)
+
+
+def _build_client(router: APIRouter, pool: FakePool) -> httpx.AsyncClient:
+    """A throwaway FastAPI() + register_handlers() + `router`, backed by
+    `pool` — shared by `reimbursement/list/test_route.py` and
+    `reimbursement/update/test_route.py`'s own route tests (AD-009 rules out
+    a cross-conftest import, see FakePool above), which each wire a
+    different router into an otherwise identical app.
+
+    httpx.AsyncClient + ASGITransport, not TestClient: TestClient drives the
+    ASGI app from a separate thread with its own event loop, and the real
+    asyncpg connection FakePool wraps is bound to *this* test's own loop
+    (the `db` fixture's) -- a cross-loop connection use asyncpg rejects
+    outright. AsyncClient runs the app in-process on the current loop.
+    """
+    app = FastAPI()
+    register_handlers(app)
+    app.include_router(router)
+    app.dependency_overrides[get_pool] = lambda: pool
+    # raise_app_exceptions=False: otherwise ASGITransport re-raises an
+    # unhandled exception into the test instead of returning the registered
+    # Exception handler's 500 response -- the async-client mirror of
+    # TestClient's raise_server_exceptions=False (see test_errors.py).
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+    return httpx.AsyncClient(transport=transport, base_url="http://test")

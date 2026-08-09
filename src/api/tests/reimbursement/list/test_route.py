@@ -1,36 +1,18 @@
 import logging
 from datetime import UTC, datetime, timedelta
+from functools import partial
 
 import asyncpg
-import httpx
 import pytest
-from dependencies import get_pool
-from errors import register_handlers
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from helpers import FakePool, seed_human_review, seed_reimbursement
+from helpers import _build_client as _shared_build_client
 from main import app as real_app
 from reimbursement.list.route import router
 
 pytestmark = pytest.mark.anyio
 
-
-def _build_client(pool: FakePool) -> httpx.AsyncClient:
-    # httpx.AsyncClient + ASGITransport, not TestClient: TestClient drives the
-    # ASGI app from a separate thread with its own event loop, and the real
-    # asyncpg connection FakePool wraps is bound to *this* test's own loop
-    # (the `db` fixture's) — a cross-loop connection use asyncpg rejects
-    # outright. AsyncClient runs the app in-process on the current loop.
-    app = FastAPI()
-    register_handlers(app)
-    app.include_router(router)
-    app.dependency_overrides[get_pool] = lambda: pool
-    # raise_app_exceptions=False: otherwise ASGITransport re-raises an
-    # unhandled exception into the test instead of returning the registered
-    # Exception handler's 500 response — the async-client mirror of
-    # TestClient's raise_server_exceptions=False (see test_errors.py).
-    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
-    return httpx.AsyncClient(transport=transport, base_url="http://test")
+_build_client = partial(_shared_build_client, router)
 
 
 class DescribeGetReimbursement:
