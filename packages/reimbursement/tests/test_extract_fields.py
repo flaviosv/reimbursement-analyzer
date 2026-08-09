@@ -74,3 +74,16 @@ class DescribeExtractFields:
         result = await node(_state(_PAYLOAD), {"configurable": {}})
 
         assert "status" not in result
+
+    async def it_never_includes_submitted_by_in_the_rendered_prompt(self) -> None:
+        # AGD-26: submitted_by (PII) must not reach the extraction prompt.
+        model = FakeStructuredModel(
+            result=ExtractedFieldsSchema(value=93.5, currency="BRL", receipts_date=date(2026, 4, 9))
+        )
+        node = ExtractFields(model=model, prompt=PLACEHOLDER_PROMPT)
+
+        await node(_state(_PAYLOAD), {"configurable": {}})
+
+        assert len(model.calls) == 1
+        rendered = " ".join(str(message.content) for message in model.calls[0])
+        assert _PAYLOAD["submitted_by"] not in rendered

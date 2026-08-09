@@ -17,6 +17,11 @@ from reimbursement.schema import ExtractedFields, State
 
 logger = logging.getLogger(__name__)
 
+# AGD-26: only the fields extraction operationally needs reach the LLM
+# prompt — excludes `submitted_by` (PII) and every other payload key
+# (`request_id`, `submitted_at`, `attachments`) this node doesn't read.
+_PROMPT_PAYLOAD_FIELDS = ("claimed_amount_brl", "claimed_category", "raw_ocr_text")
+
 
 class ExtractedFieldsSchema(BaseModel):
     """This node's own structured-output contract — bound onto `model` via
@@ -36,7 +41,10 @@ class ExtractFields:
         logger.info("FLOW: Executing 'extract_fields' node")
 
         payload = state["reimbursement"].original_payload
-        messages = self._prompt.format_messages(payload=json.dumps(payload))
+        prompt_payload = {
+            key: payload[key] for key in _PROMPT_PAYLOAD_FIELDS if key in payload
+        }
+        messages = self._prompt.format_messages(payload=json.dumps(prompt_payload))
         result = await self._model.ainvoke(messages)
 
         extracted: ExtractedFields = {
