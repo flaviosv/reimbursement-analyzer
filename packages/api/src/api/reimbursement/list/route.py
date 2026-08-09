@@ -5,7 +5,8 @@ from shared.config import load_config
 from api.dependencies import get_pool
 from api.errors import MessageResponse
 from api.reimbursement.list.params import LimitQuery, OffsetQuery, parse_status_filter
-from api.reimbursement.list.response import ReimbursementListItem, ReimbursementListResponse
+from api.reimbursement.list.response import ReimbursementListResponse
+from api.reimbursement.response import ReimbursementItem
 from shared.reimbursement.use_cases.list_reimbursements import list_reimbursements
 
 router = APIRouter()
@@ -39,5 +40,5 @@ async def get_reimbursements(
         rows = await list_reimbursements(conn, statuses=statuses, limit=limit, offset=offset)
     return ReimbursementListResponse(
         msg=f"{len(rows)} reimbursement(s) found",
-        data=[ReimbursementListItem.from_record(row) for row in rows],
+        data=[ReimbursementItem.from_record(row) for row in rows],
     )
