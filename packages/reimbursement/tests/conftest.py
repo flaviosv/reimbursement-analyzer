@@ -4,6 +4,7 @@ import pytest
 from shared.config import KAFKA_MAX_MESSAGE_BYTES, load_config
 from testcontainers.community.kafka import KafkaContainer
 
+from reimbursement.agent.agent import get_graph
 from reimbursement.config import load_agent_config
 
 
@@ -17,6 +18,13 @@ def _clear_config_cache() -> None:
     # test trees, so it is declared again here.
     load_config.cache_clear()
     load_agent_config.cache_clear()
+    # get_graph() is the same kind of process-lifetime singleton (T13,
+    # AD-023 shape) — test_agent.py's singleton tests monkeypatch
+    # build_graph() and populate this cache with a fake compiled graph;
+    # without clearing it here, that fake would otherwise leak into
+    # test_validation.py's/test_integration.py's real agent.decide() calls
+    # for the rest of the process.
+    get_graph.cache_clear()
 
 
 @pytest.fixture(scope="session")

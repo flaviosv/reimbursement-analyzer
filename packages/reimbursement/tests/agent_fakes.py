@@ -29,7 +29,14 @@ from uuid import UUID
 
 from shared.testing import FakeProducer
 
-__all__ = ["FakeProducer", "FakePool", "FakeConnection"]
+__all__ = [
+    "FakeProducer",
+    "FakePool",
+    "FakeConnection",
+    "FakeAcquirePool",
+    "FakeStructuredModel",
+    "FakeApplyDecision",
+]
 
 
 class _FakeAcquisition:
@@ -54,12 +61,12 @@ class FakeConnection:
         return await self.pool.get(args[0])
 
     async def execute(self, statement: str, *args: Any) -> str:
-        return await self.pool.update(args[0], args[1])
+        return await self.pool.update(args[0], args[1], args[2])
 
 
 class FakePool:
     """Stands in for an asyncpg pool across the two statements agent code
-    issues: a read (`get_by_uuid`) and a status update (`update_human_review`,
+    issues: a read (`get_by_uuid`) and a status update (`update_decision`,
     including via `escalate_existing`).
 
     `rows` maps `uuid -> a dict standing in for an asyncpg.Record` (absent or
@@ -92,12 +99,86 @@ class FakePool:
             raise error
         return self.rows.get(uuid)
 
-    async def update(self, uuid: UUID, reason: str) -> str:
+    async def update(self, uuid: UUID, status: str, reason: str) -> str:
         error = self.update_errors.get(uuid)
         if error is not None:
             raise error
         if uuid not in self.rows:
             return "UPDATE 0"
         self.updated[uuid] = reason
-        self.rows[uuid] = {**self.rows[uuid], "status": "human-review", "decision_reason": reason}
+        self.rows[uuid] = {**self.rows[uuid], "status": status, "decision_reason": reason}
         return "UPDATE 1"
+
+
+class _FakeAcquireContext:
+    def __init__(self, conn: Any) -> None:
+        self._conn = conn
+
+    async def __aenter__(self) -> Any:
+        return self._conn
+
+    async def __aexit__(self, *exc_info: object) -> bool:
+        return False
+
+
+class FakeAcquirePool:
+    """A trivial pool double for node-level tests: `ApplyPolicies`/
+    `ApplyAgentDecision` each acquire a connection from
+    `config["configurable"]["pool"]` around their own write. Always yields
+    the same `conn` object the test constructs, so identity-checking
+    assertions (`fake.calls == [(conn, ...)]`) keep working unchanged."""
+
+    def __init__(self, conn: Any) -> None:
+        self._conn = conn
+
+    def acquire(self, *, timeout: float | None = None) -> _FakeAcquireContext:
+        return _FakeAcquireContext(self._conn)
+
+
+class FakeStructuredModel:
+    """Stands in for an Ollama chat model bound via `.with_structured_output`
+    (T8/T11's `ExtractFields`/`Analysis` constructor dependency) — returns a
+    fixed structured result (or raises) from `ainvoke`, and records every
+    call it received, so a test can assert exactly-one-invocation without a
+    real Ollama call."""
+
+    def __init__(self, result: Any = None, *, error: Exception | None = None) -> None:
+        self.result = result
+        self.error = error
+        self.calls: list[Any] = []
+
+    async def ainvoke(self, input: Any, *args: Any, **kwargs: Any) -> Any:
+        self.calls.append(input)
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
+class FakeApplyDecision:
+    """Stands in for `shared.reimbursement.use_cases.apply_decision.apply_decision`
+    — injected directly into `ApplyPolicies`/`ApplyAgentDecision` (Design's
+    constructor-injection shape), so a test proves the dependency was called
+    with the right arguments without monkeypatching a module import."""
+
+    def __init__(self, result: UUID | None = None, *, error: Exception | None = None) -> None:
+        self.result = result
+        self.error = error
+        self.calls: list[tuple[Any, UUID, str, str]] = []
+        self.receipts_calls: list[tuple[Any, Any, Any]] = []
+
+    async def __call__(
+        self,
+        conn: Any,
+        uuid: UUID,
+        status: str,
+        decision_reason: str,
+        *,
+        receipts_value: Any = None,
+        receipts_date: Any = None,
+        currency: Any = None,
+    ) -> UUID | None:
+        self.calls.append((conn, uuid, status, decision_reason))
+        self.receipts_calls.append((receipts_value, receipts_date, currency))
+        if self.error is not None:
+            raise self.error
+        return self.result

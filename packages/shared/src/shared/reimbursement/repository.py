@@ -8,7 +8,7 @@ from uuid import UUID
 
 import asyncpg
 
-from shared.models import ReimbursementRequest
+from shared.models import DecisionStatus, ReimbursementRequest
 
 DUPLICATE_CONSTRAINT = "reimbursement_request_submitter_key"
 
@@ -31,9 +31,14 @@ _INSERT_HUMAN_REVIEW = """
 
 _SELECT_BY_UUID = "SELECT * FROM reimbursement WHERE uuid = $1"
 
-_UPDATE_HUMAN_REVIEW = """
+_UPDATE_DECISION = """
     UPDATE reimbursement
-    SET status = 'human-review', decision_reason = $2, updated_at = now()
+    SET status = $2,
+        decision_reason = $3,
+        receipts_value = COALESCE($4, receipts_value),
+        receipts_date = COALESCE($5, receipts_date),
+        currency = COALESCE($6, currency),
+        updated_at = now()
     WHERE uuid = $1
 """
 
@@ -155,13 +160,29 @@ async def get_by_uuid(conn: asyncpg.Connection, uuid: UUID) -> asyncpg.Record | 
     return await conn.fetchrow(_SELECT_BY_UUID, uuid)
 
 
-async def update_human_review(conn: asyncpg.Connection, uuid: UUID, reason: str) -> bool:
-    """Escalate an existing row to human-review. Returns whether exactly one
-    row was affected, parsed from asyncpg's `UPDATE n` status string — the
-    False branch is what a ghost uuid past the retry ceiling needs, to route
-    to the failure log instead of treating the update as having succeeded."""
-    status = await conn.execute(_UPDATE_HUMAN_REVIEW, uuid, reason)
-    return status == "UPDATE 1"
+async def update_decision(
+    conn: asyncpg.Connection,
+    uuid: UUID,
+    status: DecisionStatus,
+    decision_reason: str,
+    *,
+    receipts_value: Decimal | None = None,
+    receipts_date: date | None = None,
+    currency: str | None = None,
+) -> bool:
+    """Write a decision onto an existing row, backfilling the resolved
+    receipts_* columns the same way approve() does — COALESCE against the
+    existing column value, so a caller with nothing to backfill (e.g.
+    escalate_existing's human-review escalation) leaves them untouched
+    rather than nulling out a value a later attempt already resolved.
+    Returns whether exactly one row was affected, parsed from asyncpg's
+    `UPDATE n` status string — the False branch is what a ghost uuid needs,
+    to route to the failure log instead of treating the update as having
+    succeeded."""
+    result = await conn.execute(
+        _UPDATE_DECISION, uuid, status, decision_reason, receipts_value, receipts_date, currency
+    )
+    return result == "UPDATE 1"
 
 
 async def fetch_reimbursement_page(

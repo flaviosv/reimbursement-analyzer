@@ -5,7 +5,6 @@ from uuid import UUID, uuid4
 
 import asyncpg
 import pytest
-from shared.testing import valid_reimbursement_item
 from shared.reimbursement.repository import (
     approve,
     fetch_reimbursement_by_uuid,
@@ -17,12 +16,13 @@ from shared.reimbursement.repository import (
     is_duplicate,
     record_human_review_decision,
     reject,
-    update_human_review,
+    update_decision,
 )
 from shared.testing import (
     seed_human_review,
     seed_reimbursement,
     seed_reimbursement_with_receipts,
+    valid_reimbursement_item,
 )
 
 pytestmark = pytest.mark.anyio
@@ -178,7 +178,11 @@ class DescribeIsDuplicate:
 
 class DescribeFetchReimbursementPage:
     async def it_returns_the_requested_page_slice_via_limit_and_offset(self, db: asyncpg.Connection) -> None:
-        base = datetime(2026, 5, 1, tzinfo=UTC)
+        # Far-future base: out-ranks whatever `now()` an unrelated real
+        # commit (e.g. the agent's own decision-graph integration test,
+        # which persists a genuine auto-approved row into this same shared
+        # migrated_db) lands at.
+        base = datetime(2099, 5, 1, tzinfo=UTC)
         # Scoped by status: other tests in the full suite (e.g. create's real
         # broker roundtrip) commit real, uncontrolled `pending` rows into this
         # same shared migrated_db outside this test's rollback — an
@@ -189,12 +193,26 @@ class DescribeFetchReimbursementPage:
             )
             for n in range(5)
         ]
-        # created_at DESC → newest first: [4, 3, 2, 1, 0]; offset=1, limit=2 → [3, 2]
-        expected = [uuids[3], uuids[2]]
 
-        page = await fetch_reimbursement_page(db, statuses=["auto-approved"], limit=2, offset=1)
+        # Locate this test's own rows within the real, full DESC order first
+        # — rather than assuming they land at absolute offset 0 — so an
+        # unrelated row sorting even further out (e.g. a copy of this same
+        # far-future-base trick elsewhere) shifts the computed offset
+        # instead of silently breaking a hardcoded one.
+        full_order = [
+            row["uuid"]
+            for row in await fetch_reimbursement_page(db, statuses=["auto-approved"], limit=100, offset=0)
+        ]
+        own_start = full_order.index(uuids[4])  # newest of this test's own 5 rows
+        # DESC → newest first: [4, 3, 2, 1, 0]; offset=1, limit=2 relative to
+        # this test's own block → [3, 2].
+        expected = full_order[own_start + 1 : own_start + 3]
 
-        assert [row["uuid"] for row in page] == expected
+        page = await fetch_reimbursement_page(
+            db, statuses=["auto-approved"], limit=2, offset=own_start + 1
+        )
+
+        assert [row["uuid"] for row in page] == expected == [uuids[3], uuids[2]]
 
     async def it_filters_to_a_single_status(self, db: asyncpg.Connection) -> None:
         await seed_reimbursement(db, "REQ-SINGLE-A", status="human-review")
@@ -288,7 +306,8 @@ class DescribeFetchReimbursementPage:
         assert by_uuid[without_review]["hr_reason"] is None
 
     async def it_orders_results_by_created_at_descending(self, db: asyncpg.Connection) -> None:
-        base = datetime(2026, 5, 1, tzinfo=UTC)
+        # Far-future base — see it_returns_the_requested_page_slice_via_limit_and_offset above.
+        base = datetime(2099, 5, 1, tzinfo=UTC)
         oldest = await seed_reimbursement(db, "REQ-ORDER-OLD", status="auto-approved", created_at=base)
         middle = await seed_reimbursement(
             db, "REQ-ORDER-MID", status="auto-approved", created_at=base + timedelta(hours=12)
@@ -299,7 +318,13 @@ class DescribeFetchReimbursementPage:
 
         page = await fetch_reimbursement_page(db, statuses=["auto-approved"], limit=100, offset=0)
 
-        assert [row["uuid"] for row in page] == [newest, middle, oldest]
+        # Membership, not exact-set (see it_filters_to_a_single_status above)
+        # — this test's own limit=100/offset=0 has no window to hide an
+        # unrelated real auto-approved commit behind, so relative order is
+        # checked only among these three known rows, by uuid.
+        known = {oldest, middle, newest}
+        ordered_known = [row["uuid"] for row in page if row["uuid"] in known]
+        assert ordered_known == [newest, middle, oldest]
 
     async def it_orders_results_by_created_at_descending_on_the_no_filter_path(
         self, db: asyncpg.Connection
@@ -515,11 +540,13 @@ class DescribeGetByUuid:
         assert row is None
 
 
-class DescribeUpdateHumanReview:
+class DescribeUpdateDecision:
     async def it_returns_true_and_updates_the_existing_row(self, db: asyncpg.Connection) -> None:
         uuid = await insert_pending(db, valid_reimbursement_item("REQ-ESCALATE"))
 
-        result = await update_human_review(db, uuid, "attempt 4 [resolve] RuntimeError: db down")
+        result = await update_decision(
+            db, uuid, "human-review", "attempt 4 [resolve] RuntimeError: db down"
+        )
 
         assert result is True
         row = await db.fetchrow("SELECT * FROM reimbursement WHERE uuid = $1", uuid)
@@ -531,6 +558,45 @@ class DescribeUpdateHumanReview:
         # The compound ghost + retry>3 case (AGT-18): nothing to update, and
         # the caller must be able to tell "0 rows" from "1 row" to route to
         # the failure log instead of treating this as success.
-        result = await update_human_review(db, uuid4(), "unreachable reason")
+        result = await update_decision(db, uuid4(), "human-review", "unreachable reason")
 
         assert result is False
+
+    async def it_backfills_the_receipts_columns_when_given(self, db: asyncpg.Connection) -> None:
+        uuid = await insert_pending(db, valid_reimbursement_item("REQ-UPDATE-RECEIPTS"))
+
+        await update_decision(
+            db,
+            uuid,
+            "auto-approved",
+            "value 93.5 <= 200 threshold",
+            receipts_value=Decimal("93.50"),
+            receipts_date=date(2026, 4, 9),
+            currency="BRL",
+        )
+
+        row = await db.fetchrow("SELECT * FROM reimbursement WHERE uuid = $1", uuid)
+        assert row["receipts_value"] == Decimal("93.50")
+        assert row["receipts_date"] == date(2026, 4, 9)
+        assert row["currency"] == "BRL"
+
+    async def it_coalesces_the_existing_receipts_columns_when_not_given(
+        self, db: asyncpg.Connection
+    ) -> None:
+        uuid = await insert_pending(db, valid_reimbursement_item("REQ-UPDATE-NO-RECEIPTS"))
+        await update_decision(
+            db,
+            uuid,
+            "human-review",
+            "first pass",
+            receipts_value=Decimal("64.80"),
+            receipts_date=date(2026, 4, 11),
+            currency="BRL",
+        )
+
+        await update_decision(db, uuid, "human-review", "retry ceiling reached")
+
+        row = await db.fetchrow("SELECT * FROM reimbursement WHERE uuid = $1", uuid)
+        assert row["receipts_value"] == Decimal("64.80")
+        assert row["receipts_date"] == date(2026, 4, 11)
+        assert row["currency"] == "BRL"

@@ -16,6 +16,12 @@ from shared.config import MAX_BATCH_ITEMS
 
 Stage = Literal["db-insert", "publish", "resolve"]
 
+# The three outcomes the decision graph (and its human-review escalation
+# fallback) ever write via repository.update_decision — distinct from
+# human-approved/human-rejected, which approve()/reject() write via their
+# own hardcoded SQL literals, never through this path.
+DecisionStatus = Literal["auto-approved", "auto-rejected", "human-review"]
+
 
 def _require_str(value: object) -> object:
     # AwareDatetime alone accepts int/float as Unix timestamps, so a bare

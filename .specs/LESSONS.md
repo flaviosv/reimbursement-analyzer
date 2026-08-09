@@ -126,6 +126,24 @@ Seen once or not yet corroborated. Tracked, not trusted.
 - evidence: validation.md — AGT-03, AGT-17 (agent/tests/test_validation.py:145-160,74-92) (testing)
 - last seen: 2026-08-08T19:19:01Z
 
+### L-020 — When design.md assumes a tracing/observability dependency that a task list never adds, land the dependency (or formally re-scope the AC) before Tasks closes — a documented SPEC_DEVIATION comment is not a substitute for the AC's own test coverage.
+- signal: `spec_deviation` · recurrence: 1 feature(s) · scope: `tracing` · harmful: 0
+- features: agent-decide-reimbursement
+- evidence: packages/reimbursement/src/reimbursement/agent/agent.py:92-101 SPEC_DEVIATION (tracing)
+- last seen: 2026-08-09T19:13:04Z
+
+### L-021 — Cross-check every spec.md requirement ID against design.md and tasks.md before Tasks starts — a requirement absent from both silently drops out of implementation scope with no error anywhere in the pipeline.
+- signal: `ac_gap` · recurrence: 1 feature(s) · scope: `spec-design-handoff` · harmful: 0
+- features: agent-decide-reimbursement
+- evidence: AGD-26 (spec-design-handoff)
+- last seen: 2026-08-09T19:13:04Z
+
+### L-022 — When a spec requires a message/reason field to state specific content, assert a substring of the expected content, not that the captured value equals itself (fake.calls == [(..., result[field])] passes for any content).
+- signal: `spec_precision_gap` · recurrence: 1 feature(s) · scope: `test-quality` · harmful: 0
+- features: agent-decide-reimbursement
+- evidence: AGD-13, AGD-16 (packages/reimbursement/tests/test_apply_policies.py) (test-quality)
+- last seen: 2026-08-09T19:13:04Z
+
 ## Quarantined (failed when applied — ignore)
 
 A confirmed lesson that recurred alongside failure. Kept for the maintainer to review.
