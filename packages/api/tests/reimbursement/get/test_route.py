@@ -30,6 +30,15 @@ class DescribeGetReimbursementByUuid:
         assert body["data"]["uuid"] == str(uuid)
         assert body["data"]["status"] == "human-approved"
 
+    async def it_returns_identical_data_across_two_back_to_back_gets(self, db: asyncpg.Connection) -> None:
+        uuid = await seed_reimbursement(db, "REQ-GET-IDEMPOTENT", status="human-approved")
+
+        async with _build_client(FakePool(db)) as client:
+            first_response = await client.get(f"/api/v1/reimbursement/{uuid}")
+            second_response = await client.get(f"/api/v1/reimbursement/{uuid}")
+
+        assert first_response.json()["data"] == second_response.json()["data"]
+
     async def it_includes_last_human_review_when_present(self, db: asyncpg.Connection) -> None:
         uuid = await seed_reimbursement(db, "REQ-GET-HR-PRESENT", status="human-approved")
         await seed_human_review(
