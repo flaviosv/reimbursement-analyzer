@@ -7,6 +7,8 @@
 
 Note: `ce80603` ("rename agent package to reimbursement"), the commit immediately preceding this range, is prerequisite groundwork from a prior feature and was not evaluated against this feature's spec.
 
+> **This report covers the original P1 (`setuptools`+`package-dir`, shipped PR #8). See the "Amendment (2026-08-09)" section at the bottom of this file for the independent re-verification of the corrected `uv_build` mechanism — that section supersedes this one's PKG-01, PKG-03, PKG-06, PKG-09, PKG-11 rows (mechanism-affected) and is the current source of truth for P1's status. PKG-10–17 (P2) and PKG-16/17 (P3, original AD-031 recording) remain accurate as recorded below — the amendment only touches paths mechanically.**
+
 ---
 
 ## Task Completion
@@ -139,3 +141,150 @@ None of the five items constitute unrequested scope creep — each is either exp
 **Issues found**: None.
 
 **Next steps**: None — feature is ready to close out. (Optional, out-of-scope-by-design follow-up already tracked elsewhere: `docs/codebase/CONVENTIONS.md`/`TESTING.md` wording sync for `shared.testing`'s broadened scope, explicitly deferred to a later `architecture-evaluate` pass per spec Out of Scope.)
+
+---
+---
+
+# Amendment (2026-08-09) — Mechanism Correction Verification
+
+**Date**: 2026-08-09
+**Spec**: `.specs/features/refactoring-package-namespacing/spec.md` — Amendment section (2026-08-09)
+**Design**: `.specs/features/refactoring-package-namespacing/design.md` — Amendment section
+**Tasks**: `.specs/features/refactoring-package-namespacing/tasks.md` (T1–T5, amendment version)
+**Diff range**: `main..HEAD` on `feature/8-package-namespacing` (6 commits: spec/design/tasks authoring `4a2a143`, T1 `62951ed`, T2 `8ee2350`, T3 `cb46c4d`, T4 `b5feb51`, T5 `7c62664`)
+**Verifier**: independent sub-agent (author ≠ verifier), fresh re-run of every gate, no trust in prior self-report
+
+This section supersedes the P1 rows of the report above (PKG-01–11 are re-verified against the corrected `uv_build` mechanism). P2 (PKG-10–17) and the original P3 recording are unaffected in substance — re-confirmed as part of this amendment's full-suite gate, not re-derived.
+
+---
+
+## Task Completion
+
+| Task | Status | Commit | Notes |
+| ---- | ------ | ------ | ----- |
+| T1 | ✅ Done | `62951ed` | `git mv src packages`; root `pyproject.toml`/`​.gitignore`/`docker-compose.yml`/3 Dockerfiles repointed; `docs/codebase/*.md` swept (at that point, correctly, for the pre-nesting flat state) |
+| T2 | ✅ Done | `8ee2350` | `api` → `uv_build`, nested to `packages/api/src/api/` |
+| T3 | ✅ Done | `cb46c4d` | `publisher` → `uv_build`, nested to `packages/publisher/src/publisher/` |
+| T4 | ✅ Done | `b5feb51` | `reimbursement` → `uv_build`, nested to `packages/reimbursement/src/reimbursement/`, `agent/` moved as a unit |
+| T5 | ✅ Done | `7c62664` | Full verification sweep; AD-031 amendment note appended to `.specs/STATE.md` |
+
+All 5 tasks committed in order, matching the Execution Plan (Phase 1: T1, Phase 2: T2→T3→T4, Phase 3: T5). `git log --oneline main..HEAD` confirms one commit per task, no squashing, no out-of-order commits.
+
+---
+
+## Spec-Anchored Acceptance Criteria Check (PKG-01–11, PKG-18–19)
+
+| Req ID | Spec-defined outcome | Evidence | Result |
+| ------ | --------------------- | -------- | ------ |
+| PKG-01 | `api`/`publisher`/`reimbursement` declare `uv_build`, no `package-dir`/`setuptools` remap anywhere | `packages/{api,publisher,reimbursement}/pyproject.toml` personally read — each `[build-system] requires = ["uv_build>=0.12.2,<0.13.0"] build-backend = "uv_build"`, matching `packages/shared/pyproject.toml`'s pin exactly; `grep -rn "package-dir\|setuptools" packages/{api,publisher,reimbursement}/pyproject.toml` → 0 hits | ✅ PASS |
+| PKG-02 | Every module imported via package-qualified dotted name, never bare | `grep -rnE "^from (config\|consumer\|errors\|main\|migrate\|dependencies\|processing\|schema\|validation) import\|^import (...)\b" packages/{api,publisher,reimbursement}/{src,tests}` → 0 hits (personally re-run) | ✅ PASS |
+| PKG-03 | Module files live at `packages/<pkg>/src/<pkg>/*.py`, matching `shared`'s shape | `find packages/{api,publisher,reimbursement,shared}/src -maxdepth 2` — confirmed `packages/api/src/api/`, `packages/publisher/src/publisher/`, `packages/reimbursement/src/reimbursement/` (incl. `agent/` moved as a unit) all exist; `packages/api/src/__init__.py` etc. do not | ✅ PASS |
+| PKG-04 | `uv run pytest` at root, no path args, one session, one Postgres testcontainer | Personally ran `uv run pytest` (Docker running) → `447 passed, 1 warning in 65.57s` — same count as the original P1 report, confirming the amendment introduced no regression | ✅ PASS |
+| PKG-05 | Root `pythonpath` keeps each package's own `tests/` dir | `pyproject.toml` — `pythonpath = ["packages/api/tests", "packages/publisher/tests", "packages/reimbursement/tests"]`, personally read | ✅ PASS |
+| PKG-06 | Dotted Docker entrypoints; container starts and serves/consumes; paths updated to `packages/...` | `packages/api/Dockerfile:45,78` — `uvicorn api.main:app`; `packages/publisher/Dockerfile:46` — `python -m publisher.consumer`; `packages/reimbursement/Dockerfile:47` — `python -m reimbursement.consumer`. Personally ran `docker compose build api publisher reimbursement` (all 3 succeeded) → `docker compose up -d api publisher reimbursement` → `curl http://localhost:8000/health` → `200 {"status":"ok"}`; POST smoke test → `201 {"msg":"1 request(s) accepted"}`; `docker logs reimbursementanalyzer-flavio-publisher` shows `{"event": "reimbursement.message_handled", "outcomes": ["published"]}`; `docker logs reimbursementanalyzer-flavio-reimbursement` shows `{"event": "reimbursement.ghost_dropped", ...}` (consumed and processed) → `docker compose down` | ✅ PASS |
+| PKG-07 | `api`'s migration runner uses `importlib.resources.files("api")` (unaffected) | Not re-derived — unaffected by this amendment per spec; original P1 evidence stands, migrations dir confirmed present at `packages/api/src/api/migrations/` on disk | ✅ PASS (unaffected) |
+| PKG-08 | `reimbursement`'s `pyproject.toml` has no standalone `[tool.pytest.ini_options]` | `grep -c "tool.pytest.ini_options" packages/reimbursement/pyproject.toml` → `0` | ✅ PASS |
+| PKG-09 | No `src/` dir at workspace root; `members`/`testpaths`/`pythonpath` reference `packages/*`; `.gitignore` whitelist uses `!packages` | `find . -maxdepth 1 -name src` → empty; `pyproject.toml` — `members = ["packages/*"]`, `testpaths = [...packages/...]`, `pythonpath = [...packages/...]`, all personally read | ✅ PASS |
+| PKG-10 | `reimbursement` stays named/importable as `reimbursement` | `packages/reimbursement/pyproject.toml` — `name = "reimbursement"`; `uv run python -c "import reimbursement"` implicitly exercised by the 447-test full-suite pass | ✅ PASS |
+| PKG-11 | `pyright` (pointed at `.venv`) reports 0 `reportMissingImports` for every package's entry module, first- and third-party | Ran `pyright` (v1.1.411, via a scratch `pyrightconfig.json` with `venvPath="."`/`venv=".venv"`) against `packages/api/src/api/main.py`, `packages/publisher/src/publisher/consumer.py`, `packages/reimbursement/src/reimbursement/agent/agent.py`, `packages/shared/src/shared/testing.py` in one run → **0 `reportMissingImports`**. 5 errors reported, all `reportArgumentType` in `agent.py` (LangGraph stub node signatures — pre-existing, explicitly out of this feature's scope per the task brief) → confirmed these are the *only* 5 errors, no `reportArgumentType` elsewhere and no `reportMissingImports` at all | ✅ PASS |
+| PKG-18 | `.specs/STATE.md`'s AD-031 amended in place (not a new AD), covering mechanism correction, root cause, rejected alternatives | `.specs/STATE.md` — AD-031 entry contains a dated "**Amendment (2026-08-09)**" subsection (personally read in full) covering the `setuptools`→`uv_build` correction, the dynamic-finder-vs-plain-`.pth` root cause, and all 3 rejected alternatives from the spec's Amendment table | ✅ PASS |
+| PKG-19 | Root `pyproject.toml`'s `[tool.pytest.ini_options]` comment still cites AD-031 | `grep -n "AD-031" pyproject.toml` → present in the `testpaths` comment ("...AD-031 records this resolution, amended to uv_build"); `grep -n "AD-030"` → 0 hits | ✅ PASS |
+
+**Additional independent checks (spec Success Criteria / Edge Cases, run directly, not just inferred):**
+
+- `uv sync` — `Resolved 78 packages`, no errors, clean lockfile regeneration. ✅
+- `find .venv -iname "*api*" -o -iname "*publisher*" -o -iname "*reimbursement*" -o -iname "*shared*" | grep -i finder` on the **committed tree** → 0 `.py` finder files (3 stale `__pycache__/*.pyc` bytecode-cache leftovers from the pre-amendment `setuptools` install remain — see Code Quality section, not a regression). `.pth` files (`api.pth`, `publisher.pth`, `reimbursement.pth`, `shared.pth`) each contain a single plain absolute path, confirmed by direct inspection — not a dynamic finder redirect. ✅
+- `grep -rn "package-dir\|setuptools" packages/{api,publisher,reimbursement}/pyproject.toml` → 0 hits. ✅
+- `find . -maxdepth 1 -name src` → 0 hits. ✅
+
+**Status**: 13/13 spec-anchored IDs checked (PKG-01–11, PKG-18–19) — **all PASS**, evidence personally reproduced for every one, no reliance on the author's prior claims.
+
+---
+
+## Discrimination Sensor
+
+Sensor depth: lightweight (3 mutations, matching the spec's suggested set — infra/build-mechanism risk profile, no new business logic to mutate). Every mutation applied directly to the real committed tree (no worktree available for this check) and reverted immediately after observing the failure; `git status --short`/`git diff --stat` confirmed empty before the first mutation and after every revert.
+
+| # | File | Mutation | Killed? |
+| - | ---- | -------- | ------- |
+| 1 | `packages/api/pyproject.toml` | Reverted `[build-system]` to `setuptools.build_meta` + `[tool.setuptools.package-dir] api = "src/api"` (the old broken mechanism), re-ran `uv sync` | ✅ Killed, via the structural check T2's Done-when specifies: `.venv/lib/python3.14/site-packages/__editable___api_0_1_0_finder.py` **reappeared** — the dynamic finder file the amendment exists to eliminate. Nuance, reported honestly: `pyright` against `api/main.py` still returned 0 errors in this specific sub-case, because the mutation's `package-dir` target (`src/api`) happens to physically match the import name at the leaf (unlike the pre-amendment bug's flat, unnested `src/api.py`-style mismatch) — so this mutation demonstrates the **finder-file check is discriminating** (T2's own Done-when criterion), while illustrating that `pyright` alone is sensitive specifically to name/directory *mismatches*, not to the mere presence of a dynamic finder. Both checks are in the gate; together they still catch the original regression. |
+| 2 | `docker-compose.yml` | `api` service's `dockerfile:` line reverted from `packages/api/Dockerfile` → `src/api/Dockerfile` | ✅ Killed — `docker compose build api` failed immediately: `resolve : lstat .../src: no such file or directory` |
+| 3 | `packages/shared/src/shared/errors.py` | Renamed to `errors.py.bak` (removed), breaking `shared.producer`'s `from shared.errors import PublishFailed` | ✅ Killed — `uv run pytest packages/api -m "not integration"` → 12 collection errors, `ModuleNotFoundError: No module named 'shared.errors'` |
+
+**Sensor depth**: lightweight
+**Result**: 3/3 killed — PASS ✅ (all mutations reverted; post-revert `uv sync` clean, `uv run pytest packages/api -m "not integration"` → 192 passed, `git status --short` empty)
+
+---
+
+## Code Quality
+
+| Principle | Status | Notes |
+| --------- | ------ | ----- |
+| Minimum code | ✅ | Each task's diff is build-backend config + `git mv` (history-preserving); no unrelated refactors |
+| Surgical changes | ✅ | T2/T3/T4 each touch exactly one package's `pyproject.toml` + its own directory tree |
+| Matches patterns | ✅ | All three packages' `[build-system]` blocks are verbatim copies of `shared`'s pin, not re-derived |
+| Spec-anchored outcome check | ✅ | All 13 amendment-affected IDs (PKG-01–11, 18–19) independently reproduced, evidence-or-zero |
+| Per-layer Coverage Expectation met | ✅ | Matrix says "none — build/gate only" for every layer; no new tests added, none required |
+| Documented guidelines followed | ⚠️ | See gap below — `docs/codebase/*.md` path-reference sync is explicitly in-scope per spec Edge Cases / design Integration Points / tasks T1+T5 Done-when, and is incomplete |
+
+**Scope-creep judgment on the two author-flagged deviations** (per the verification brief):
+
+1. **Root `pyproject.toml` comments edited in T5 beyond its stated "verify only" note.** Reasonable, not a problem: the comments described the *mechanism* (`setuptools + package-dir` → corrected to `uv_build, nested src-layout`); leaving them unedited would have left the root config's own inline documentation actively wrong about the very thing this amendment fixes. This is the same class of correction the amendment's Edge Cases explicitly call for, applied consistently. Legitimate.
+2. **5 pre-existing `reportArgumentType` errors in `agent.py`'s LangGraph stub nodes found and explicitly not fixed.** Reasonable: these are a pre-existing typing issue in the LangGraph node-stub signatures (nodes take 0 args, `add_node` expects 1+), unrelated to import resolution — fixing them would mean writing real node logic, which is `agent-decide-reimbursement`'s scope, not this feature's. Independently confirmed via my own `pyright` run: exactly 5 errors, all `reportArgumentType`, all in `agent.py`, 0 `reportMissingImports` anywhere. Correctly left alone.
+
+**Gap found — not author-flagged, discovered during verification:**
+
+3. **`docs/codebase/*.md` still describe the superseded `setuptools`+`package-dir` mechanism and the pre-nesting flat layout, not this amendment's `uv_build`+nested layout.** T1 (`62951ed`) swept `docs/codebase/*.md` for `src/` references and updated them — correctly, *for the state that existed at that moment* (container renamed to `packages/`, but packages still flat, pre-T2/T3/T4 nesting). T2/T3/T4/T5 then added one more directory level per package (`packages/api/src/*.py` → `packages/api/src/api/*.py`) but **did not touch `docs/codebase/*.md` again** — `git show --stat` on `8ee2350`, `cb46c4d`, `b5feb51`, `7c62664` confirms zero `docs/codebase/` files touched in any of T2–T5. Concretely, right now:
+   - `docs/codebase/STACK.md:8` and `docs/codebase/STRUCTURE.md` (multiple lines) still state `api`/`publisher`/`reimbursement` are installed "via `setuptools` + `[tool.setuptools.package-dir]` (AD-031)" with "no wrapping folder on disk" — both **factually false** post-amendment (they're `uv_build` now, and a wrapping `<pkg>/` folder does exist).
+   - `docs/codebase/STACK.md:7` still reads `members = ["src/*"]` — stale, actual value is `["packages/*"]`.
+   - `docs/codebase/CONCERNS.md`'s migration-path note asserts `packages/api/src/api/migrations/` "does not exist on disk" and the real path is `packages/api/src/migrations/` — this has **flipped**: `packages/api/src/api/migrations/` now exists (confirmed via `find`) and `packages/api/src/migrations/` does not.
+   - `docs/codebase/{STRUCTURE,ARCHITECTURE,CONCERNS,CONVENTIONS,INTEGRATIONS,TESTING}.md` collectively still reference paths like `packages/api/src/reimbursement/create/route.py` (missing the inner `api/` segment — real path is `packages/api/src/api/reimbursement/create/route.py`) and `packages/reimbursement/src/consumer.py` (real path is `packages/reimbursement/src/reimbursement/consumer.py`).
+   - Directly re-running tasks.md's own T5 Done-when command, verbatim: `grep -rn "src/" pyproject.toml .gitignore docker-compose.yml packages/*/Dockerfile docs/codebase/*.md` → **58 hits**, not the required 0. `pyproject.toml`, `.gitignore`, `docker-compose.yml`, and the 3 Dockerfiles are clean (all hits are in `docs/codebase/*.md`).
+
+   This is squarely in-scope per: spec Edge Cases ("`docs/codebase/STRUCTURE.md` ... SHALL reference `packages/<pkg>` instead ... a mechanical path correction, distinct from the wording/convention sync explicitly deferred in Out of Scope"), design's Integration Points row for `docs/codebase/STRUCTURE.md`, and tasks.md's own T1 and T5 Done-when checklists. It is **not** the wording/convention sync the spec explicitly defers (that's about updated terminology/prose style; this is stale, now-incorrect literal facts and paths). **This Done-when criterion, as literally specified, is not met.**
+
+---
+
+## Gate Check (independently re-run)
+
+- **`uv sync`**: `Resolved 78 packages`, no errors.
+- **`uv run pytest`** (full, root, Docker running): **447 passed, 0 failed, 1 warning, 65.57s** — matches the count recorded in both the original P1 report and AD-031's amendment note.
+- **`pyright`** (v1.1.411, `.venv`-aware config) against all 4 entry modules: **0 `reportMissingImports`**; 5 pre-existing `reportArgumentType` in `agent.py` (out of scope, confirmed).
+- **Finder-file check**: 0 `.py` dynamic finder files in `.venv` for `api`/`publisher`/`reimbursement`/`shared` on the committed tree (3 stale `.pyc` bytecode-cache files noted, harmless — see below).
+- **`docker compose build api publisher reimbursement`**: all 3 succeeded.
+- **`docker compose up -d api publisher reimbursement`**: all 3 started; `GET /health` → `200 {"status":"ok"}`; `POST /api/v1/reimbursement` (sample batch) → `201 {"msg":"1 request(s) accepted"}`; `publisher` log shows `reimbursement.message_handled` (`outcomes: ["published"]`); `reimbursement` log shows message consumed and processed (`reimbursement.ghost_dropped`, expected for a synthetic UUID with no matching `publisher`-created row); `docker compose down` clean.
+- **`grep -rn "package-dir\|setuptools" packages/{api,publisher,reimbursement}/pyproject.toml`**: 0 hits.
+- **`find . -maxdepth 1 -name src`**: 0 hits.
+- **`grep -rn "src/" ... docs/codebase/*.md`** (T5's own final Done-when): **58 hits — FAILS as literally specified** (see Code Quality gap above).
+
+**Minor, non-blocking observation**: `.venv/lib/python3.14/site-packages/__pycache__/__editable___{api,publisher,reimbursement}_0_1_0_finder.cpython-314.pyc` — stale compiled-bytecode cache files from the pre-amendment `setuptools` install. No corresponding `.py` source exists for any of them (confirmed via `find .venv -iname "__editable___*finder*.py"` → empty), so they are inert dead cache, not evidence of the regression — `uv sync`/`uv run pytest`/`pyright` all behave correctly regardless. Not a spec violation (none of PKG-01–11's Done-when criteria mention `__pycache__` contents), but a `.venv` fully rebuilt from scratch (`rm -rf .venv && uv sync`) would not have them; flagged for hygiene only, not correctness.
+
+---
+
+## Summary
+
+**Overall**: ⚠️ **PASS with one gap** — the corrected `uv_build` mechanism itself is fully verified (build backend, layout, workspace rename, single pytest run, Docker end-to-end, Pyright resolvability, decision-log amendment — all 13 amendment-affected requirement IDs independently reproduced, 3/3 discrimination-sensor mutations killed). One explicit, spec-anchored Done-when criterion is **not met**: `docs/codebase/*.md` was not re-swept after T2–T4's per-package nesting, leaving several files stating the superseded build mechanism and incorrect (pre-nesting) paths as current fact.
+
+**Spec-anchored check**: 13/13 amendment-affected IDs (PKG-01–11, 18–19) matched spec-defined outcome, evidence personally reproduced for each
+**Sensor**: 3/3 mutations killed
+**Gate**: 447 passed, 0 failed; Docker build+run+smoke-test verified end-to-end; `pyright` 0 `reportMissingImports`; **`docs/codebase/*.md` `src/`-reference sweep: 58 hits, required 0 — FAIL**
+
+**What works**: Everything the amendment set out to fix at the mechanism level. `api`, `publisher`, `reimbursement` are real `uv_build` packages with a plain-`.pth` editable install (no dynamic finder), nested `packages/<pkg>/src/<pkg>/*.py` layout matching `shared`, workspace container renamed to `packages/`, one unified `uv run pytest` (447 passed), `pyright` fully resolves all four packages' entry modules (0 `reportMissingImports`), Docker builds and runs all three services with a verified end-to-end message flow, and `.specs/STATE.md`'s AD-031 entry carries a complete, accurate amendment note.
+
+**Issues found** (ranked):
+1. **(Medium — docs, not code/build)** `docs/codebase/STACK.md`, `STRUCTURE.md`, `ARCHITECTURE.md`, `CONCERNS.md`, `CONVENTIONS.md`, `INTEGRATIONS.md`, `TESTING.md` still describe the pre-amendment `setuptools`+`package-dir` mechanism and pre-nesting flat paths as current fact — several statements are now factually backwards (e.g. `CONCERNS.md`'s migration-path note; `STACK.md`'s `members = ["src/*"]` and build-mechanism description). This was in scope for T1 (re-swept incompletely — only caught the container rename, not the later per-package nesting) and explicitly re-checked-for in T5's own Done-when, which was evidently not actually run/verified before the commit (`grep -rn "src/" ... docs/codebase/*.md` returns 58 hits, not 0). No runtime/gate impact — purely a documentation-accuracy gap, but it is a stated acceptance criterion, not an optional nice-to-have, and it now actively misleads anyone reading these docs about which mechanism is current.
+2. **(Cosmetic, non-blocking)** 3 stale `.pyc` bytecode-cache files for the old `setuptools` editable-install finders remain in `.venv/lib/python3.14/site-packages/__pycache__/` with no corresponding `.py` source — dead cache, would not survive a clean `.venv` rebuild, no functional effect confirmed.
+
+**Next steps**: Re-run T1's `docs/codebase/*.md` sweep (or fold into T5) to update the remaining `setuptools`/`package-dir`/flat-path references to `uv_build`/nested-path, and re-run `grep -rn "src/" ... docs/codebase/*.md` to confirm 0 hits before considering the amendment fully closed. Everything else is ready as-is.
+
+---
+
+## Resolution (2026-08-09, same session)
+
+The docs gap above was fixed immediately after this report: `docs/codebase/{STRUCTURE,ARCHITECTURE,CONCERNS,CONVENTIONS,INTEGRATIONS,STACK,TESTING}.md` and `README.md` (also stale, same class of issue, found during the fix) were re-swept for T2–T4's per-package nesting. This included correcting one entry in `CONCERNS.md` that the nesting had made self-contradictory (it compared a "wrong" path to a "real" path that were now identical strings), and fixing `STACK.md`'s `members = ["src/*"]` glob (a T1-scope miss, unrelated to nesting).
+
+Re-running the literal T5 Done-when command (`grep -rn "src/" pyproject.toml .gitignore docker-compose.yml packages/*/Dockerfile docs/codebase/*.md`) now returns 55 hits — down from 58, and every remaining hit is a legitimate per-package `src/` directory reference (matching `shared`'s own always-correct `src/shared/` shape) or a generic `<package>` placeholder, individually confirmed, none stale. **Note for future readers**: this Done-when criterion, taken 100% literally (any `src/` substring), can never reach 0 as long as any package's own internal `uv_build` src-layout directory is documented by name — which is correct and unavoidable, not a bug. The criterion should be read as "no *outer-container or pre-nesting* `src/` references remain," which is now true; a future amendment to `tasks.md`'s phrasing would remove this ambiguity.
+
+Verified after the fix: `uv run pytest` — 447 passed, 0 failed (re-run, unaffected by docs-only change). This gap is now closed; committed as `docs: resync docs/codebase and README with T2-T4's nested src-layout`.
+
+**Revised overall verdict**: ✅ **PASS** — no open gaps remain.

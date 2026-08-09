@@ -687,3 +687,124 @@ Before `api-get-reimbursement` or `api-put-reimbursement` is implemented —
 once either ships, `list_reimbursements`/`review_reimbursement` are
 already-shipped code in the wrong place, the same way AD-029 had to correct
 `managed_pool`'s placement after the fact.
+
+---
+
+## R-011 — Decision-stage error handling is undecided: retrying a billed LLM call is not free like retrying a DB query
+
+**Raised:** 2026-08-08
+**Status:** Open, needs evaluation — owner: Flavio
+**Affects:** `agent-decide-reimbursement`
+**Severity:** Medium — no correctness break, but an unbounded retry policy on
+a step that calls a billed LLM API multiplies real cost per failure, unlike
+`agent-consume-reimbursement`'s resolve-stage retries (Postgres queries),
+which are free to repeat
+
+### What breaks
+
+`agent-consume-reimbursement` (shipped) retries a resolution-stage failure
+up to 3 times via republish before escalating to `human-review`, at zero
+marginal cost — the thing being retried is a `SELECT`/`UPDATE`. The new
+decision stage's probabilistic layer invokes a paid LLM for date/value
+extraction, and for the auto-approve consistency judge — every retry of a
+*that* stage re-invokes the LLM. Blindly reusing the existing
+retry-then-escalate machinery for decision-stage failures means a single
+provider hiccup (timeout, rate limit, malformed structured output) costs up
+to 3 additional billed calls per item before landing in `human-review`
+anyway — and, per **R-007**'s already-recorded "correlated failure" pattern,
+a systemic LLM outage or rate-limit event would multiply that cost across
+every in-flight item at once, simultaneously. R-007 doesn't have a $ cost
+dimension; this does.
+
+### Options
+
+1. **Reuse the existing retry-then-escalate machinery uniformly.** Simplest
+   mental model, one error contract for the whole Agent — but retries a
+   billed LLM call up to 3× per failure with no cost ceiling.
+2. **Split by cause.** Infra/transient errors (DB, Kafka) retry via the
+   existing path; LLM-specific failures (timeout, bad structured output,
+   provider error) escalate straight to `human-review` with no retry —
+   bounds LLM spend to at most one call per item per decision step, at the
+   cost of a cause-aware dispatch and, per R-007, still landing in the same
+   undifferentiated review queue.
+3. **Cap LLM-specific retries independently of the general ceiling** (e.g.
+   at most 1 retry for an LLM failure vs. 3 for infra) — a middle ground
+   between 1 and 2.
+
+### Not resolved by `agent-decide-reimbursement`
+
+User flagged this explicitly during Specify (2026-08-08) as needing its own
+cost/tradeoff evaluation before deciding — the spec proceeds without
+committing to a specific decision-stage error-handling mechanism, asserting
+only the project-wide invariant that no reimbursement is silently lost.
+Design must not silently default to Option 1 without a follow-up
+confirmation with the user.
+
+---
+
+## R-012 — All Pydantic models live in one flat `src/shared/src/shared/models.py`
+
+**Raised:** 2026-08-09
+**Status:** Open, needs evaluation — owner: Flavio
+**Affects:** `shared` (`models.py`), `api`, `agent`, `publisher` — every
+service that imports it
+**Severity:** Low today, compounds with every model this file accumulates
+
+### What breaks
+
+Every Pydantic model in the project — regardless of which layer owns the
+concept it represents — is declared in one 115-line file:
+
+| Model | Concept | Real owner(s) |
+| ----- | ------- | -------------- |
+| `HealthStatus` | health-check response | `api` only |
+| `SampleMessage` | test/sample Kafka payload | test scaffolding only |
+| `ReimbursementRequest` | inbound API request body | `api`, `publisher` |
+| `AttemptError` | retry/failure bookkeeping | `publisher`, `agent` |
+| `RequestEnvelope` | `Request` topic envelope | `api`, `publisher` |
+| `ReimbursementEnvelope` | envelope wrapper | `publisher`, `agent` |
+| `Reimbursement` | domain row / `Reimbursement` topic payload | `publisher`, `agent`, `shared.reimbursement.repository` |
+
+`api`, `agent`, and `publisher` all import from this single module
+(confirmed via `from shared.models import` / `from shared import models`
+across all three service packages plus `shared` itself). Unrelated concerns
+— an HTTP-only health check, Kafka envelopes, the core domain row, and a
+test-only sample message — sit in the same namespace with no boundary
+between them. This is the same shape `CONVENTIONS.md:17` and **R-010**
+already flag for `shared.reimbursement.use_cases`: `shared` accreting code
+whose actual justification is "it's imported from more than one place,"
+not "this concept is genuinely cross-cutting."
+
+### Why it matters
+
+1. **Confusion.** A reader has no signal from the import path which layer a
+   model belongs to conceptually — `HealthStatus` (API-only) sits beside
+   `Reimbursement` (the core domain entity) with identical provenance.
+2. **Coupling.** Every service that needs any one model depends on the
+   entire file, so an unrelated model gaining a field, a validator, or a new
+   import (e.g. a future model needing a heavier dependency) risks
+   invalidating the shared build cache and review scope for services that
+   never touch that model.
+3. **Hard to maintain.** As the Agent feature (`agent-decide-reimbursement`)
+   and future features add models, this file has no organizing principle to
+   push back against continued flattening — the path of least resistance is
+   to keep appending to the one file that already has everything.
+
+### Options
+
+1. **Split by domain/module**, mirroring the `shared.reimbursement.*`
+   pattern already used for use cases and the repository (e.g.
+   `shared.reimbursement.models`, `shared.envelopes`, `shared.health`).
+   Matches `CONVENTIONS.md:17`'s "more than one real consumer" test applied
+   per-model rather than per-file; costs an import-path change everywhere
+   `shared.models` is currently referenced.
+2. **Accept and keep as-is.** At 115 lines and 7 models the file is still
+   small enough to scan in full; the cost is organizational, not a runtime
+   or correctness risk. Revisit once the Agent feature's decision-stage
+   models land and the file grows further.
+
+### Trigger to decide
+
+Before `agent-decide-reimbursement` adds its decision/staleness models —
+landing them in the same flat file compounds this a third time, the same
+pattern **R-010** already names for `use_cases/`.

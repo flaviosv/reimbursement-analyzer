@@ -912,6 +912,72 @@ single definition remains.
 
 ---
 
+### AD-030 — Reimbursement Agent gains an upfront receipt-date extraction node; reject always outranks the mandatory human-review rule; BRL-only, `claimed_amount_brl`-first value resolution; decision-stage error handling deferred
+
+**Date:** 2026-08-08
+**Status:** Active
+
+Surfaced during Specify for `agent-decide-reimbursement` (the decision-logic
+half of the Reimbursement Agent — reject / auto-approve / human-review —
+that `agent-consume-reimbursement` explicitly deferred). Four related
+decisions:
+
+1. **Field extraction is a single, unconditional LLM step, ahead of every
+   other rule.** No sample payload (`docs/original/sample.json`) carries a
+   structured receipt-date field — it only ever appears inside
+   `raw_ocr_text`. An LLM extraction step resolves the requested value,
+   currency, and `receipts_date` **together, on every reimbursement,
+   unconditionally** — before the reject rule or any approval-policy rule
+   evaluates. Revised once during Specify: the first pass (based on the
+   Q&A alone) had value/currency staying deterministic-first
+   (`claimed_amount_brl` skipping the LLM when present) with only date
+   unconditional; the user's own updated `reimbursement-processing.png`
+   showed the extraction box running unconditionally for *all* fields, and
+   asked to reconcile, the user confirmed "unconditional for everything."
+   The extraction step's internal composition (whether it pre-fills a
+   minimum object from directly-readable fields like `claimed_amount_brl`
+   before calling the LLM, or resolves everything through the LLM in one
+   pass) is explicitly left open — user: "it's gonna depend."
+2. **Reject always wins.** The 90-day-old-receipt reject rule
+   (`docs/SCOPE.md:257`) takes precedence over the mandatory `>2000`
+   human-review rule (`docs/SCOPE.md:26`) — an old, large-value receipt is
+   `auto-rejected`, not routed to human review.
+3. **BRL-only.** Currency resolves through the same unconditional
+   extraction step as value and date, not a separate deterministic-only
+   path. `submitted_at` (already guaranteed non-null by
+   `POST /api/v1/reimbursement`) is the fixed reference date the 90-day
+   window is measured against. Once both required fields resolve, the
+   `≤200`/`>2000`/ambiguous-zone split is decided by the deterministic
+   policy step alone — a second, separate LLM call (the guardrail/judge)
+   is spent only on the ambiguous `200–2000` zone.
+4. **Decision-stage error-handling mechanism is not decided.** Unlike
+   `agent-consume-reimbursement`'s resolve-stage retries (free DB queries),
+   a decision-stage retry re-invokes a billed LLM call. Whether to reuse
+   the resolve stage's retry-then-escalate machinery as-is, split by cause,
+   or cap LLM-specific retries independently is deferred to a later
+   session — tracked as **R-011** in `.specs/RISKS.md`. This spec asserts
+   only the invariant that no reimbursement is silently lost, not a
+   mechanism.
+
+**Why:** user decisions made directly during Specify, mirroring the
+AD-020/AD-027/AD-028 precedent of amending `docs/SCOPE.md` in place rather
+than leaving it silently contradicted. Decision 4 in particular reflects the
+user's explicit reasoning that LLM calls are billed and unbounded retries
+of them are a real cost risk the resolve stage's free-DB-query retries
+never had — evaluated later with real cost data, not guessed at now.
+
+**Implication:** `docs/SCOPE.md`'s Reimbursement Agent section is amended in
+place with inline notes pointing here, same style as AD-020/AD-027/AD-028.
+The `reimbursement-processing.png` diagram is being amended separately by
+the user to add the new upfront extraction node — not done by this session.
+Design for `agent-decide-reimbursement` — LangGraph graph shape, node
+wiring, LLM/SLM model choice, prompt text — is explicitly not started this
+session; the user has a concurrent refactor in flight on
+`feature/6_reimbursement_consumer` and asked that Design wait until that
+syncs.
+
+---
+
 ### AD-031 — `api`/`publisher`/`reimbursement` switch build backend from `uv_build` to `setuptools` (`package-dir` mapping); cross-package test helpers consolidate into `shared.testing`
 
 **Date:** 2026-08-09
@@ -979,54 +1045,129 @@ shared-Postgres-testcontainer architecture with zero new test-orchestration
 tooling. `uv run pytest` at the workspace root runs all four packages
 together again — 447 tests passed, the actual proof the collision is gone.
 
+**Amendment (2026-08-09) — mechanism corrected: `setuptools`/`package-dir` → `uv_build`.**
+The resolution above fixed the pytest collision but was never checked
+against IDE/static-analysis tooling. It broke go-to-definition and
+autocomplete for `api`/`publisher`/`reimbursement` in every
+Pyright-family editor (VS Code/Pylance, Cursor/cursorpyright), confirmed
+via direct `pyright` CLI runs against the shipped tree
+(`reportMissingImports` on `reimbursement.schema`,
+`reimbursement.agent.nodes`, `reimbursement.config`, etc.).
+
+Root cause: `setuptools`' PEP 660 editable install generates a dynamic
+`MetaPathFinder`-based finder script (`__editable___<pkg>_finder.py`, a
+`MAPPING`/`NAMESPACES` dict executed at import time) to redirect the
+import name onto the differently-named `src` directory. Static analyzers
+don't execute that script — they resolve editable installs by walking
+directory names, so an import name with no physically-matching directory
+fails to resolve. `shared` (never touched by the original AD-031, always
+on `uv_build`, always using a nested `src/shared/src/shared/*.py` layout)
+resolved cleanly throughout, because `uv_build`'s editable install is a
+plain static `.pth` path, not a dynamic finder — empirically confirmed via
+an isolated repro (a throwaway `uv_build` package produced a plain `.pth`
+and 0 `pyright` errors, versus the dynamic-finder case's
+`reportMissingImports`).
+
+Corrected mechanism: `api`, `publisher`, and `reimbursement` move from
+`setuptools`+`package-dir` to `uv_build`, adopting the same conventional
+nested src-layout `shared` already used successfully —
+`packages/<pkg>/src/<pkg>/*.py`, import name matching a real physical
+directory. The workspace-member container also renamed from `src/` to
+`packages/`, matching uv's own documented workspace example
+(`/astral-sh/uv`, `docs/concepts/projects/workspaces.md`, verified via
+Context7). No dynamic remapping remains anywhere in the workspace.
+
+Rejected alternatives:
+1. Keep `src/` as the outer container name, just add the inner `<pkg>/`
+   folder (`src/reimbursement/src/reimbursement/...`) — works, but doesn't
+   match uv's own documented workspace convention (`packages/`, not
+   `src/`); no reason to deviate when adopting the documented pattern
+   costs nothing extra.
+2. Flat layout (`packages/<pkg>/<pkg>/*.py`, no inner `src/`) via
+   `uv_build`'s `module-root = ""` — empirically also resolves cleanly in
+   Pyright and is one directory level shallower, but trades away
+   src-layout's protection against a package being importable straight out
+   of the project directory without being properly installed — the exact
+   class of bug this feature exists to fix once. Not worth the tradeoff
+   for one fewer path segment.
+3. Symlink + `pyrightconfig.json` `extraPaths` workaround, keeping the
+   flat `setuptools` layout on disk — more fragile (git symlink support,
+   Docker `COPY -L`, cross-platform) and only patches the symptom for one
+   tool rather than fixing the underlying dynamic-finder mismatch for all
+   static tooling.
+
+**Practical effect (amendment):** `src/` renamed to `packages/` repo-wide;
+root `pyproject.toml`'s `testpaths`/`pythonpath`/workspace `members` now
+read `packages/...`; `docker-compose.yml`, all three service Dockerfiles,
+and `docs/codebase/*.md` updated to match. `uv run pytest` — 447 passed,
+same count as before. `pyright` against all four packages' entry modules
+(`api/main.py`, `publisher/consumer.py`, `reimbursement/agent/agent.py`,
+`shared/testing.py`) — 0 `reportMissingImports`, confirming the IDE
+regression is resolved. `docker compose up -d api publisher reimbursement`
+— all three healthy, full `api → publisher → reimbursement` message chain
+verified end-to-end via a live smoke POST.
+
 ---
 
 ## Handoff
 
 **Last updated:** 2026-08-08
 
-**Done:** `db-schema-migrations` (PR #3) and `api-post-reimbursement` (PR #4)
-— superseded by the below; see git history for detail. `publisher-consume-request`
-— spec (42 requirements) fully implemented and independently verified:
-`.specs/features/publisher-consume-request/validation.md` records
-spec-anchored check 42/42 matched, sensor 18/18 mutants killed, full gate
-274 passed / 0 failed. Built `shared.reimbursement.repository`
-(`managed_pool`, `insert_pending`, `insert_human_review`, `is_duplicate`),
-`shared.reimbursement.use_cases.send_human_review`, and
-`src/publisher/src/{consumer,processing}.py` — the project's first runtime
-DB access (AD-017) and first cross-service persistence layer (AD-025).
-Committed through `11747a5`.
+**Done:** `db-schema-migrations` (PR #3), `api-post-reimbursement` (PR #4),
+`publisher-consume-request` (spec-anchored 42/42, sensor 18/18, full gate
+274/0 — see its `validation.md`) — see git history for detail.
+`agent-consume-reimbursement` — spec (22 requirements) fully implemented and
+independently re-verified to **PASS**
+(`.specs/features/agent-consume-reimbursement/validation.md`, re-verified
+post-fix commit `dba67c4`); lives on branch `feature/6_reimbursement_consumer`
+(pushed to origin, working tree clean as of this session — not yet merged to
+`main`). This is the "resolve by uuid, staleness, retry/escalate" half of
+the Agent; it deliberately stopped short of any decision logic.
 
-**Current branch:** `feature/5_reimbursement_publisher` (this supersedes the
-stale `feature/4-create-reimbursement-endpoint` this section previously
-recorded — the PR #4 branch merged since).
+**Current branch (this session's own work):** `main`, no code changes — this
+session is spec-only (`.specs/`, `docs/SCOPE.md`, `.specs/RISKS.md`).
+`api-get-reimbursement`/`api-put-reimbursement` (previous session, still
+`main`) and `feature/6_reimbursement_consumer`/`feature/7_reimbursement_get_put`
+(separate worktrees, per `git worktree list`) are untouched by this session.
+
+**In flight — carried from prior session, unchanged:** `api-get-reimbursement`
+and `api-put-reimbursement` spec.md/context.md are closure-gate-clean
+(AD-027, AD-028) but still **not yet user-confirmed** — confirmation, then
+Design, remains their next step whenever picked back up.
 
 **In flight — new this session (2026-08-08):** Specify phase complete for
-two new features, both placed in `api` per user request:
-`.specs/features/api-get-reimbursement/{spec,context}.md` and
-`.specs/features/api-put-reimbursement/{spec,context}.md`. Both are Large
-scope (new DB read/write paths in `api`, financial state transitions). The
-Discuss phase surfaced four internal contradictions in `docs/SCOPE.md`'s
-PUT/GET sections; all four resolved directly with the user and recorded as
-**AD-027**, with `docs/SCOPE.md` amended in place (inline notes, same style
-as the existing AD-020 amendment) rather than left contradicting the two new
-specs. Both spec.md files are closure-gate-clean (every AC unambiguous,
-every open item resolved or logged as an assumption) but **not yet
-user-confirmed** — that confirmation, then Design, is the next step for
-each.
+`agent-decide-reimbursement` — the decision-logic half of the Reimbursement
+Agent (reject / auto-approve deterministic+probabilistic / human-review,
+`docs/SCOPE.md:247-298`) that `agent-consume-reimbursement` explicitly
+deferred. `.specs/features/agent-decide-reimbursement/{spec,context}.md`
+written (27 requirements, AGD-01..27). Four gray areas resolved directly
+with the user and recorded as **AD-030**: (1) receipt date gets its own
+always-runs upfront LLM extraction node — no sample payload carries it as a
+structured field; (2) reject always outranks the mandatory `>2000`
+human-review rule; (3) BRL-only, `claimed_amount_brl`-first value
+resolution; (4) decision-stage error-handling mechanism is **not** decided —
+tracked as **R-011** in `.specs/RISKS.md`, since retrying a billed LLM call
+isn't free like retrying the resolve stage's DB queries. `docs/SCOPE.md`'s
+Reimbursement Agent section is amended in place with inline notes pointing
+to AD-030, same style as AD-020/AD-027/AD-028; the `reimbursement-processing.png`
+diagram is being amended separately by the user, not by this session.
 
-**What GET/PUT will build on, not duplicate:** `shared.reimbursement.repository`
-already has the pool lifecycle and two insert functions; it has no query
-function, no update function, and `api`'s `main.py`/`dependencies.py` have
-never opened a DB pool — wiring that (mirroring the existing
-`managed_producer` lifespan pattern) is common groundwork both features need
-and belongs in Design.
+**Explicitly not started this session, by user request:** Design for
+`agent-decide-reimbursement`. The user has a refactor session in flight on
+`feature/6_reimbursement_consumer` and asked that Design wait until that
+syncs to `main` — spec.md/context.md are also **not yet user-confirmed**.
 
-**Untracked, not part of this session's work:** `.specs/features/agent-consume-reimbursement/`
-(context.md + design.md only, no spec.md — pre-existing, left as found).
-`docs/codebase/*.md` show as modified in git status but were not edited by
-this session — likely a concurrent `architecture-evaluate` run; verify their
-diff before trusting them if picking this up fresh.
+**Next step:** get `agent-decide-reimbursement/spec.md` confirmed by the
+user; then wait for the `feature/6_reimbursement_consumer` refactor to sync
+before starting Design (which will need to decide how much of
+`agent-consume-reimbursement`'s `Stage`/`AttemptError`/`MessageOutcome`/
+`escalate_existing` machinery this feature reuses vs. extends, and resolve
+R-011 before committing to a decision-stage error-handling mechanism).
+
+**Untracked, not part of any session's work:** `docs/codebase/*.md` showed
+as modified in git status at the start of this session (likely a concurrent
+`architecture-evaluate` run) — verify their diff before trusting them if
+picking this up fresh.
 
 **Repo-wide note (kept from prior entry):** `.specs/` was untracked by git
 until 2026-08-07 — a `.gitignore` pattern bug (`!.spec`/`!.spec**`) silently

@@ -26,15 +26,8 @@ migrations = [
 ]
 
 [build-system]
-requires = ["setuptools"]
-build-backend = "setuptools.build_meta"
-
-# src/api/src holds api's own modules directly (no wrapping package
-# directory) — package-dir maps the "api" import name onto that directory,
-# so setuptools discovers every nested subpackage (api.reimbursement.create,
-# etc.) under it without a separate packages list.
-[tool.setuptools.package-dir]
-api = "src"
+requires = ["uv_build>=0.12.2,<0.13.0"]
+build-backend = "uv_build"
 
 [tool.uv.sources]
 shared = { workspace = true }
