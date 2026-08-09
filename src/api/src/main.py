@@ -9,10 +9,10 @@ from shared.db import managed_pool
 from shared.models import HealthStatus
 from shared.producer import managed_producer
 
-from errors import register_handlers
-from reimbursement.create.route import router as reimbursement_router
-from reimbursement.list.route import router as list_reimbursement_router
-from reimbursement.update.route import router as update_reimbursement_router
+from api.errors import register_handlers
+from api.reimbursement.create.route import router as reimbursement_router
+from api.reimbursement.list.route import router as list_reimbursement_router
+from api.reimbursement.update.route import router as update_reimbursement_router
 
 load_dotenv()
 

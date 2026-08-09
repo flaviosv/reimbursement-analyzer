@@ -1,6 +1,6 @@
 import asyncpg
 import pytest
-from helpers import valid_reimbursement_item
+from shared.testing import valid_reimbursement_item
 from shared.config import MAX_LIST_LIMIT
 from shared.errors import ReimbursementFilterInvalid
 from shared.reimbursement.repository import insert_pending

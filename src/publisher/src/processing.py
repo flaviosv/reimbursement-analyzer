@@ -25,7 +25,7 @@ from shared.reimbursement import repository
 from shared.reimbursement.use_cases.publish_pending import publish_pending
 from shared.reimbursement.use_cases.send_human_review import send_human_review
 
-from config import PublisherConfig
+from publisher.config import PublisherConfig
 
 logger = logging.getLogger(__name__)
 

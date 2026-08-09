@@ -1,0 +1,32 @@
+[project]
+name = "reimbursement"
+version = "0.1.0"
+description = "ReimbursementAnalyzer test - Reimbursement Agent Layer"
+authors = [
+    { name = "Flavio Studart", email = "flaviostudart@gmail.com" }
+]
+requires-python = ">=3.14.7"
+dependencies = [
+    "asyncpg>=0.31.0",
+    "confluent-kafka>=2.15.0",
+    "langchain>=1.3.14",
+    "langgraph>=1.2.10",
+    "pydantic>=2.13.4",
+    "python-dotenv>=1.2.2",
+    "shared",
+    "watchfiles>=1.2.0",
+]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+# src/reimbursement/src holds reimbursement's own modules directly (no
+# wrapping package directory) — package-dir maps the "reimbursement" import
+# name onto that directory, and setuptools' explicit-layout discovery picks
+# up the nested agent/ subpackage automatically.
+[tool.setuptools.package-dir]
+reimbursement = "src"
+
+[tool.uv.sources]
+shared = { workspace = true }

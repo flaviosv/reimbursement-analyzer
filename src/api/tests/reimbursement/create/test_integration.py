@@ -4,10 +4,10 @@ import time
 import pytest
 from confluent_kafka import Consumer
 from fastapi.testclient import TestClient
-from helpers import valid_reimbursement_item
+from shared.testing import valid_reimbursement_item
 from shared.config import MAX_BODY_BYTES, REQUEST_TOPIC
 
-from main import app
+from api.main import app
 
 pytestmark = pytest.mark.integration
 

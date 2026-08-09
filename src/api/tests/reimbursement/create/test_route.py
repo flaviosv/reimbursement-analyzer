@@ -3,12 +3,12 @@ import json
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from helpers import valid_reimbursement_item
+from shared.testing import valid_reimbursement_item
 
-from dependencies import get_producer
-from errors import register_handlers
-from main import app as real_app
-from reimbursement.create.route import router
+from api.dependencies import get_producer
+from api.errors import register_handlers
+from api.main import app as real_app
+from api.reimbursement.create.route import router
 
 VALID_ITEM = valid_reimbursement_item()
 
@@ -122,7 +122,7 @@ class DescribeCreateReimbursement:
     def it_returns_413_and_publishes_nothing_for_an_oversized_body(
         self, immediate_fake_producer_class, monkeypatch
     ) -> None:
-        monkeypatch.setattr("reimbursement.create.payload.MAX_BODY_BYTES", 10)
+        monkeypatch.setattr("api.reimbursement.create.payload.MAX_BODY_BYTES", 10)
         fake = immediate_fake_producer_class()
         client = _build_client(fake)
 

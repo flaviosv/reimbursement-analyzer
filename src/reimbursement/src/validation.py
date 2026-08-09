@@ -24,7 +24,7 @@ from shared.producer import publish
 from shared.reimbursement import repository
 from shared.reimbursement.use_cases.send_human_review import escalate_existing
 
-from agent.config import AgentConfig
+from reimbursement.config import AgentConfig
 
 logger = logging.getLogger(__name__)
 

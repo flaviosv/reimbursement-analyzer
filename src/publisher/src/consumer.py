@@ -16,8 +16,8 @@ from shared.config import REQUEST_TOPIC, Config, load_config
 from shared.db import managed_pool
 from shared.producer import managed_producer
 
-from config import PublisherConfig, load_publisher_config
-from processing import MESSAGE_HANDLED_EVENT, Dependencies, _LazyJSON, handle_message
+from publisher.config import PublisherConfig, load_publisher_config
+from publisher.processing import MESSAGE_HANDLED_EVENT, Dependencies, _LazyJSON, handle_message
 
 logger = logging.getLogger(__name__)
 

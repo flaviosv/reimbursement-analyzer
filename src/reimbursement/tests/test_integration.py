@@ -7,16 +7,16 @@ from uuid import UUID, uuid4
 
 import asyncpg
 import pytest
-from agent.config import AgentConfig, load_agent_config
-from agent.consumer import managed_consumer, run
-from agent.validation import (
+from reimbursement.config import AgentConfig, load_agent_config
+from reimbursement.consumer import managed_consumer, run
+from reimbursement.validation import (
     GHOST_DROPPED_EVENT,
     RESOLVED_EVENT,
     STALE_IGNORED_EVENT,
     Dependencies,
 )
 from confluent_kafka import KafkaException, TopicPartition
-from helpers import valid_reimbursement_item
+from shared.testing import valid_reimbursement_item
 from shared.config import REIMBURSEMENT_TOPIC, Config, load_config
 from shared.db import managed_pool
 from shared.models import ReimbursementEnvelope

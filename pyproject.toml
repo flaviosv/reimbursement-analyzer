@@ -12,6 +12,11 @@ dev = [
     # The suite drives the migration runner, so it needs api's schema tooling
     # even though the request-serving image does not ship it.
     "api[migrations]",
+    # Real installed packages (setuptools + package-dir) now — nothing else
+    # in the graph depends on them, so without this a bare `uv sync`/
+    # `uv run pytest` never installs them and their dotted imports 404.
+    "publisher",
+    "reimbursement",
     "httpx>=0.28.1",
     "pytest>=9.1.1",
     "testcontainers[kafka,postgres]>=4.15.0",
@@ -19,38 +24,33 @@ dev = [
 
 [tool.uv.sources]
 api = { workspace = true }
+publisher = { workspace = true }
+reimbursement = { workspace = true }
 
 [tool.pytest.ini_options]
-# The whole workspace, not one member: naming a single package here means a
-# tests directory added to agent or publisher is silently never collected.
-testpaths = ["src"]
+# api, publisher, reimbursement, shared — the whole workspace, named
+# explicitly so a tests directory added to any of them is never silently
+# uncollected. reimbursement no longer needs its own standalone
+# src/reimbursement/pyproject.toml [tool.pytest.ini_options] (AD-026 flagged
+# the risk; AD-031 records this resolution): all three services are real,
+# dotted-namespaced packages now (setuptools + package-dir), so
+# publisher.config/reimbursement.config etc. no longer collide on a shared
+# bare module name the way flat config.py/consumer.py did.
+testpaths = ["src/api", "src/publisher", "src/reimbursement", "src/shared"]
 python_classes = ["Describe*"]
 python_functions = ["it_*"]
 # Sibling feature slices (src/api/tests/reimbursement/<op>/) reuse filenames
 # like test_route.py; default import-mode collides on the module name, and
 # without pythonpath each nested test file's own dir — not src/api/tests —
 # lands on sys.path, breaking `from helpers import ...`.
-# src/api/src and src/publisher/src are those services' own module roots:
-# both are virtual (uninstalled) workspace members (see their pyproject.toml
-# files), so their modules are only importable via these explicit paths, not
-# via a normal package install. Both sit on one sys.path and expose bare
-# module names, so publisher's {config, consumer, processing} must stay
-# clear of api's {dependencies, errors, main, migrate} — AD-026. Same for
-# src/api/tests and src/publisher/tests: publisher's {conftest, fakes,
-# test_config, test_consumer, test_integration, test_processing} vs api's
-# {conftest, helpers, test_compose_parity, test_errors, test_health,
-# test_human_review_schema, test_main, test_reimbursement_schema}.
-# src/agent/tests (but not src/agent/src) is on this list for the same
-# `from fakes import ...` reason as publisher's tests dir — agent itself
-# stays a real installable package (deliberately not flattened, to avoid
-# exactly the AD-026 collision risk above), so agent.consumer/agent.validation
-# are importable via the normal package install and need no path entry.
+# api, publisher, and reimbursement are all real installed packages now
+# (setuptools + package-dir), so none needs its own module root on this
+# list — only each package's tests dir does, for the same bare-name
+# `from helpers/fakes/agent_fakes import ...` reason above.
 pythonpath = [
     "src/api/tests",
-    "src/api/src",
     "src/publisher/tests",
-    "src/publisher/src",
-    "src/agent/tests",
+    "src/reimbursement/tests",
 ]
 addopts = "--import-mode=importlib"
 markers = [

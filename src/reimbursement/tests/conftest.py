@@ -4,7 +4,7 @@ import pytest
 from shared.config import KAFKA_MAX_MESSAGE_BYTES, load_config
 from testcontainers.community.kafka import KafkaContainer
 
-from agent.config import load_agent_config
+from reimbursement.config import load_agent_config
 
 
 @pytest.fixture(autouse=True)

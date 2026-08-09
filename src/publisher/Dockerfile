@@ -19,7 +19,7 @@ COPY src/publisher/pyproject.toml src/publisher/pyproject.toml
 # sibling manifests need to exist even though only publisher's source is
 # copied — their *source* never enters this image, only these manifests.
 COPY src/api/pyproject.toml src/api/pyproject.toml
-COPY src/agent/pyproject.toml src/agent/pyproject.toml
+COPY src/reimbursement/pyproject.toml src/reimbursement/pyproject.toml
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-workspace --package publisher
@@ -27,11 +27,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY src/publisher src/publisher
 COPY src/shared src/shared
 
-# publisher is a virtual workspace member (package = false in its
-# pyproject.toml — src/publisher/src holds loose modules, not a package
-# uv_build can wheel up), so there is nothing to (re-)install here beyond its
-# already-synced dependencies; every stage below runs publisher straight from
-# source via PYTHONPATH instead of an installed import.
+# Editable: the venv links back to /app/src/publisher/src instead of baking
+# the code in, so the dev stage below can bind-mount live source over it.
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --package publisher
 
@@ -42,12 +39,11 @@ WORKDIR /app
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
 COPY --from=builder --chown=app:app /app/src /app/src
 USER app
-ENV PATH="/app/.venv/bin:$PATH" \
-    PYTHONPATH="/app/src/publisher/src"
+ENV PATH="/app/.venv/bin:$PATH"
 
 # consumer is a plain script (no framework-level reload like uvicorn), so
 # watchfiles restarts the process on any change under /app/src.
-CMD ["watchfiles", "python -m consumer", "/app/src"]
+CMD ["watchfiles", "python -m publisher.consumer", "/app/src"]
 
 # --- prod: same source, no reload, runs standalone ---
 FROM builder AS prod-builder
@@ -60,7 +56,6 @@ WORKDIR /app
 COPY --from=prod-builder --chown=app:app /app/.venv /app/.venv
 COPY --from=prod-builder --chown=app:app /app/src /app/src
 USER app
-ENV PATH="/app/.venv/bin:$PATH" \
-    PYTHONPATH="/app/src/publisher/src"
+ENV PATH="/app/.venv/bin:$PATH"
 
-CMD ["python", "-m", "consumer"]
+CMD ["python", "-m", "publisher.consumer"]

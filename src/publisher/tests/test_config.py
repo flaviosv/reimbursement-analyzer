@@ -1,5 +1,5 @@
 import pytest
-from config import load_publisher_config
+from publisher.config import load_publisher_config
 from shared.config import KAFKA_MAX_MESSAGE_BYTES, load_config
 
 

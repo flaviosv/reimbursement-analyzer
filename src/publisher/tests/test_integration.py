@@ -8,10 +8,10 @@ from typing import Any
 import asyncpg
 import pytest
 from confluent_kafka import Consumer, KafkaException, TopicPartition
-from config import PublisherConfig, load_publisher_config
-from consumer import managed_consumer, run
-from helpers import valid_reimbursement_item
-from processing import Dependencies
+from publisher.config import PublisherConfig, load_publisher_config
+from publisher.consumer import managed_consumer, run
+from shared.testing import valid_reimbursement_item
+from publisher.processing import Dependencies
 from shared.config import (
     KAFKA_MAX_MESSAGE_BYTES,
     REIMBURSEMENT_TOPIC,

@@ -1,10 +1,10 @@
 import json
 
 import pytest
-from helpers import valid_reimbursement_item
+from shared.testing import valid_reimbursement_item
 from shared.errors import BatchInvalid
 
-from reimbursement.create.validation import MAX_BATCH_ITEMS, validate_batch
+from api.reimbursement.create.validation import MAX_BATCH_ITEMS, validate_batch
 
 VALID_ITEM = valid_reimbursement_item()
 

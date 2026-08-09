@@ -4,8 +4,10 @@ The PostgreSQL server lives here, not under one package's tests, so every
 package shares a single session-scoped container. Defined in `src/api/tests/`
 it would start a second one the moment `src/shared/tests/` needed a database.
 
-`helpers` and `migrate` resolve through the root pyproject's `pythonpath`
-entries, which the python_path plugin inserts before initial conftests load.
+`migrate` is `api`'s own installed package now (setuptools + package-dir), so
+it imports as `api.migrate` like any other `api` module. The DB-provisioning
+utilities live in `shared.testing`, a normal package import every service's
+test suite already reaches through.
 """
 
 import os
@@ -15,7 +17,8 @@ from contextlib import contextmanager
 import asyncpg
 import psycopg
 import pytest
-from helpers import (
+from api.migrate import apply_migrations
+from shared.testing import (
     MAINTENANCE_DATABASE,
     POSTGRES_IMAGE,
     disposable_database_name,
@@ -23,7 +26,6 @@ from helpers import (
     maintenance_url,
     with_database,
 )
-from migrate import apply_migrations
 from testcontainers.community.postgres import PostgresContainer
 
 

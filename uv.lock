@@ -4,38 +4,11 @@ requires-python = ">=3.14.7"
 
 [manifest]
 members = [
-    "agent",
     "api",
     "publisher",
     "reimbursementanalyzer",
+    "reimbursement",
     "shared",
-]
-
-[[package]]
-name = "agent"
-version = "0.1.0"
-source = { editable = "src/agent" }
-dependencies = [
-    { name = "asyncpg" },
-    { name = "confluent-kafka" },
-    { name = "langchain" },
-    { name = "langgraph" },
-    { name = "pydantic" },
-    { name = "python-dotenv" },
-    { name = "shared" },
-    { name = "watchfiles" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "asyncpg", specifier = ">=0.31.0" },
-    { name = "confluent-kafka", specifier = ">=2.15.0" },
-    { name = "langchain", specifier = ">=1.3.14" },
-    { name = "langgraph", specifier = ">=1.2.10" },
-    { name = "pydantic", specifier = ">=2.13.4" },
-    { name = "python-dotenv", specifier = ">=1.2.2" },
-    { name = "shared", editable = "src/shared" },
-    { name = "watchfiles", specifier = ">=1.2.0" },
 ]
 
 [[package]]
@@ -71,7 +44,7 @@ wheels = [
 [[package]]
 name = "api"
 version = "0.1.0"
-source = { virtual = "src/api" }
+source = { editable = "src/api" }
 dependencies = [
     { name = "asyncpg" },
     { name = "confluent-kafka" },
@@ -605,7 +578,7 @@ wheels = [
 [[package]]
 name = "publisher"
 version = "0.1.0"
-source = { virtual = "src/publisher" }
+source = { editable = "src/publisher" }
 dependencies = [
     { name = "asyncpg" },
     { name = "confluent-kafka" },
@@ -766,7 +739,9 @@ source = { virtual = "." }
 dev = [
     { name = "api", extra = ["migrations"] },
     { name = "httpx" },
+    { name = "publisher" },
     { name = "pytest" },
+    { name = "reimbursement" },
     { name = "testcontainers" },
 ]
 
@@ -774,10 +749,39 @@ dev = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "api", extras = ["migrations"], virtual = "src/api" },
+    { name = "api", extras = ["migrations"], editable = "src/api" },
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "publisher", editable = "src/publisher" },
     { name = "pytest", specifier = ">=9.1.1" },
+    { name = "reimbursement", editable = "src/reimbursement" },
     { name = "testcontainers", extras = ["kafka", "postgres"], specifier = ">=4.15.0" },
+]
+
+[[package]]
+name = "reimbursement"
+version = "0.1.0"
+source = { editable = "src/reimbursement" }
+dependencies = [
+    { name = "asyncpg" },
+    { name = "confluent-kafka" },
+    { name = "langchain" },
+    { name = "langgraph" },
+    { name = "pydantic" },
+    { name = "python-dotenv" },
+    { name = "shared" },
+    { name = "watchfiles" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "asyncpg", specifier = ">=0.31.0" },
+    { name = "confluent-kafka", specifier = ">=2.15.0" },
+    { name = "langchain", specifier = ">=1.3.14" },
+    { name = "langgraph", specifier = ">=1.2.10" },
+    { name = "pydantic", specifier = ">=2.13.4" },
+    { name = "python-dotenv", specifier = ">=1.2.2" },
+    { name = "shared", editable = "src/shared" },
+    { name = "watchfiles", specifier = ">=1.2.0" },
 ]
 
 [[package]]

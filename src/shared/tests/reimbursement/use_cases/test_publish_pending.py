@@ -4,7 +4,7 @@ from uuid import UUID
 import asyncpg
 import pytest
 from fakes import FakeProducer
-from helpers import valid_reimbursement_item
+from shared.testing import valid_reimbursement_item
 from shared.config import REIMBURSEMENT_TOPIC
 from shared.models import AttemptError
 from shared.reimbursement.use_cases.publish_pending import publish_pending

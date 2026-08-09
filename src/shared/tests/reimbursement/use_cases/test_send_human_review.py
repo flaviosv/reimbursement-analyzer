@@ -3,7 +3,7 @@ from uuid import UUID, uuid4
 
 import asyncpg
 import pytest
-from helpers import valid_reimbursement_item
+from shared.testing import valid_reimbursement_item
 from shared.config import load_config
 from shared.models import AttemptError, Stage
 from shared.reimbursement.repository import insert_pending
