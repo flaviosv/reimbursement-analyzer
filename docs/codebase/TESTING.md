@@ -10,10 +10,10 @@
 
 ## Test Organization
 
-- **Location:** `src/<package>/tests/`, mirroring `src/<package>/src/`'s structure — e.g. `packages/api/src/reimbursement/create/route.py` ↔ `packages/api/tests/reimbursement/create/test_route.py`.
+- **Location:** `packages/<package>/tests/`, mirroring `packages/<package>/src/<package>/`'s structure — e.g. `packages/api/src/api/reimbursement/create/route.py` ↔ `packages/api/tests/reimbursement/create/test_route.py`.
 - **Naming:** `test_<module>.py`; classes `Describe<Subject>`, methods `it_<behavior>` — pytest is configured (`python_classes`/`python_functions` in root `pyproject.toml`) to collect this convention instead of the default `Test*`/`test_*`.
 - **Collection root:** `testpaths = ["packages/api", "packages/publisher", "packages/reimbursement", "packages/shared"]` at the workspace level, named explicitly (not a bare `["src"]`) so a tests directory added to any package is never silently uncollected.
-- **Import path:** `pythonpath = ["packages/api/tests", "packages/publisher/tests", "packages/reimbursement/tests"]` — `api`, `publisher`, and `reimbursement` are all real installed packages now (setuptools + package-dir, AD-031), so none needs its own module root on this list; only each package's `tests/` dir does, so bare-name imports like `from helpers import ...` (`api`), `from fakes import ...` (`publisher`), `from agent_fakes import ...` (`reimbursement`) resolve — plus sibling feature slices reusing filenames like `test_route.py` need import-mode `importlib` to keep each nested test dir off `sys.path` on its own.
+- **Import path:** `pythonpath = ["packages/api/tests", "packages/publisher/tests", "packages/reimbursement/tests"]` — `api`, `publisher`, and `reimbursement` are all real installed packages now (`uv_build`, nested src-layout, AD-031 amended), so none needs its own module root on this list; only each package's `tests/` dir does, so bare-name imports like `from helpers import ...` (`api`), `from fakes import ...` (`publisher`), `from agent_fakes import ...` (`reimbursement`) resolve — plus sibling feature slices reusing filenames like `test_route.py` need import-mode `importlib` to keep each nested test dir off `sys.path` on its own.
 
 ## Testing Patterns
 

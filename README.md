@@ -10,10 +10,10 @@ See [`docs/SCOPE.md`](docs/SCOPE.md) for the full requirements, approval policy,
 
 A [uv workspace](https://docs.astral.sh/uv/concepts/projects/workspaces/) monorepo with a shared kernel and three independently deployable services:
 
-- `src/api` — public HTTP API (FastAPI)
-- `src/publisher` — consumes requests, persists them, republishes for downstream processing
-- `src/reimbursement` — LLM-based evaluation layer, consumes from Kafka (LangChain / LangGraph); the decision graph is scaffolded but not yet wired into the consume path
-- `src/shared` — shared kernel: models and code common to the services above
+- `packages/api` — public HTTP API (FastAPI)
+- `packages/publisher` — consumes requests, persists them, republishes for downstream processing
+- `packages/reimbursement` — LLM-based evaluation layer, consumes from Kafka (LangChain / LangGraph); the decision graph is scaffolded but not yet wired into the consume path
+- `packages/shared` — shared kernel: models and code common to the services above
 
 ## Prerequisites
 
@@ -41,7 +41,7 @@ Every service loads `.env` through [python-dotenv](https://pypi.org/project/pyth
 docker compose up -d
 ```
 
-`api`, `publisher`, and `reimbursement` bind-mount their own `src/` (plus `src/shared`) and hot-reload on change — `uvicorn --reload` for `api`, [watchfiles](https://watchfiles.helpmanual.io/) for `publisher`/`reimbursement` — so a plain `up -d` already picks up source edits, no rebuild needed.
+`api`, `publisher`, and `reimbursement` bind-mount their own `packages/<pkg>` (plus `packages/shared`) and hot-reload on change — `uvicorn --reload` for `api`, [watchfiles](https://watchfiles.helpmanual.io/) for `publisher`/`reimbursement` — so a plain `up -d` already picks up source edits, no rebuild needed.
 
 What isn't bind-mounted is the venv baked into the image at build time, so it only goes stale after something that changes *that*: a `pyproject.toml`, `uv.lock`, or a `Dockerfile`. Rebuild after pulling or making one of those changes:
 
@@ -79,7 +79,7 @@ docker compose down -v
 
 The schema is owned by the `api` package and applied by a one-shot `migrate` service that runs before `api`, `publisher`, or `reimbursement` start — they each wait on `service_completed_successfully`, so no service ever sees an unmigrated database.
 
-Migrations are plain SQL managed by [yoyo](https://ollycope.com/software/yoyo/latest), living inside the installed package at `src/api/src/api/migrations/` so they ship in the wheel.
+Migrations are plain SQL managed by [yoyo](https://ollycope.com/software/yoyo/latest), living inside the installed package at `packages/api/src/api/migrations/` so they ship in the wheel.
 
 The DDL tooling is deliberately *not* in the request-serving image. `psycopg` and `yoyo` sit in an optional `migrations` extra that only the Dockerfile's `migrate` stage installs, so nothing on the API's hot path can execute schema changes, and the API image is free of `psycopg[binary]`'s vendored `libssl`/`libpq` — which a base-image rebuild would never patch.
 

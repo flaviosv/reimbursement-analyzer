@@ -14,8 +14,8 @@
 │   └── codebase/              # This context set
 ├── .specs/                    # tlc-spec-driven working memory (decisions, feature specs)
 ├── packages/
-│   ├── api/                   # Public HTTP API (FastAPI) — installed package via setuptools package-dir (AD-031)
-│   │   ├── src/                 # api's own modules directly (no wrapping api/ folder on disk; dotted-importable as api.*)
+│   ├── api/                   # Public HTTP API (FastAPI) — installed package via uv_build, nested src-layout (AD-031, amended)
+│   │   ├── src/api/             # api's own modules, matching shared's nested src-layout shape (dotted-importable as api.*)
 │   │   │   ├── main.py            # App entrypoint, lifespan (producer + DB pool construction)
 │   │   │   ├── dependencies.py    # FastAPI route dependency accessors (get_producer, get_pool)
 │   │   │   ├── errors.py          # App-wide exception handlers, MessageResponse
@@ -34,10 +34,10 @@
 │   │   │       └── update/          # Vertical slice: PUT /api/v1/reimbursement/{uuid}
 │   │   │           ├── route.py       # Endpoint
 │   │   │           └── validation.py  # ApproveReview/RejectReview discriminated union
-│   │   ├── tests/                # Mirrors src/ layout; helpers.py centralizes shared test builders
+│   │   ├── tests/                # Mirrors src/api/ layout; helpers.py centralizes shared test builders
 │   │   └── Dockerfile            # Multi-stage: builder / dev / migrate / prod
 │   ├── reimbursement/          # Consume Reimbursement, resolve by uuid (implemented) + LangGraph decision scaffold (not wired)
-│   │   ├── src/                  # reimbursement's own modules directly (no wrapping package dir; package-dir maps the name)
+│   │   ├── src/reimbursement/    # reimbursement's own modules, matching shared's nested src-layout shape
 │   │   │   ├── consumer.py         # Composition root: pool/producer/consumer lifecycle, offset commit
 │   │   │   ├── validation.py       # Decision tree: resolve, staleness guard, requeue, retry-ceiling escalation
 │   │   │   ├── config.py           # AgentConfig (consumer_group_id, consume_timeout_seconds), load_agent_config()
@@ -55,7 +55,7 @@
 │   │       ├── test_validation.py
 │   │       └── test_integration.py   # Real Kafka + Postgres round trip
 │   ├── publisher/              # Consume Request, persist, publish Reimbursement — implemented
-│   │   ├── src/                  # publisher's own modules directly (no wrapping publisher/ folder on disk; dotted-importable as publisher.*, AD-031)
+│   │   ├── src/publisher/        # publisher's own modules, matching shared's nested src-layout shape (dotted-importable as publisher.*, AD-031 amended)
 │   │   │   ├── consumer.py         # Composition root: pool/producer/consumer lifecycle, offset commit
 │   │   │   └── processing.py       # Decision tree: insert+publish, retry/requeue, escalation, duplicates
 │   │   └── tests/
@@ -91,26 +91,26 @@
 ### `api/reimbursement/create`
 
 - **Purpose:** accepts, validates, and publishes a batch of reimbursement requests.
-- **Location:** `packages/api/src/reimbursement/create/`
+- **Location:** `packages/api/src/api/reimbursement/create/`
 - **Key files:** `route.py` (endpoint + OpenAPI schema derivation), `payload.py` (streaming byte-cap), `validation.py` (`BATCH_ADAPTER`, `validate_batch`), `producer.py` (`build_envelope`, `publish`).
 - **Pattern:** each operation lands as a sibling directory under `reimbursement/`, self-contained with its own tests directory mirror — see `list/` and `update/` below, added following this exact pattern.
 
 ### `api/reimbursement/list`
 
 - **Purpose:** `GET /api/v1/reimbursement` — lists reimbursements, optionally filtered by status (comma-separated, single query param only), paginated (`limit`/`offset`), each row paired with its most recent `human_review` entry if any.
-- **Location:** `packages/api/src/reimbursement/list/`
+- **Location:** `packages/api/src/api/reimbursement/list/`
 - **Key files:** `route.py` (endpoint), `params.py` (`LimitQuery`/`OffsetQuery`, `parse_status_filter` — rejects a repeated `?status=` query param), `response.py` (`ReimbursementListItem.from_record`, `HumanReviewSummary`, `ReimbursementListResponse`).
 
 ### `api/reimbursement/update`
 
 - **Purpose:** `PUT /api/v1/reimbursement/{uuid}` — records a human reviewer's approve or reject decision on a row already at `human-review`/`auto-rejected`/`human-rejected`. Human-driven decision recording, not the automated decision policy.
-- **Location:** `packages/api/src/reimbursement/update/`
+- **Location:** `packages/api/src/api/reimbursement/update/`
 - **Key files:** `route.py` (endpoint, uuid consistency check), `validation.py` (`ApproveReview`/`RejectReview` discriminated union, `validate_review`).
 
-### `api` root (`packages/api/src/*.py`)
+### `api` root (`packages/api/src/api/*.py`)
 
 - **Purpose:** app-wide infrastructure that no single vertical slice owns — FastAPI app construction, lifespan/producer wiring, the app-wide error contract, and the migration runner.
-- **Location:** `packages/api/src/{main,dependencies,errors,migrate}.py`.
+- **Location:** `packages/api/src/api/{main,dependencies,errors,migrate}.py`.
 
 ### `shared`
 
@@ -121,40 +121,40 @@
 ### `publisher`
 
 - **Purpose:** consumes `Request`, creates one `reimbursement` row per item, and publishes one `Reimbursement` message per item — the middle link between `api`'s intake and `reimbursement`'s (not yet wired) decision layer.
-- **Location:** `packages/publisher/src/{consumer,processing}.py`, installed via package-dir like `api` (AD-031).
+- **Location:** `packages/publisher/src/publisher/{consumer,processing}.py`, installed via `uv_build`'s nested src-layout like `api`/`shared` (AD-031, amended).
 - **Key files:** `consumer.py` (Kafka consumer lifecycle, offset commit), `processing.py` (the decision tree — insert+publish via `shared.reimbursement.use_cases.publish_pending`, retry-with-requeue, `retry > 3` escalation, duplicate detection). Fully implemented and tested — see `TESTING.md`.
 
 ### `reimbursement`
 
 - **Purpose:** consumes `Reimbursement`, resolves the row by `uuid`, and settles it into one of resolved / stale / ghost / requeued / escalated / logged / invalid — the middle link between `publisher`'s handoff and the service's own (scaffolded, not yet wired) decision policy. Named `reimbursement`, not `agent` — renamed and flattened this branch (`ce80603`) to match `publisher`/`api`'s layout; "the agent" now refers to the LangGraph decision graph nested inside it, not the package itself.
-- **Location:** `packages/reimbursement/src/{consumer,validation,config,schema}.py` plus the `agent/` decision-graph subpackage — a real installed package via setuptools package-dir (AD-031), like `api`/`publisher`.
+- **Location:** `packages/reimbursement/src/reimbursement/{consumer,validation,config,schema}.py` plus the `agent/` decision-graph subpackage — a real installed package via `uv_build`'s nested src-layout (AD-031, amended), like `api`/`publisher`/`shared`.
 - **Key files:** `consumer.py` (Kafka consumer lifecycle, offset commit), `validation.py` (the decision tree — `handle_message`, resolve-by-uuid, staleness guard, ghost tolerance (R-001), transient-failure requeue, `retry > 3` escalation reusing `shared.reimbursement.use_cases.send_human_review.escalate_existing`), `config.py` (`AgentConfig`), `schema.py` (`State` — the decision graph's `TypedDict`, `reimbursement: shared.models.Reimbursement`). The consume/resolve layer is fully implemented and tested — see `TESTING.md`. **`agent/` (decision-graph scaffold, not yet wired or tested):** `agent.py` builds a `langgraph.StateGraph` and registers its five nodes, but adds no edges and never compiles/invokes it; `nodes/{extract_fields,validate,apply_policies,analysis,apply_agent_decision}.py` are each a one-line stub returning their own name; `prompts/{extract_fields,analysis}.py` are empty. None of this is called from `validation.py`'s `RESOLVED` branch yet — `langchain`/`langgraph` remain declared dependencies with no functioning call path. See `.specs/features/agent-decide-reimbursement/` for the design in progress.
 
 ## Where Things Live
 
 **POST /api/v1/reimbursement:**
-- Route + OpenAPI: `packages/api/src/reimbursement/create/route.py`
-- Validation: `packages/api/src/reimbursement/create/validation.py`
-- Body-size enforcement: `packages/api/src/reimbursement/create/payload.py`
-- Kafka publish: `packages/api/src/reimbursement/create/producer.py` → `packages/shared/src/shared/producer.py`
+- Route + OpenAPI: `packages/api/src/api/reimbursement/create/route.py`
+- Validation: `packages/api/src/api/reimbursement/create/validation.py`
+- Body-size enforcement: `packages/api/src/api/reimbursement/create/payload.py`
+- Kafka publish: `packages/api/src/api/reimbursement/create/producer.py` → `packages/shared/src/shared/producer.py`
 - Cross-cutting config: `packages/shared/src/shared/config.py`
 
 **GET /api/v1/reimbursement (list):**
-- Route: `packages/api/src/reimbursement/list/route.py`
-- Query-param parsing: `packages/api/src/reimbursement/list/params.py`
-- Response shaping: `packages/api/src/reimbursement/list/response.py`
+- Route: `packages/api/src/api/reimbursement/list/route.py`
+- Query-param parsing: `packages/api/src/api/reimbursement/list/params.py`
+- Response shaping: `packages/api/src/api/reimbursement/list/response.py`
 - Filter/pagination gates + fetch: `packages/shared/src/shared/reimbursement/use_cases/list_reimbursements.py` → `packages/shared/src/shared/reimbursement/repository.py` (`fetch_reimbursement_page`)
 
 **PUT /api/v1/reimbursement/{uuid} (approve/reject):**
-- Route + uuid consistency check: `packages/api/src/reimbursement/update/route.py`
-- Payload validation: `packages/api/src/reimbursement/update/validation.py`
+- Route + uuid consistency check: `packages/api/src/api/reimbursement/update/route.py`
+- Payload validation: `packages/api/src/api/reimbursement/update/validation.py`
 - Approve/reject transaction + disambiguation: `packages/shared/src/shared/reimbursement/use_cases/review_reimbursement.py` → `packages/shared/src/shared/reimbursement/repository.py` (`approve`, `reject`, `find_reimbursement_state`, `record_human_review_decision`)
 
-**DB pool lifecycle:** `packages/shared/src/shared/db.py` (`managed_pool`) → constructed in `packages/api/src/main.py`'s `lifespan`, exposed via `packages/api/src/dependencies.py`'s `get_pool`.
+**DB pool lifecycle:** `packages/shared/src/shared/db.py` (`managed_pool`) → constructed in `packages/api/src/api/main.py`'s `lifespan`, exposed via `packages/api/src/api/dependencies.py`'s `get_pool`.
 
 **Database schema:**
-- Migrations: `packages/api/src/migrations/*.sql`
-- Runner: `packages/api/src/migrate.py`
+- Migrations: `packages/api/src/api/migrations/*.sql`
+- Runner: `packages/api/src/api/migrate.py`
 
 ## Special Directories
 

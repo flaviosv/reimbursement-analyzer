@@ -4,8 +4,8 @@
 
 - Language: Python 3.14.7 (pinned via `.python-version`; `requires-python >= 3.14.7` in every `pyproject.toml`)
 - Package manager: [uv](https://docs.astral.sh/uv/) — manages both the Python toolchain and dependencies
-- Workspace: uv workspace monorepo, `members = ["src/*"]`, four packages: `api`, `publisher`, `reimbursement`, `shared`
-- `api`, `publisher`, and `reimbursement` are real installed packages via `setuptools` + `[tool.setuptools.package-dir]` (AD-031) — each package's modules live directly under its `src/` with no wrapping folder on disk, but `package-dir` maps them onto a dotted import namespace (`api.*`, `publisher.*`, `reimbursement.*`), so they install into the venv and every nested subpackage (e.g. `api.reimbursement.create`, `reimbursement.agent.nodes`) is discovered automatically. `shared` alone still uses the `uv_build` backend, with its own wrapping `packages/shared/src/shared/` folder.
+- Workspace: uv workspace monorepo, `members = ["packages/*"]`, four packages: `api`, `publisher`, `reimbursement`, `shared`
+- All four packages use the `uv_build` backend with a conventional nested src-layout (`packages/<pkg>/src/<pkg>/*.py`) — the import name matches a real physical directory, so every nested subpackage (e.g. `api.reimbursement.create`, `reimbursement.agent.nodes`) is discovered automatically and every editable install is a plain static `.pth`, resolvable by static analyzers (Pyright/Pylance/cursorpyright), not a dynamic finder (AD-031, amended).
 
 ## Key Libraries
 
@@ -63,7 +63,7 @@
 ## Local Development Setup
 
 - `docker compose up -d` starts: the app's own Postgres (port 5433), Kafka KRaft (port 9092), the full LangFuse stack (its own Postgres/ClickHouse/Redis/MinIO), a one-shot `migrate` job, and the three workspace services (`api`, `reimbursement`, `publisher`).
-- `api`, `reimbursement`, and `publisher` bind-mount their own `src/` directory plus `packages/shared` for hot reload in the `dev` Docker target.
+- `api`, `reimbursement`, and `publisher` bind-mount their own `packages/<pkg>` directory plus `packages/shared` for hot reload in the `dev` Docker target.
 - API: `http://localhost:8000` (`/health`). LangFuse: `http://localhost:3000`.
 - Test suite needs no running stack — `testcontainers` starts and tears down its own throwaway Postgres/Kafka.
 
