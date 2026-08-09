@@ -19,11 +19,12 @@ from pydantic import ValidationError
 from shared import failure_log
 from shared.config import MAX_RETRY, REIMBURSEMENT_TOPIC, Config
 from shared.errors import PublishFailed, sanitize
-from shared.models import AttemptError, ReimbursementEnvelope
+from shared.models import AttemptError, Reimbursement, ReimbursementEnvelope
 from shared.producer import publish
 from shared.reimbursement import repository
 from shared.reimbursement.use_cases.send_human_review import escalate_existing
 
+from reimbursement.agent import agent
 from reimbursement.config import AgentConfig
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,8 @@ RESOLVE_FAILED_EVENT = "reimbursement.resolve_failed"
 ESCALATED_EVENT = "reimbursement.escalated"
 ESCALATION_FAILED_EVENT = "reimbursement.escalation_failed"
 MALFORMED_MESSAGE_EVENT = "reimbursement.malformed_message"
+DECIDED_EVENT = "reimbursement.decided"
+DECISION_FAILED_EVENT = "reimbursement.decision_failed"
 
 
 class MessageOutcome(Enum):
@@ -120,27 +123,62 @@ async def _escalate(deps: Dependencies, envelope: ReimbursementEnvelope) -> Mess
 
 async def _resolve(deps: Dependencies, envelope: ReimbursementEnvelope) -> MessageOutcome:
     """The retry<=3 path: resolve the row by uuid, tolerate a ghost (R-001),
-    and apply the staleness guard. Never raises."""
+    apply the staleness guard, then invoke the decision graph on the same
+    connection the row was fetched with. Never raises."""
     try:
         async with deps.pool.acquire(timeout=deps.config.database.acquire_timeout_seconds) as conn:
             row = await repository.get_by_uuid(conn, envelope.uuid)
+
+            if row is None:
+                # Ghost (R-001): not an error. Retrying can never resolve a
+                # genuine ghost — the row will never appear — so treating it
+                # as retryable would eventually pollute human-review with
+                # rows that don't exist.
+                logger.info(
+                    json.dumps(
+                        {"event": GHOST_DROPPED_EVENT, "uuid": str(envelope.uuid), "retry": envelope.retry}
+                    )
+                )
+                return MessageOutcome.GHOST
+
+            if envelope.published_at < row["updated_at"]:
+                logger.info(json.dumps({"event": STALE_IGNORED_EVENT, "uuid": str(envelope.uuid)}))
+                return MessageOutcome.STALE
+
+            logger.info(json.dumps({"event": RESOLVED_EVENT, "uuid": str(envelope.uuid)}))
+            return await _decide(deps, envelope, conn, row)
     except Exception as exc:
         return await _requeue(deps, envelope, exc)
 
-    if row is None:
-        # Ghost (R-001): not an error. Retrying can never resolve a genuine
-        # ghost — the row will never appear — so treating it as retryable
-        # would eventually pollute human-review with rows that don't exist.
-        logger.info(
-            json.dumps({"event": GHOST_DROPPED_EVENT, "uuid": str(envelope.uuid), "retry": envelope.retry})
+
+async def _decide(
+    deps: Dependencies, envelope: ReimbursementEnvelope, conn: asyncpg.Connection, row: asyncpg.Record
+) -> MessageOutcome:
+    """R-011's interim floor: a decision-stage failure (Ollama unreachable,
+    malformed structured output, a genuine `apply_decision` write failure)
+    is caught here, never propagated — no retry, no auto-escalation, just a
+    durable failure_log record. The row stays exactly as it was; an
+    operator uses the log to notice and manually reprocess."""
+    reimbursement = Reimbursement.from_record(row)
+    try:
+        final_state = await agent.decide(reimbursement, conn)
+    except Exception as exc:
+        logger.error("uuid=%s decision failed: %s", envelope.uuid, sanitize(exc))
+        failure_log.write(
+            deps.config.failure_log, _failure_record(DECISION_FAILED_EVENT, envelope, error=str(exc))
         )
-        return MessageOutcome.GHOST
+        return MessageOutcome.LOGGED
 
-    if envelope.published_at < row["updated_at"]:
-        logger.info(json.dumps({"event": STALE_IGNORED_EVENT, "uuid": str(envelope.uuid)}))
-        return MessageOutcome.STALE
-
-    logger.info(json.dumps({"event": RESOLVED_EVENT, "uuid": str(envelope.uuid)}))
+    logger.info(
+        json.dumps(
+            {
+                "event": DECIDED_EVENT,
+                "uuid": str(envelope.uuid),
+                "status": final_state.get("status"),
+                "persisted": final_state.get("persisted"),
+            }
+        )
+    )
     return MessageOutcome.RESOLVED
 
 
