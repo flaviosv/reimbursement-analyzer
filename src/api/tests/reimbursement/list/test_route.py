@@ -14,6 +14,37 @@ pytestmark = pytest.mark.anyio
 
 _build_client = partial(_shared_build_client, router)
 
+_INVALID_QUERY_CASES = [
+    pytest.param("limit=501", "limit must be between 0 and 500", id="limit-exceeds-ceiling"),
+    pytest.param("offset=-1", "offset must not be negative", id="offset-negative"),
+    pytest.param("limit=-1", "limit must be between 0 and 500", id="limit-negative"),
+    pytest.param(
+        "limit=abc", "query.limit: Input should be a valid integer", id="limit-not-an-integer"
+    ),
+    pytest.param(
+        "offset=abc", "query.offset: Input should be a valid integer", id="offset-not-an-integer"
+    ),
+    # "pending" is a real status column value (AD-003, see
+    # shared/src/shared/reimbursement/use_cases/list_reimbursements.py),
+    # deliberately excluded from the client-facing status whitelist.
+    pytest.param(
+        "status=pending", "status must be one of", id="status-pending-excluded-from-whitelist"
+    ),
+    # spec.md's own Independent Test for LIST-05/07: one invalid segment
+    # among otherwise-valid ones must still invalidate the whole filter,
+    # not just be silently dropped.
+    pytest.param(
+        "status=human-review,pending",
+        "status must be one of",
+        id="status-one-segment-of-comma-list-invalid",
+    ),
+    pytest.param(
+        "status=human-review&status=auto-rejected",
+        "status must be supplied once, comma-separated for multiple values",
+        id="status-repeated-query-param",
+    ),
+]
+
 
 class DescribeGetReimbursement:
     async def it_returns_200_with_rows_ordered_created_at_desc_by_default(
@@ -47,40 +78,20 @@ class DescribeGetReimbursement:
 
         assert [item["uuid"] for item in response.json()["data"]] == [str(uuids[3]), str(uuids[2])]
 
-    async def it_returns_400_when_limit_exceeds_the_ceiling(self, db: asyncpg.Connection) -> None:
-        async with _build_client(FakePool(db)) as client:
-            response = await client.get("/api/v1/reimbursement", params={"limit": 501})
+    @pytest.mark.parametrize("query_string, expected_message_fragment", _INVALID_QUERY_CASES)
+    async def it_returns_400_with_a_message_naming_the_invalid_query_param(
+        self, query_string: str, expected_message_fragment: str
+    ) -> None:
+        # FakePool(None): every case here fails one of list_reimbursements'
+        # own gates (or FastAPI's query-type coercion) before any query
+        # ever touches a connection -- no real `db`/`migrated_db` fixture
+        # needed, mirroring test_list_reimbursements.py's own
+        # `list_reimbursements(None, ...)` pattern one layer down.
+        async with _build_client(FakePool(None)) as client:
+            response = await client.get(f"/api/v1/reimbursement?{query_string}")
 
         assert response.status_code == 400
-        assert "msg" in response.json()
-
-    async def it_returns_400_when_offset_is_negative(self, db: asyncpg.Connection) -> None:
-        async with _build_client(FakePool(db)) as client:
-            response = await client.get("/api/v1/reimbursement", params={"offset": -1})
-
-        assert response.status_code == 400
-        assert "msg" in response.json()
-
-    async def it_returns_400_when_limit_is_negative(self, db: asyncpg.Connection) -> None:
-        async with _build_client(FakePool(db)) as client:
-            response = await client.get("/api/v1/reimbursement", params={"limit": -1})
-
-        assert response.status_code == 400
-        assert "msg" in response.json()
-
-    async def it_returns_400_when_limit_is_not_an_integer(self, db: asyncpg.Connection) -> None:
-        async with _build_client(FakePool(db)) as client:
-            response = await client.get("/api/v1/reimbursement", params={"limit": "abc"})
-
-        assert response.status_code == 400
-        assert "msg" in response.json()
-
-    async def it_returns_400_when_offset_is_not_an_integer(self, db: asyncpg.Connection) -> None:
-        async with _build_client(FakePool(db)) as client:
-            response = await client.get("/api/v1/reimbursement", params={"offset": "abc"})
-
-        assert response.status_code == 400
-        assert "msg" in response.json()
+        assert expected_message_fragment in response.json()["msg"]
 
     async def it_returns_200_with_an_empty_list_when_nothing_matches(self, db: asyncpg.Connection) -> None:
         async with _build_client(FakePool(db)) as client:
@@ -134,41 +145,6 @@ class DescribeGetReimbursement:
         # concurrency tests' own count(*) assertions are scoped to their uuid.
         request_ids = {item["request_id"] for item in response.json()["data"]}
         assert {"REQ-ALL-PENDING", "REQ-ALL-APPROVED"} <= request_ids
-
-    async def it_returns_400_for_pending_status_excluded_from_the_client_facing_whitelist(
-        self, db: asyncpg.Connection
-    ) -> None:
-        # "pending" is a real status column value (AD-003, see
-        # shared/src/shared/reimbursement/use_cases/list_reimbursements.py),
-        # deliberately excluded from the client-facing status whitelist.
-        async with _build_client(FakePool(db)) as client:
-            response = await client.get("/api/v1/reimbursement", params={"status": "pending"})
-
-        assert response.status_code == 400
-        assert "msg" in response.json()
-
-    async def it_returns_400_when_one_segment_of_a_comma_list_is_invalid(
-        self, db: asyncpg.Connection
-    ) -> None:
-        # spec.md's own Independent Test for LIST-05/07: one invalid segment
-        # among otherwise-valid ones must still invalidate the whole filter,
-        # not just be silently dropped.
-        async with _build_client(FakePool(db)) as client:
-            response = await client.get(
-                "/api/v1/reimbursement", params={"status": "human-review,pending"}
-            )
-
-        assert response.status_code == 400
-        assert "msg" in response.json()
-
-    async def it_returns_400_for_a_repeated_status_query_param(self, db: asyncpg.Connection) -> None:
-        async with _build_client(FakePool(db)) as client:
-            response = await client.get(
-                "/api/v1/reimbursement?status=human-review&status=auto-rejected"
-            )
-
-        assert response.status_code == 400
-        assert "msg" in response.json()
 
     async def it_includes_the_last_human_review_when_present_and_null_when_absent(
         self, db: asyncpg.Connection
