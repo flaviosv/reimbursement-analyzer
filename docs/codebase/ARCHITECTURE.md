@@ -2,7 +2,9 @@
 
 ## Overview / Pattern
 
-Event-driven microservices, three independently deployable services around a Kafka backbone, plus a shared kernel. All three hops in the pipeline's plumbing are now implemented end to end: `api` accepts and queues, `publisher` consumes that queue, persists a row, and queues the next hop, `agent` consumes that hop and resolves the row by `uuid`. The pipeline durably carries a request all the way to a resolved-and-ready-to-decide state per message — but nothing yet decides. The actual policy (auto-approve / auto-reject / human-review classification, `docs/SCOPE.md`) has no implementing code anywhere; `agent`'s retry-ceiling escalation to `human-review` is a failure-handling safety valve, not that policy.
+Event-driven microservices, three independently deployable services around a Kafka backbone, plus a shared kernel. All three hops in the pipeline's plumbing are now implemented end to end: `api` accepts and queues, `publisher` consumes that queue, persists a row, and queues the next hop, `reimbursement` consumes that hop and resolves the row by `uuid`. The pipeline durably carries a request all the way to a resolved-and-ready-to-decide state per message — but nothing yet decides. The actual policy (auto-approve / auto-reject / human-review classification, `docs/SCOPE.md`) has a scaffold — `reimbursement`'s nested `agent/` subpackage builds a LangGraph `StateGraph` with five stub nodes — but no working implementation and no call path from `validation.py` yet; `reimbursement`'s retry-ceiling escalation to `human-review` is a failure-handling safety valve, not that policy.
+
+`api` also now has a second, synchronous access pattern alongside the async Kafka pipeline: `GET /api/v1/reimbursement` (list) and `PUT /api/v1/reimbursement/{uuid}` (record a human reviewer's approve/reject decision) read and write Postgres directly, request-response, with no Kafka hop involved. This is human-driven decision *recording*, not the automated decision policy above — a reviewer calls `PUT` after deciding for themselves on a row already at `human-review`/`auto-rejected`/`human-rejected`.
 
 ## High-Level Structure
 
@@ -10,23 +12,23 @@ Event-driven microservices, three independently deployable services around a Kaf
                  ┌─────────────┐
   HTTP client ──▶│     api     │
                  │  (FastAPI)  │
-                 └──────┬──────┘
-                        │ publish (Request topic)
-                        ▼
+                 └──┬───────┬──┘
+        publish (Request)  │  read (GET list) / write (PUT approve-reject)
+                    ▼       │
                  ┌─────────────┐         publish (Reimbursement topic)        ┌─────────────┐
-                 │  publisher  │───────────────────────────────────────────▶  │    agent    │
-                 │(implemented)│              via Kafka, not a direct call    │(implemented,│
-                 └──────┬──────┘                                             │resolve only)│
+                 │  publisher  │───────────────────────────────────────────▶  │reimbursement│
+                 │(implemented)│              via Kafka, not a direct call    │(resolve impl,│
+                 └──────┬──────┘                                             │decision WIP)│
                         │                                                    └──────┬──────┘
                         │ insert / update                                read / escalate │
                         ▼                                                             ▼
                  ┌───────────────────────────────────────────────────────────────────────┐
                  │                            PostgreSQL                                  │
                  │                    reimbursement / human_review                        │
-                 └─────────────────────────────────────────────────────────────────────────┘
+                 └───────────────────────────────────────────────────────────────────────┘
 ```
 
-`shared` (models, config, Kafka producer, `reimbursement` persistence) is imported by all three services but is not itself a running process. `publisher` and `agent` never call each other directly — `publisher` writes to Postgres and publishes to Kafka; `agent` consumes what it publishes and reads/conditionally writes the same `reimbursement` row, independently.
+`shared` (models, config, Kafka producer, DB pool lifecycle, `reimbursement` persistence + use cases) is imported by all three services but is not itself a running process. `publisher` and the `reimbursement` service never call each other directly — `publisher` writes to Postgres and publishes to Kafka; `reimbursement` consumes what it publishes and reads/conditionally writes the same `reimbursement` row, independently. `api` now also reads/writes Postgres directly (bypassing Kafka entirely) for its `GET`/`PUT` endpoints — the first and only service with both an async (Kafka-mediated) and a synchronous (direct-DB) path to the same tables.
 
 ## Layers
 
@@ -34,20 +36,23 @@ Event-driven microservices, three independently deployable services around a Kaf
 | ----- | -------------- | ------------------ |
 | HTTP intake | Accept, cap, validate a reimbursement batch | `src/api/src/reimbursement/create/{route,payload,validation}.py` |
 | Publish (api → Request) | Build the wire envelope, hand it to Kafka | `src/api/src/reimbursement/create/producer.py`, `src/shared/src/shared/producer.py` |
-| App infrastructure | FastAPI app/lifespan, DI accessors, app-wide error contract | `src/api/src/{main,dependencies,errors}.py` |
-| Shared kernel | Cross-service models, config, exceptions, Kafka producer | `src/shared/src/shared/*.py` |
-| Reimbursement persistence | asyncpg pool, SQL statements against `reimbursement`, human-review escalation | `src/shared/src/shared/reimbursement/{repository,use_cases/send_human_review}.py` |
+| App infrastructure | FastAPI app/lifespan, DI accessors (producer + DB pool), app-wide error contract | `src/api/src/{main,dependencies,errors}.py` |
+| List (GET) | Parse/validate status+pagination filters, fetch a page, shape the response | `src/api/src/reimbursement/list/{route,params,response}.py` |
+| Review (PUT) | Validate an approve/reject payload, check path/body uuid consistency, delegate to the review use case | `src/api/src/reimbursement/update/{route,validation}.py` |
+| Shared kernel | Cross-service models, config, exceptions, Kafka producer, DB pool lifecycle | `src/shared/src/shared/*.py` |
+| Reimbursement persistence | asyncpg pool, every SQL statement against `reimbursement`/`human_review` | `src/shared/src/shared/reimbursement/repository.py` |
+| Reimbursement use cases | List/filter gates; human-review escalation; the approve/reject transaction + 404-vs-400 disambiguation | `src/shared/src/shared/reimbursement/use_cases/{list_reimbursements,send_human_review,review_reimbursement}.py` |
 | Consume + persist + publish | Take requests off `Request`, insert a row, publish to `Reimbursement`, retry/escalate/deduplicate | `src/publisher/src/{consumer,processing}.py` |
-| Consume + resolve | Take messages off `Reimbursement`, resolve the row by `uuid`, apply the staleness guard, tolerate a ghost, requeue transient failures, escalate past the retry ceiling | `src/agent/src/agent/{consumer,validation}.py` |
-| Decision (planned) | Business rules + LLM evaluation — classify resolved rows as auto-approve/auto-reject/human-review | `src/agent` (not implemented — no code path for the actual policy exists) |
+| Consume + resolve | Take messages off `Reimbursement`, resolve the row by `uuid`, apply the staleness guard, tolerate a ghost, requeue transient failures, escalate past the retry ceiling | `src/reimbursement/src/{consumer,validation}.py` |
+| Decision (scaffolded, not wired) | Business rules + LLM evaluation — classify resolved rows as auto-approve/auto-reject/human-review | `src/reimbursement/src/agent/{agent.py,nodes/*,prompts/*}` — LangGraph graph + stub nodes exist, but no working policy and no call from `validation.py` |
 
 ## Dependency Rules
 
-- `api`, `agent`, `publisher` never import each other — the only shared code path is `shared`.
+- `api`, `reimbursement`, `publisher` never import each other — the only shared code path is `shared`.
 - `shared` has no dependency on any of the three services (one-directional).
 - Inside `api`, vertical slices (`reimbursement/create/`) own their route, validation, and publish logic; app-root modules (`main.py`, `dependencies.py`, `errors.py`) hold only what is genuinely slice-independent — e.g. `dependencies.py`'s `get_producer` exists as a standalone module specifically to avoid a `main.py` ↔ `route.py` import cycle.
 - `publisher` mirrors this split at its own scale: `consumer.py` (composition root + Kafka lifecycle) stays apart from `processing.py` (the decision tree) specifically so the branching logic unit-tests with no real Kafka consumer.
-- `agent` mirrors the same split again: `consumer.py` (composition root + Kafka lifecycle) stays apart from `validation.py` (the resolve/staleness/escalation decision tree), same reasoning as `publisher`'s own split.
+- `reimbursement` mirrors the same split again: `consumer.py` (composition root + Kafka lifecycle) stays apart from `validation.py` (the resolve/staleness/escalation decision tree), same reasoning as `publisher`'s own split. Its `agent/` subpackage (the LangGraph decision graph) is a separate, not-yet-wired concern from either.
 
 ## Request / Data Flow
 
@@ -63,48 +68,66 @@ Event-driven microservices, three independently deployable services around a Kaf
 
 1. `publisher/consumer.py` consumes one `Request` message at a time (`enable.auto.commit=False`) and hands it to `processing.handle_message`, which never raises.
 2. Each item in the message is validated as a `ReimbursementRequest`, then fanned out under a `Semaphore(item_concurrency)` (default 10).
-3. Per item: `repository.insert_pending` and `shared.producer.publish` (a `ReimbursementEnvelope` carrying only the row's `uuid`) both run inside one `conn.transaction()` — a publish failure rolls the insert back with no explicit rollback call (AD-017).
+3. Per item: `shared.reimbursement.use_cases.publish_pending.publish_pending` — `repository.insert_pending` plus `shared.producer.publish` (a `ReimbursementEnvelope` carrying only the row's `uuid`) — runs inside one `conn.transaction()` opened by the caller (`publisher.processing._insert_and_publish`), so a publish failure rolls the insert back with no explicit rollback call (AD-017).
 4. A duplicate (`is_duplicate`, constraint-name match) is dropped and logged as a structured event, never retried. Any other failure is requeued to `Request` with `retry + 1` and an appended `AttemptError`. Past `retry > 3`, the item is escalated to a `human-review` row (`send_human_review`) instead of being retried again; if that escalation itself fails, it falls to `shared.failure_log`.
 5. The consumer offset commits once every item in the message has settled — never mid-batch.
 
-`Reimbursement` → `agent` → resolve / requeue / escalate:
+`Reimbursement` topic → `reimbursement` service → resolve / requeue / escalate:
 
-1. `agent/consumer.py` consumes one `Reimbursement` message at a time (`enable.auto.commit=False`) and hands it to `validation.handle_message`, which never raises.
+1. `reimbursement/consumer.py` consumes one `Reimbursement` message at a time (`enable.auto.commit=False`) and hands it to `validation.handle_message`, which never raises.
 2. Past the retry ceiling (`retry > 3`), the message is escalated directly — reusing `shared.reimbursement.use_cases.send_human_review.escalate_existing`, the same action `publisher` uses — without touching the resolve path at all.
 3. Otherwise: `repository.get_by_uuid` resolves the row. A missing row (a ghost, R-001) is tolerated and logged, not retried — retrying can never make a genuine ghost row appear. A message older than the row's own `updated_at` (the staleness guard) is dropped and logged, informational only.
-4. A transient DB error while resolving requeues the message to `Reimbursement` itself (the only topic `agent` owns) with `retry + 1` and an appended `AttemptError`.
-5. The consumer offset commits once the message has settled — never mid-message. Business logic (auto-approve/auto-reject/human-review classification) does not yet exist past this point — this flow only gets a row into a resolved, decision-ready state.
+4. A transient DB error while resolving requeues the message to `Reimbursement` itself (the only topic `reimbursement` owns) with `retry + 1` and an appended `AttemptError`.
+5. The consumer offset commits once the message has settled — never mid-message. Business logic (auto-approve/auto-reject/human-review classification) does not yet run past this point — a LangGraph scaffold exists (`reimbursement/agent/`) but `validation.py` never calls it, so this flow only gets a row into a resolved, decision-ready state.
+
+`GET /api/v1/reimbursement` (list, direct DB, no Kafka):
+
+1. `params.parse_status_filter` reads the raw multi-value `status` query params — a repeated `?status=a&status=b` is rejected outright (AD-028); the single remaining value (if any) is split on `,` into unchecked segments.
+2. `list_reimbursements` runs two sequential gates before touching the DB: every status segment must be in the client-facing whitelist (`pending` deliberately excluded — internal-only, AD-003), then `0 <= limit <= MAX_LIST_LIMIT` and `offset >= 0`. Either violation raises `ReimbursementFilterInvalid` (400) before any query runs.
+3. `repository.fetch_reimbursement_page` runs one query: `reimbursement` rows (optionally status-filtered), `created_at DESC`, paged by `limit`/`offset`, each paired via `LEFT JOIN LATERAL` with its own most recent `human_review` row if one exists.
+4. `ReimbursementListItem.from_record` shapes each row; `hr_*`-prefixed columns being NULL together means no review exists yet. A filter matching zero rows is still `200` with an empty `data` array — this endpoint never 404s (AD-027).
+
+`PUT /api/v1/reimbursement/{uuid}` (approve/reject, direct DB, no Kafka):
+
+1. `validation.validate_review` parses the body against the `ApproveReview`/`RejectReview` discriminated union (on the `status` field); a shape failure raises `ReviewInvalid` (422).
+2. The route checks path/body uuid consistency (`ReimbursementUuidMismatch`, 400) if the body carries one.
+3. `review_reimbursement.approve_reimbursement`/`reject_reimbursement` runs one transaction: an atomic `UPDATE ... WHERE status = ANY(eligible_statuses) RETURNING` (eligible from `human-review`, `auto-rejected`, or `human-rejected`) — reject is further gated on `receipts_value`/`receipts_date`/`currency` already being non-null (no backfill on reject, unlike approve which requires and backfills them) — followed by `record_human_review_decision`, appending one `human_review` row.
+4. Zero rows affected by the `UPDATE` routes to `_disambiguate`: re-queries the row to distinguish "no such uuid" (`ReimbursementNotFound`, 404) from "row exists but ineligible/incomplete" (`ReimbursementNotEligible`, 400) — always raises, never returns (`NoReturn`). No explicit row lock precedes the `UPDATE`: Postgres's own write-serialization already makes two concurrent transitions mutually exclusive, so the loser's `WHERE status = ANY(...)` simply matches zero rows once the winner commits.
 
 ## Communication Patterns
 
-- **REST** — client → `api`, single versioned prefix `/api/v1/...`.
-- **Kafka pub/sub** — `api` → `Request` topic → `publisher` (consumed and implemented) → `Reimbursement` topic → `agent` (consumed and implemented — resolve/requeue/escalate only, no decision policy yet). `agent` also republishes to `Reimbursement` itself on a transient resolve failure, the same requeue-to-own-topic shape `publisher` uses on `Request`. Message contracts: `shared.models.RequestEnvelope` (`retry`, `published_at`, `errors`, `payload`) and `shared.models.ReimbursementEnvelope` (`uuid`, `retry`, `published_at`, `errors` — no payload; `agent` resolves it from the row by `uuid`).
+- **REST** — client → `api`, single versioned prefix `/api/v1/...`. `GET`/`PUT` are synchronous request-response against Postgres directly; only `POST` goes through Kafka.
+- **Kafka pub/sub** — `api` (POST only) → `Request` topic → `publisher` (consumed and implemented) → `Reimbursement` topic → `reimbursement` service (consumed and implemented — resolve/requeue/escalate only, no decision policy yet). `reimbursement` also republishes to `Reimbursement` itself on a transient resolve failure, the same requeue-to-own-topic shape `publisher` uses on `Request`. Message contracts: `shared.models.RequestEnvelope` (`retry`, `published_at`, `errors`, `payload`) and `shared.models.ReimbursementEnvelope` (`uuid`, `retry`, `published_at`, `errors` — no payload; `reimbursement` resolves it from the row by `uuid` into `shared.models.Reimbursement`, the `{uuid, original_payload}` shape the decision graph's `State` carries).
 
 ## Key Components
 
 | Component | Role |
 | --------- | ---- |
-| `main.lifespan` | Owns the app's resources for its lifetime — currently constructs/closes the one Kafka `AIOProducer`, stored on `app.state.producer` |
-| `dependencies.get_producer` | FastAPI `Depends()` accessor for the live producer — overridden with a fake in tests |
+| `main.lifespan` | Owns the app's resources for its lifetime — constructs/closes the Kafka `AIOProducer` and the Postgres pool, stored on `app.state.producer`/`app.state.pool` |
+| `dependencies.get_producer` / `get_pool` | FastAPI `Depends()` accessors for the live producer/pool — overridden with fakes in tests |
 | `errors.register_handlers` | Registers the app-wide `{"msg": "..."}` error contract for every typed exception |
 | `shared.config.load_config` | `@lru_cache`'d single entrypoint for every env-derived config value |
+| `shared.db.managed_pool` | Postgres pool lifecycle — construct/yield/close, same shape as `managed_producer` |
 | `shared.producer.publish` | Stateless, topic-agnostic Kafka publish primitive shared by every service |
-| `shared.reimbursement.repository` | asyncpg pool lifecycle (`managed_pool`) + every SQL statement against `reimbursement` (`insert_pending`, `insert_human_review`, `is_duplicate`) |
+| `shared.reimbursement.repository` | Every SQL statement against `reimbursement`/`human_review` — `insert_pending`, `insert_human_review`, `is_duplicate`, `get_by_uuid`, `update_human_review`, `fetch_reimbursement_page`, `approve`, `reject`, `find_reimbursement_state`, `record_human_review_decision` |
 | `shared.reimbursement.use_cases.send_human_review` | Renders an `AttemptError` history to prose and escalates a row to `human-review` — the one action "preserve this request for a human, explained" |
+| `shared.reimbursement.use_cases.publish_pending` | `insert_pending` + Kafka publish as one unit, called inside the caller's own transaction — `publisher`'s insert+publish counterpart to `send_human_review` |
+| `shared.reimbursement.use_cases.list_reimbursements` | The list endpoint's status-whitelist + limit/offset gates — never touches the DB before both pass |
+| `shared.reimbursement.use_cases.review_reimbursement` | The approve/reject transaction (atomic `UPDATE ... RETURNING` + `record_human_review_decision`) and the 404-vs-400 disambiguation on a zero-rows-affected update |
 | `shared.failure_log.write` | Last-resort structured JSON log at critical level, for a failure nothing else could handle |
-| `shared.signals.install_shutdown_handlers` | Arms SIGINT/SIGTERM to set an `asyncio.Event` rather than killing the process; used by `agent` |
+| `shared.signals.install_shutdown_handlers` | Arms SIGINT/SIGTERM to set an `asyncio.Event` rather than killing the process; used by `reimbursement` |
 | `publisher.processing.handle_message` | The publisher's entire decision tree — insert+publish, retry/requeue, escalation, duplicate detection — never raises |
-| `agent.validation.handle_message` | The agent's entire decision tree — resolve by uuid, staleness guard, ghost tolerance, retry/requeue, retry-ceiling escalation — never raises |
-| `agent.consumer.run` | The agent's consume loop — one message at a time, offset committed only after `handle_message` settles it |
+| `reimbursement.validation.handle_message` | The service's entire resolve decision tree — resolve by uuid, staleness guard, ghost tolerance, retry/requeue, retry-ceiling escalation — never raises |
+| `reimbursement.consumer.run` | The service's consume loop — one message at a time, offset committed only after `handle_message` settles it |
 
 ## Data Model
 
-- **`reimbursement`** — one row per submitted request: `uuid` (PK, `uuidv7()`), `request_id`, `submitted_by`, `submitted_at`, `original_payload` (JSONB), `status` (`pending` / `auto-approved` / `auto-rejected` / `human-review` / `human-approved` / `human-rejected`), `receipts_value`, `receipts_date`, `currency`, `decision_reason`, `human_review_notes`, `created_at`, `updated_at`. Unique on `(request_id, lower(submitted_by))`. **Actively read and written by two services now**: `publisher` inserts a `pending` row per item (or a `human-review` row past its own retry ceiling); `agent` reads it by `uuid` to resolve a `Reimbursement` message and conditionally writes `status='human-review'`/`decision_reason` past its own retry ceiling — via the same `escalate_existing` action `publisher` uses.
-- **`human_review`** — one row per review event, FK to `reimbursement.uuid` (`ON DELETE RESTRICT`), `status` (`approved`/`rejected`), `reviewed_by`, `reason`, `created_at`. **Append-only**: a database trigger (`human_review_append_only`) rejects any `UPDATE`/`DELETE`. Still unwritten by either service — both services' retry-ceiling escalations set `reimbursement.status = 'human-review'` directly; nothing yet writes an actual review event to this table.
+- **`reimbursement`** — one row per submitted request: `uuid` (PK, `uuidv7()`), `request_id`, `submitted_by`, `submitted_at`, `original_payload` (JSONB), `status` (`pending` / `auto-approved` / `auto-rejected` / `human-review` / `human-approved` / `human-rejected`), `receipts_value`, `receipts_date`, `currency`, `decision_reason`, `human_review_notes`, `created_at`, `updated_at`. Unique on `(request_id, lower(submitted_by))`; an index on `created_at` supports `GET`'s default no-filter ordering. **Actively read and written by all three services now**: `publisher` inserts a `pending` row per item (or a `human-review` row past its own retry ceiling); `reimbursement` reads it by `uuid` to resolve into a `shared.models.Reimbursement` and conditionally writes `status='human-review'`/`decision_reason` past its own retry ceiling (via the same `escalate_existing` action `publisher` uses); `api` reads a filtered/paginated page for `GET` and atomically transitions a row to `human-approved`/`human-rejected` (backfilling `receipts_value`/`receipts_date`/`currency` on approve) for `PUT`.
+- **`human_review`** — one row per review event, FK to `reimbursement.uuid` (`ON DELETE RESTRICT`), `status` (`approved`/`rejected`), `reviewed_by`, `reason`, `created_at`. **Append-only**: a database trigger (`human_review_append_only`) rejects any `UPDATE`/`DELETE`. **Now actively written**: `api`'s `PUT` endpoint appends one row per reviewer decision via `review_reimbursement`'s `record_human_review_decision`, inside the same transaction as the `reimbursement` row's status update. `publisher`'s and `reimbursement`'s own retry-ceiling escalations still only set `reimbursement.status = 'human-review'` directly — they do not write a `human_review` row, since no reviewer has decided anything yet at that point.
 
 ## Database Access Patterns
 
-Plain SQL migrations via `yoyo`, applied by a one-shot `migrate` job (advisory-lock serialised — see `src/api/src/migrate.py`) that every other service waits on before starting. No ORM, no query builder. `asyncpg` is genuinely used by both `publisher` and `agent`, via the same `shared.reimbursement.repository.managed_pool` — one pool per process, explicitly sized (never left at `create_pool`'s default `min_size=10, max_size=10`, which would otherwise equal the publisher's item concurrency and leave zero headroom). `publisher`'s implicit-transaction pattern (AD-017) wraps a write and its paired Kafka publish in one `conn.transaction()`, so a publish failure rolls the write back with no explicit rollback call — `agent.validation` wraps no such transaction, since it has no write-plus-publish pairing to protect (its own requeue publish and its escalation write are two independent, individually-idempotent operations, never both required to succeed together). Both services' pool acquisitions are bounded by `DatabaseConfig.acquire_timeout_seconds` (wait for a free connection) and `command_timeout` (per-query ceiling), so a stuck connection cannot hang a consume loop indefinitely.
+Plain SQL migrations via `yoyo`, applied by a one-shot `migrate` job (advisory-lock serialised — see `src/api/src/migrate.py`) that every other service waits on before starting. No ORM, no query builder. `asyncpg` is genuinely used by all three services now, via the same `shared.db.managed_pool` (relocated here from `shared.reimbursement.repository`, AD-029) — one pool per process, explicitly sized (never left at `create_pool`'s default `min_size=10, max_size=10`, which would otherwise equal the publisher's item concurrency and leave zero headroom). `api`'s own pool, constructed in `main.py`'s `lifespan`, overrides `pool_min_size` to 0 — a request-serving process has bursty, not baseline, DB usage, unlike `publisher`/`reimbursement`'s steady consume-loop pool. `publisher`'s implicit-transaction pattern (AD-017) wraps a write and its paired Kafka publish in one `conn.transaction()`, so a publish failure rolls the write back with no explicit rollback call — `reimbursement.validation` wraps no such transaction, since it has no write-plus-publish pairing to protect. `api`'s `review_reimbursement` use case wraps its own transaction differently: an atomic `UPDATE ... WHERE status = ANY(...) RETURNING` plus a paired `INSERT` into `human_review`, with no explicit row lock beforehand — Postgres's own write-serialization already makes two concurrent transitions mutually exclusive, so a losing concurrent `UPDATE` simply matches zero rows once the winner commits (a confirmed design decision, not an oversight). All three services' pool acquisitions are bounded by `DatabaseConfig.acquire_timeout_seconds` (wait for a free connection) and `command_timeout` (per-query ceiling), so a stuck connection cannot hang a consume loop or a request indefinitely.
 
 ## State Management
 
@@ -112,11 +135,11 @@ Stateless services; Kafka is the durable state-transfer mechanism between them. 
 
 ## Error Handling Strategy
 
-A small set of typed exceptions (`shared.errors.{PayloadTooLarge, BatchInvalid, PublishFailed}` plus FastAPI's own `RequestValidationError`/`HTTPException`) are raised by business logic and translated to one uniform `{"msg": "..."}` JSON response only at the app boundary (`errors.register_handlers`) — domain code never builds an HTTP response directly. `PublishFailed` deliberately catches `Exception` broadly rather than narrowing to specific broker exceptions (AD-021), folding the failing exception's class name into the message so the failure mode stays identifiable in logs without narrowing the catch surface.
+A set of typed exceptions (`shared.errors.{PayloadTooLarge, BatchInvalid, PublishFailed, ReimbursementFilterInvalid, ReviewInvalid, ReimbursementNotFound, ReimbursementNotEligible, ReimbursementUuidMismatch}` plus FastAPI's own `RequestValidationError`/`HTTPException`) are raised by business logic and translated to one uniform `{"msg": "..."}` JSON response only at the app boundary (`errors.register_handlers`) — domain code never builds an HTTP response directly. Each new exception maps to one status code: `ReimbursementFilterInvalid` → 400 (bad list filter), `ReviewInvalid` → 422 (malformed PUT payload shape), `ReimbursementNotFound` → 404 (unknown uuid), `ReimbursementNotEligible` → 400 (row exists but ineligible/incomplete for the requested decision), `ReimbursementUuidMismatch` → 400 (body/path uuid disagree). `PublishFailed` deliberately catches `Exception` broadly rather than narrowing to specific broker exceptions (AD-021), folding the failing exception's class name into the message so the failure mode stays identifiable in logs without narrowing the catch surface.
 
 `publisher.processing` takes a different, complementary approach: rather than exceptions propagating to a boundary handler, every branch of `handle_message` returns an `ItemOutcome` enum member (`PUBLISHED | DUPLICATE | REQUEUED | ESCALATED | LOGGED | INVALID`) and the function itself never raises. This makes per-item independence structural under `asyncio.gather` fan-out — one item's failure literally cannot propagate to interrupt another's.
 
-`agent.validation` uses the identical shape for its own decision tree: every branch of `handle_message` returns a `MessageOutcome` member (`RESOLVED | STALE | GHOST | REQUEUED | ESCALATED | LOGGED | INVALID`) and never raises — one bad message can never stop the consume loop behind it.
+`reimbursement.validation` uses the identical shape for its own decision tree: every branch of `handle_message` returns a `MessageOutcome` member (`RESOLVED | STALE | GHOST | REQUEUED | ESCALATED | LOGGED | INVALID`) and never raises — one bad message can never stop the consume loop behind it.
 
 ## Observability
 
@@ -126,9 +149,9 @@ Three-tier logging, all via stdlib `logging` (no OpenTelemetry, no metrics, no c
 2. **Sanitized stdout errors** — `logger.error(...)` combined with `shared.errors.sanitize(exc)`, which renders only the exception type and (if present) the violated constraint name — never Postgres's `DETAIL` line, which can embed PII like a submitter's email.
 3. **Last-resort failure log** — `shared.failure_log.write()` emits one full structured JSON record (including the item itself) at `logging.CRITICAL` to a dedicated named logger, for a failure nothing else in the chain could handle. Never raises; ops attach a `FileHandler` or shipper to the logger name for durability, no code change needed.
 
-`agent.validation` follows the same three-tier shape with one deliberate refinement, driven by a stated project requirement (errors must surface at a severity a monitoring tool can triage on): genuine failures — a message that fails to parse, a transient DB error while resolving or escalating — always log via tier 2 (`logger.error` + `sanitize()`), never tier 1. Tolerated, non-error conditions (a ghost row, a stale message) stay at tier 1 (`logger.info`) even though they are the *reason* a message doesn't resolve — a ghost is an expected outcome under R-001, not a failure. A successful escalation past the retry ceiling itself logs at `logger.error` (not `.info`), on the reasoning that a human now needs to act on it, not because anything went wrong.
+`reimbursement.validation` follows the same three-tier shape with one deliberate refinement, driven by a stated project requirement (errors must surface at a severity a monitoring tool can triage on): genuine failures — a message that fails to parse, a transient DB error while resolving or escalating — always log via tier 2 (`logger.error` + `sanitize()`), never tier 1. Tolerated, non-error conditions (a ghost row, a stale message) stay at tier 1 (`logger.info`) even though they are the *reason* a message doesn't resolve — a ghost is an expected outcome under R-001, not a failure. A successful escalation past the retry ceiling itself logs at `logger.error` (not `.info`), on the reasoning that a human now needs to act on it, not because anything went wrong.
 
-LangFuse is provisioned in `docker-compose.yml` for the future `agent` decision layer's LLM call tracing but is not yet wired into any code.
+LangFuse is provisioned in `docker-compose.yml` for `reimbursement`'s LangGraph decision graph (`agent/` subpackage) LLM call tracing but is not yet wired into any code — the design (`.specs/features/agent-decide-reimbursement/design.md`) calls for `langfuse.langchain.CallbackHandler` passed to `graph.ainvoke(...)` once the graph is built.
 
 ## API Versioning
 
@@ -142,5 +165,8 @@ URL path prefix (`/api/v1/reimbursement`). No deprecation policy or version-coex
 - **Advisory-lock migration serialisation** — `migrate.py` uses a PostgreSQL session-scoped advisory lock (not `yoyo`'s own table-row lock) specifically because the advisory lock releases automatically if the runner's connection drops, avoiding a permanently stuck lock after a `SIGKILL`.
 - **Outcome-enum decision tree** — `publisher.processing.handle_message` and every handler it calls return an `ItemOutcome` member instead of raising; combined with `asyncio.gather` (no `return_exceptions`), this makes one item's failure structurally unable to affect another's, and gives every branch a countable value for free.
 - **Transaction-wraps-publish** — a DB write and its paired Kafka publish run inside the same `conn.transaction()`, so a publish failure rolls the write back implicitly (AD-017). The same shape as the byte-splice pattern above: correctness is enforced by what the code structurally cannot do, not by a rule the next author has to remember.
-- **Requeue-with-history retry** — rather than retrying in place, a failed item is republished as a new envelope with `retry` incremented and an `AttemptError` appended to a running list (`AttemptError.from_exception(attempt, stage, exc)` — renamed from `.next(...)` this merge), so the consumer that eventually sees `retry > 3` can render the full failure history into a human-review row without any out-of-band state. `agent.validation._requeue` reuses this exact shape for its own transient resolve failures.
-- **Newly-shared, currently single-consumer modules** — `shared.signals.install_shutdown_handlers` and `shared.testing.FakeProducer` were extracted this merge as genuinely cross-service contracts, but only `agent` (production code and tests, respectively) has adopted them so far — `publisher` still carries its own separate signal-handling code and test double. Not yet consolidated; a candidate for a later cleanup, not a divergence bug.
+- **Requeue-with-history retry** — rather than retrying in place, a failed item is republished as a new envelope with `retry` incremented and an `AttemptError` appended to a running list (`AttemptError.from_exception(attempt, stage, exc)` — renamed from `.next(...)` this merge), so the consumer that eventually sees `retry > 3` can render the full failure history into a human-review row without any out-of-band state. `reimbursement.validation._requeue` reuses this exact shape for its own transient resolve failures.
+- **Newly-shared, currently single-consumer modules** — `shared.signals.install_shutdown_handlers` and `shared.testing.FakeProducer` were extracted this merge as genuinely cross-service contracts, but only `reimbursement` (production code and tests, respectively) has adopted them so far — `publisher` still carries its own separate signal-handling code and test double. Not yet consolidated; a candidate for a later cleanup, not a divergence bug.
+- **Insert+publish extracted to a shared use case** — `publisher.processing._insert_and_publish` no longer builds the `ReimbursementEnvelope` and calls `insert_pending`/`publish` inline; both now live in `shared.reimbursement.use_cases.publish_pending`, the insert+publish counterpart to `send_human_review` (AD-025's domain-slice pattern applied to a second action).
+- **`NoReturn` disambiguation helper** — `review_reimbursement._disambiguate(conn, uuid) -> NoReturn` is called only on the zero-rows-affected path of an `UPDATE ... RETURNING`; it re-queries once to decide which of two typed exceptions to raise (`ReimbursementNotFound` vs `ReimbursementNotEligible`) and always raises, never returns — keeping that ambiguity-resolution logic out of `approve_reimbursement`/`reject_reimbursement`'s main path.
+- **Discriminated-union payload for one endpoint, two shapes** — `reimbursement/update/validation.py`'s `ApproveReview`/`RejectReview` share a `status: Literal["approved"|"rejected"]` field; `Field(discriminator="status")` lets one `TypeAdapter` pick the right model instead of one model with every field optional plus manual cross-field validation.
