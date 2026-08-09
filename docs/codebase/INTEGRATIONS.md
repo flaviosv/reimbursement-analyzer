@@ -32,11 +32,20 @@
 **LangFuse (self-hosted, v4):**
 
 - Type: LLM observability platform
-- Purpose: intended tracing/eval backend for `reimbursement`'s LangGraph decision graph (the `agent/` subpackage) — one trace per reimbursement, per the in-progress design (`.specs/features/agent-decide-reimbursement/design.md`)
-- Data flow: not yet wired into any code — `docker-compose.yml` provisions the full stack and bootstraps a project/API-key pair (`LANGFUSE_INIT_*`), but `reimbursement` never references it
-- Protocol: n/a yet
-- Location: `docker-compose.yml` (`langfuse-web`, `langfuse-worker`, and their own Postgres/ClickHouse/Redis/MinIO)
-- Authentication: project public/secret key pair, auto-provisioned on first boot
+- Purpose: tracing backend for `reimbursement`'s LangGraph decision graph (the `agent/` subpackage) — one trace per reimbursement invocation, via `agent.agent._langfuse_handlers()`
+- Data flow: `agent.decide()` passes a memoized `langchain.CallbackHandler` into `graph.ainvoke`'s `callbacks` config on every invocation; if the package is missing or the handler can't be constructed, a durable `failure_log` record (`reimbursement.langfuse_fallback`) is written instead — no invocation runs trace-less and unlogged
+- Protocol: LangFuse's LangChain callback integration (OTLP under the hood)
+- Location: `docker-compose.yml` (`langfuse-web`, `langfuse-worker`, and their own Postgres/ClickHouse/Redis/MinIO); client wiring in `packages/reimbursement/src/reimbursement/agent/agent.py`
+- Authentication: project public/secret key pair, auto-provisioned on first boot, passed to the `reimbursement` service as `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY`/`LANGFUSE_HOST`
+
+**Ollama (LLM inference):**
+
+- Type: local LLM inference service
+- Purpose: backs `reimbursement`'s agent decision graph — `extract_fields` and `analysis` nodes both bind a structured-output model to it via `init_chat_model("ollama:<model>", ...)`
+- Data flow: outbound HTTP calls from `build_graph()`'s two chat models to the Ollama server; no inbound calls into `reimbursement`
+- Protocol: HTTP (Ollama's own REST API)
+- Location: runs on the host machine, not containerized (GPU passthrough into Docker is awkward for local LLM inference) — `packages/reimbursement/src/reimbursement/config.py` (`AgentConfig.ollama_model`/`.ollama_base_url`)
+- Authentication: none (local development default)
 
 ## Background Jobs
 

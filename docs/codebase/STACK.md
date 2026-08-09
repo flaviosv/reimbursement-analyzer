@@ -44,7 +44,8 @@
 ## External Services
 
 - Kafka — message backbone between `api`, `publisher`, and `reimbursement` (detail: `INTEGRATIONS.md`).
-- LangFuse (self-hosted, v4) — intended tracing/eval backend for `reimbursement`'s LangGraph decision graph; provisioned in `docker-compose.yml` but not yet wired into any code.
+- LangFuse (self-hosted, v4) — tracing backend for `reimbursement`'s LangGraph decision graph, wired via `langchain.CallbackHandler`; falls back to durable `failure_log` records when unreachable.
+- Ollama — LLM inference for `reimbursement`'s agent decision graph; runs on the host machine (default `http://localhost:11434`), not containerized — configured via `OLLAMA_MODEL`/`OLLAMA_BASE_URL`.
 
 ## Commands
 
@@ -76,7 +77,9 @@
 | `KAFKA_BOOTSTRAP_SERVERS` | Kafka bootstrap address (`kafka:19092` inside compose, `localhost:9092` default outside it) |
 | `KAFKA_SECURITY_PROTOCOL`, `KAFKA_SASL_MECHANISM`, `KAFKA_SASL_USERNAME`, `KAFKA_SASL_PASSWORD`, `KAFKA_SSL_CA_LOCATION` | Optional Kafka SASL/TLS — unset means PLAINTEXT |
 | `AGENT_CONSUMER_GROUP_ID` | `reimbursement`'s Kafka consumer group id (var name and default `"agent"` unchanged by the package rename) |
+| `OLLAMA_MODEL` | LLM model for `reimbursement`'s agent decision graph (default `llama3.2`) |
+| `OLLAMA_BASE_URL` | Ollama service endpoint (default `http://localhost:11434`) |
 | `DATABASE_POOL_MAX_SIZE` | Shared Postgres pool's max size (default `20`) — raise this in step with `PUBLISHER_ITEM_CONCURRENCY` to avoid connection starvation under load (R-005) |
 | `LANGFUSE_POSTGRES_PASSWORD`, `SALT`, `ENCRYPTION_KEY`, `NEXTAUTH_SECRET`, `CLICKHOUSE_PASSWORD`, `REDIS_AUTH`, `MINIO_ROOT_PASSWORD`, `LANGFUSE_S3_*_SECRET_ACCESS_KEY` | LangFuse stack's own infra credentials |
-| `LANGFUSE_INIT_PROJECT_SECRET_KEY`, `LANGFUSE_INIT_USER_PASSWORD` | LangFuse first-boot bootstrap credentials; `reimbursement`'s decision graph will authenticate with the same project key pair once wired |
+| `LANGFUSE_INIT_PROJECT_SECRET_KEY`, `LANGFUSE_INIT_USER_PASSWORD` | LangFuse first-boot bootstrap credentials; `reimbursement`'s decision graph authenticates with the same project key pair (`LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY`/`LANGFUSE_HOST`, passed to the `reimbursement` service in `docker-compose.yml`) |
 | `TEST_DATABASE_URL` | Points the test suite at a supplied Postgres server instead of a throwaway container |
