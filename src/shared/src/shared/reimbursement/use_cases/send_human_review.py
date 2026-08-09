@@ -6,7 +6,7 @@ from uuid import UUID
 import asyncpg
 
 from shared.models import AttemptError
-from shared.reimbursement.repository import insert_human_review, update_human_review
+from shared.reimbursement.repository import insert_human_review, update_decision
 
 _NO_HISTORY = "Retry ceiling reached, but the message carried no error detail."
 
@@ -57,5 +57,7 @@ async def escalate_existing(
     publisher inserted it), so escalation is an UPDATE, not a fresh INSERT
     like send_human_review's. Returns None when the uuid is a ghost (R-001)
     — nothing to escalate, the caller routes to the failure log instead."""
-    updated = await update_human_review(conn, uuid, render_history(errors, max_message_chars))
+    updated = await update_decision(
+        conn, uuid, "human-review", render_history(errors, max_message_chars)
+    )
     return uuid if updated else None

@@ -16,7 +16,7 @@ from shared.reimbursement.repository import (
     is_duplicate,
     record_human_review_decision,
     reject,
-    update_human_review,
+    update_decision,
 )
 from shared.testing import (
     seed_human_review,
@@ -479,11 +479,13 @@ class DescribeGetByUuid:
         assert row is None
 
 
-class DescribeUpdateHumanReview:
+class DescribeUpdateDecision:
     async def it_returns_true_and_updates_the_existing_row(self, db: asyncpg.Connection) -> None:
         uuid = await insert_pending(db, valid_reimbursement_item("REQ-ESCALATE"))
 
-        result = await update_human_review(db, uuid, "attempt 4 [resolve] RuntimeError: db down")
+        result = await update_decision(
+            db, uuid, "human-review", "attempt 4 [resolve] RuntimeError: db down"
+        )
 
         assert result is True
         row = await db.fetchrow("SELECT * FROM reimbursement WHERE uuid = $1", uuid)
@@ -495,6 +497,6 @@ class DescribeUpdateHumanReview:
         # The compound ghost + retry>3 case (AGT-18): nothing to update, and
         # the caller must be able to tell "0 rows" from "1 row" to route to
         # the failure log instead of treating this as success.
-        result = await update_human_review(db, uuid4(), "unreachable reason")
+        result = await update_decision(db, uuid4(), "human-review", "unreachable reason")
 
         assert result is False
