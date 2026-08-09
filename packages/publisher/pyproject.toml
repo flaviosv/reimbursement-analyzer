@@ -15,14 +15,8 @@ dependencies = [
 ]
 
 [build-system]
-requires = ["setuptools"]
-build-backend = "setuptools.build_meta"
-
-# src/publisher/src holds publisher's own modules directly (no wrapping
-# package directory) — package-dir maps the "publisher" import name onto
-# that directory.
-[tool.setuptools.package-dir]
-publisher = "src"
+requires = ["uv_build>=0.12.2,<0.13.0"]
+build-backend = "uv_build"
 
 [tool.uv.sources]
 shared = { workspace = true }

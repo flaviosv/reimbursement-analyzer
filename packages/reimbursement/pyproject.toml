@@ -19,15 +19,8 @@ dependencies = [
 ]
 
 [build-system]
-requires = ["setuptools"]
-build-backend = "setuptools.build_meta"
-
-# src/reimbursement/src holds reimbursement's own modules directly (no
-# wrapping package directory) — package-dir maps the "reimbursement" import
-# name onto that directory, and setuptools' explicit-layout discovery picks
-# up the nested agent/ subpackage automatically.
-[tool.setuptools.package-dir]
-reimbursement = "src"
+requires = ["uv_build>=0.12.2,<0.13.0"]
+build-backend = "uv_build"
 
 [tool.uv.sources]
 shared = { workspace = true }

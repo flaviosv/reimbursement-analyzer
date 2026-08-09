@@ -5,7 +5,7 @@ requires-python = ">=3.14.7"
 dependencies = []
 
 [tool.uv.workspace]
-members = ["src/*"]
+members = ["packages/*"]
 
 [dependency-groups]
 dev = [
@@ -20,6 +20,7 @@ dev = [
     "httpx>=0.28.1",
     "pytest>=9.1.1",
     "testcontainers[kafka,postgres]>=4.15.0",
+    "pylint>=4.0.6",
 ]
 
 [tool.uv.sources]
@@ -31,26 +32,26 @@ reimbursement = { workspace = true }
 # api, publisher, reimbursement, shared — the whole workspace, named
 # explicitly so a tests directory added to any of them is never silently
 # uncollected. reimbursement no longer needs its own standalone
-# src/reimbursement/pyproject.toml [tool.pytest.ini_options] (AD-026 flagged
-# the risk; AD-031 records this resolution): all three services are real,
-# dotted-namespaced packages now (setuptools + package-dir), so
-# publisher.config/reimbursement.config etc. no longer collide on a shared
-# bare module name the way flat config.py/consumer.py did.
-testpaths = ["src/api", "src/publisher", "src/reimbursement", "src/shared"]
+# packages/reimbursement/pyproject.toml [tool.pytest.ini_options] (AD-026 flagged
+# the risk; AD-031 records this resolution, amended to uv_build): all three
+# services are real, dotted-namespaced packages now (uv_build, nested
+# src-layout), so publisher.config/reimbursement.config etc. no longer
+# collide on a shared bare module name the way flat config.py/consumer.py did.
+testpaths = ["packages/api", "packages/publisher", "packages/reimbursement", "packages/shared"]
 python_classes = ["Describe*"]
 python_functions = ["it_*"]
-# Sibling feature slices (src/api/tests/reimbursement/<op>/) reuse filenames
-# like test_route.py; default import-mode collides on the module name, and
-# without pythonpath each nested test file's own dir — not src/api/tests —
-# lands on sys.path, breaking `from helpers import ...`.
+# Sibling feature slices (packages/api/tests/reimbursement/<op>/) reuse
+# filenames like test_route.py; default import-mode collides on the module
+# name, and without pythonpath each nested test file's own dir — not
+# packages/api/tests — lands on sys.path, breaking `from helpers import ...`.
 # api, publisher, and reimbursement are all real installed packages now
-# (setuptools + package-dir), so none needs its own module root on this
+# (uv_build, nested src-layout), so none needs its own module root on this
 # list — only each package's tests dir does, for the same bare-name
 # `from helpers/fakes/agent_fakes import ...` reason above.
 pythonpath = [
-    "src/api/tests",
-    "src/publisher/tests",
-    "src/reimbursement/tests",
+    "packages/api/tests",
+    "packages/publisher/tests",
+    "packages/reimbursement/tests",
 ]
 addopts = "--import-mode=importlib"
 markers = [

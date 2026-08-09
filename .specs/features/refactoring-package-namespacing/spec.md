@@ -4,12 +4,38 @@
 
 `src/reimbursement` was flattened (matching `api`/`publisher`'s `package = false` pattern) as part of the `src/agent` → `src/reimbursement` rename, which reintroduced a bare-module-name collision (`config.py`, `consumer.py`) against `src/publisher` on the single shared pytest `sys.path` — the exact collision `agent-consume-reimbursement/design.md` had previously avoided by deliberately keeping `agent` an installable, namespaced package. The interim fix (a standalone nested pytest root for `reimbursement`, reaching into `api/tests/helpers.py` via `--confcutdir`) traded the collision for a worse problem: `reimbursement`'s tests now depend on `api`'s private test tree, which is not acceptable. This feature replaces both the collision and the interim fix with real Python package namespacing for `api`, `publisher`, and `reimbursement`, and consolidates the cross-package test helpers that motivated the interim fix into the shared kernel.
 
+### Amendment (2026-08-09) — AD-031's mechanism regressed IDE/static-analysis tooling
+
+AD-031 shipped (PR #8) using `setuptools` + `[tool.setuptools.package-dir]` to map each package's import name onto its existing flat `src/<pkg>/src/*.py` directory without adding a wrapping subdirectory. This fixed the pytest collision (verified, `validation.md`, PKG-01–17 all PASS) but was never checked against IDE tooling. It broke go-to-definition and autocomplete for `api`/`publisher`/`reimbursement` in every editor using Pyright-family static analysis (VS Code/Pylance, Cursor/cursorpyright), confirmed by direct `pyright` CLI runs against the shipped tree:
+
+```
+src/reimbursement/src/agent/agent.py:3  error: Import "reimbursement.schema" could not be resolved
+src/reimbursement/src/agent/agent.py:4  error: Import "reimbursement.agent.nodes" could not be resolved
+src/reimbursement/src/consumer.py:19    error: Import "reimbursement.config" could not be resolved
+src/reimbursement/src/consumer.py:20    error: Import "reimbursement.validation" could not be resolved
+```
+
+Root cause: `setuptools`' PEP 660 editable install generates a dynamic `MetaPathFinder`-based finder script (`__editable___<pkg>_finder.py`, a `MAPPING`/`NAMESPACES` dict executed at import time) to redirect the import name onto the differently-named `src` directory. Static analyzers don't execute that script — they resolve editable installs by walking directory names, so an import name that doesn't correspond to any physically-matching directory fails to resolve. `shared` (untouched by AD-031, still on `uv_build`, still using a conventional nested `src/shared/src/shared/*.py` layout) resolves cleanly, because `uv_build`'s editable install is a plain static `.pth` path, not a dynamic finder — empirically confirmed via an isolated repro (a throwaway `uv_build` package with `module-root = ""`/default `"src"` produced a plain `.pth`, and `pyright` returned 0 errors against it, versus the dynamic-finder case's `reportMissingImports`).
+
+This amendment corrects the mechanism: `api`, `publisher`, and `reimbursement` move from `setuptools` + `package-dir` remapping to `uv_build` with the same conventional nested src-layout `shared` already uses successfully — `packages/<pkg>/src/<pkg>/*.py`, import name matching a real physical directory. The workspace-member container also renames from `src/` to `packages/`, matching uv's own documented workspace example (`/astral-sh/uv`, `docs/concepts/projects/workspaces.md`, verified via Context7). No dynamic remapping remains anywhere in the workspace.
+
+Alternatives considered and rejected (surfaced and resolved in conversation, not a formal `/grill-me` session — recorded here for traceability since this is a technical/architectural correction, not a UX gray area):
+
+| Alternative | Rejected because |
+| --- | --- |
+| Keep `src/` as the outer container name, just add the inner `<pkg>/` folder (`src/reimbursement/src/reimbursement/...`) | Works and was seriously considered, but doesn't match uv's own documented workspace convention (which names the container `packages/`, not `src/`) — no reason to deviate from the documented pattern when adopting it costs nothing extra |
+| Flat layout (`packages/<pkg>/<pkg>/*.py`, no inner `src/`) via `uv_build`'s `module-root = ""` | Empirically verified to also resolve cleanly in Pyright and is one directory level shallower, but flat-layout trades away src-layout's protection against a package being importable straight out of the project directory without being properly installed — the exact class of import-resolution bug this feature already exists to fix once (PyPA's own packaging guide recommends src-layout for this reason). Not worth the tradeoff for one fewer path segment. |
+| Decouple the outer container name from the import name (e.g. `packages/reimbursement-service/src/reimbursement/...`) to avoid the repeated package name reading twice in the path | Real fix for the cosmetic "name repeats" concern, but doesn't fix anything setuptools' mechanism didn't already fix, adds a naming convention decision, and every other package in this repo (including the already-working `shared`) has the exact same repeated-name shape — rejected as unnecessary churn for a purely cosmetic, non-blocking concern |
+| Symlink + `pyrightconfig.json` `extraPaths` workaround, keeping the flat `setuptools` layout on disk | More fragile (git symlink support, Docker `COPY -L`, cross-platform), and only patches the symptom for one tool rather than fixing the underlying dynamic-finder mismatch for all static tooling | 
+
 ## Goals
 
-- [ ] `api`, `publisher`, and `reimbursement` become real, dotted-import-namespaced packages, so no two services can ever collide on a bare module name again — without reintroducing `uv_build`'s doubled `src/<pkg>/src/<pkg>/*.py` layout.
+- [ ] `api`, `publisher`, and `reimbursement` become real, dotted-import-namespaced packages, so no two services can ever collide on a bare module name again — using the same conventional nested src-layout `shared` already uses (`packages/<pkg>/src/<pkg>/*.py`), not a dynamic import-name remap.
+- [ ] Go-to-definition and autocomplete work in Pyright-family IDEs (VS Code/Pylance, Cursor/cursorpyright) for every workspace package, first- and third-party alike — verified with a direct `pyright` run, not just "tests pass."
+- [ ] The workspace-member container directory renames from `src/` to `packages/`, matching uv's own documented workspace layout.
 - [ ] The workspace returns to a single, unified `uv run pytest` invocation at the root, sharing one session-scoped Postgres testcontainer across all four packages.
-- [ ] `reimbursement` and `publisher` stop depending on `api`'s private test tree for shared test fixtures — the shared payload/seed helpers move into the shared kernel (`shared.testing`).
-- [ ] The decision is recorded in `.specs/STATE.md`, and the existing miscitation of "AD-030" in the root `pyproject.toml` comment is corrected.
+- [ ] `reimbursement` and `publisher` continue to depend only on the shared kernel (`shared.testing`) for cross-package test fixtures — already delivered by this feature's P2, unaffected in substance by this amendment, paths updated mechanically by the rename.
+- [ ] The correction is recorded in `.specs/STATE.md` as an amendment to AD-031 (not a new AD — same decision, corrected mechanism).
 
 ## Out of Scope
 
@@ -17,26 +43,29 @@ Explicitly excluded. Documented to prevent scope creep.
 
 | Feature                                                                             | Reason                                                                                                                                            |
 | ------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `shared`'s own build backend                                                         | Stays on `uv_build` with its existing doubled `src/shared/src/shared/*.py` layout — not part of the collision, no reason to touch it                |
-| `docs/codebase/CONVENTIONS.md` / `docs/codebase/TESTING.md` wording sync             | Explicitly deferred by the user to a later `architecture-evaluate` pass, matching the precedent already set for `TESTING.md`'s other known staleness |
+| `shared`'s own internal `src/shared/*.py` layout                                     | Already conventional (nested src-layout) and already resolves cleanly — only its outer container directory moves (`src/shared/` → `packages/shared/`), its internal structure is untouched |
+| Flat-layout (`packages/<pkg>/<pkg>/*.py`) or decoupled-name (`packages/<pkg>-service/src/<pkg>/*.py`) alternatives | Both considered and rejected — see Amendment table above |
+| `docs/codebase/CONVENTIONS.md` / `docs/codebase/TESTING.md` wording sync             | Explicitly deferred by the user to a later `architecture-evaluate` pass, matching the precedent already set for `TESTING.md`'s other known staleness — this amendment updates `docs/codebase/STRUCTURE.md`'s literal path references only, since those are now factually wrong, not a wording/convention sync |
 | The `shared`-kernel single-consumer tension (AD-025 / R-010)                         | Already explicitly declined by the user in `refactoring-layering/spec.md` — out of scope there and here                                             |
-| `agent-decide-reimbursement`'s decision-policy design (AD-030's actual content)      | Unrelated; this feature only fixes a stale citation of the AD-030 *number*, never touches AD-030's content                                          |
+| P2 (shared-kernel test-helper consolidation) and P3 (decision-log correction) content | Already implemented and verified (`validation.md`, PKG-10–17 all PASS) — this amendment only touches path references mechanically shifted by the rename, not their substance |
 | CI/CD pipeline setup                                                                 | No CI exists in this repo today; not being introduced as part of this fix                                                                            |
-| Reverting the `src/agent` → `src/reimbursement` directory rename                     | Already done and explicitly kept — only the internal module *structure* changes, not the directory name                                             |
+| Reverting the `src/agent` → `src/reimbursement` (now `packages/reimbursement`) rename | The package's identity/import name stays `reimbursement` — only the physical container path changes                                                |
 
 ---
 
 ## Assumptions & Open Questions
 
-Every ambiguity is resolved or recorded here — nothing is left silently unclear. All forks below were surfaced and resolved in a prior `/grill-me` session; this table records the outcomes for traceability.
+Every ambiguity is resolved or recorded here — nothing is left silently unclear. Rows above the divider are carried over from the original spec (already resolved, unaffected by this amendment); rows below are new to this amendment, resolved in conversation with the user before this spec update.
 
 | Assumption / decision                                                                                              | Chosen default                                                                                                     | Rationale                                                                                                                                                                                             | Confirmed? |
 | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
-| Collision fix mechanism: build-backend switch vs. per-package pytest isolation + container-sharing wrapper script     | Switch `api`/`publisher`/`reimbursement` to `setuptools` with `package-dir` mapping ("Option B")                       | Preserves the single-shared-Postgres-container architecture with zero new test-orchestration tooling; `uv_build` cannot decouple an import name from a same-named directory even with `namespace = true` (verified against its Rust source via Context7) | y          |
-| Scope of the namespacing fix: `reimbursement` only vs. project-wide (`api`/`publisher` too)                            | Project-wide — `api` and `publisher` also switch to `setuptools`                                                       | User's stated principle ("each package isolated with the possibility of having collision filenames") is general, not reimbursement-specific                                                          | y          |
-| `shared`'s build backend                                                                                              | Left untouched on `uv_build`                                                                                            | Not part of the collision; touching it is unrelated churn                                                                                                                                              | y          |
-| Destination module for the relocated DB-provisioning utilities (`POSTGRES_IMAGE`, `disposable_database_name`, etc.)   | `shared/testing.py` (same file as the relocated seed helpers), broadening its documented scope beyond "test doubles for a shared contract" | Avoids introducing a second test-support module inside `shared` where one sanctioned location (`shared/testing.py`) already exists; the scope-broadening is exactly the `CONVENTIONS.md` change the user pre-authorized | n — delegated to agent per user ("we can change the conventions if needed") |
+| Scope of the namespacing fix: `reimbursement` only vs. project-wide (`api`/`publisher` too)                            | Project-wide — `api` and `publisher` also switch build backend                                                       | User's stated principle ("each package isolated with the possibility of having collision filenames") is general, not reimbursement-specific                                                          | y          |
+| Destination module for the relocated DB-provisioning utilities (`POSTGRES_IMAGE`, `disposable_database_name`, etc.)   | `shared/testing.py`                                                                                                     | Already delivered (P2) — unaffected by this amendment                                                                                                                                                   | y          |
 | Documentation sync timing (`CONVENTIONS.md`, `TESTING.md`)                                                            | Deferred to a later `architecture-evaluate` pass                                                                        | Explicit user instruction: "update the documentation when reaches the moment"                                                                                                                        | y          |
+| **Collision fix mechanism (superseded)**: build-backend switch to `setuptools` + `package-dir` remap ("Option B")     | **Superseded by this amendment** — switch to `uv_build` with conventional nested src-layout instead                    | `setuptools`' `package-dir` remap produces a dynamic PEP 660 finder that static analyzers can't resolve; `uv_build`'s plain-`.pth` editable install (already proven working via `shared`) has no such problem | y          |
+| Outer workspace-member container name: keep `src/` vs. rename to `packages/`                                          | Rename to `packages/`                                                                                                   | Matches uv's own documented workspace example exactly (verified via Context7); removes any ambiguity about whether `src/` refers to the workspace container or a package's own src-layout             | y          |
+| Per-package internal layout: flat (`packages/<pkg>/<pkg>/`) vs. nested src-layout (`packages/<pkg>/src/<pkg>/`)        | Nested src-layout, matching `shared`                                                                                    | Flat-layout was empirically verified to also work but trades away src-layout's protection against accidental uninstalled-package imports; not worth it for one fewer path segment, per PyPA's own guidance for "serious projects" | y          |
+| AD-031 amendment vs. new AD number                                                                                     | Amend AD-031 in place (add a correction note), not a new AD                                                             | Same underlying decision ("namespace api/publisher/reimbursement"); only the *mechanism* changed, which is what an amendment is for                                                                    | y          |
 
 **Open questions:** none — all resolved or logged above.
 
@@ -44,68 +73,58 @@ Every ambiguity is resolved or recorded here — nothing is left silently unclea
 
 ## User Stories
 
-### P1: Real package namespacing eliminates the module collision ⭐ MVP
+### P1: Real, statically-resolvable package namespacing eliminates the module collision ⭐ MVP
 
-**User Story**: As a developer running the test suite, I want `api`, `publisher`, and `reimbursement` to be real, dotted-import-namespaced packages, so that `uv run pytest` at the workspace root runs every package's tests in one session without `ImportError`s from colliding bare module names — today or for any future service.
+**User Story**: As a developer running the test suite *and* working in an IDE, I want `api`, `publisher`, and `reimbursement` to be real, dotted-import-namespaced packages using a conventional layout, so that `uv run pytest` at the workspace root runs every package's tests in one session with no `ImportError`s from colliding bare module names, **and** go-to-definition/autocomplete work for every package in Pyright-family editors.
 
-**Why P1**: This is the actual bug. Nothing else in this feature matters if the suite still can't run unified.
+**Why P1**: This is the actual bug, corrected. The original mechanism fixed the test collision but broke IDE tooling — both halves matter; neither is optional.
 
 **Acceptance Criteria**:
 
-1. WHEN `src/api/pyproject.toml`, `src/publisher/pyproject.toml`, and `src/reimbursement/pyproject.toml` are inspected THEN each SHALL declare `setuptools` as its build backend with a `[tool.setuptools.package-dir]` entry mapping the package name to its existing `src` directory, with no new subdirectory created.
+1. WHEN `packages/api/pyproject.toml`, `packages/publisher/pyproject.toml`, and `packages/reimbursement/pyproject.toml` are inspected THEN each SHALL declare `uv_build` as its build backend, with no `[tool.setuptools.package-dir]` or any other import-name remap present anywhere in the workspace.
 2. WHEN any module inside `api`, `publisher`, or `reimbursement` is imported (production or test code) THEN it SHALL be imported via its package-qualified dotted name (e.g. `from api.config import ...`), never a bare top-level name.
-3. WHEN `src/api`, `src/publisher`, `src/reimbursement` are inspected on disk THEN their module files SHALL remain at `src/<pkg>/src/*.py` — flat, single `src` level, no wrapping `src/<pkg>/src/<pkg>/` directory.
-4. WHEN `uv run pytest` is invoked once at the workspace root with no path arguments THEN it SHALL collect and execute tests from `src/api`, `src/publisher`, `src/reimbursement`, and `src/shared` in one pytest session, sharing one session-scoped Postgres testcontainer from the root `conftest.py`.
+3. WHEN `packages/api`, `packages/publisher`, `packages/reimbursement` are inspected on disk THEN their module files SHALL live at the conventional nested src-layout `packages/<pkg>/src/<pkg>/*.py` — the same shape `packages/shared/src/shared/*.py` already uses.
+4. WHEN `uv run pytest` is invoked once at the workspace root with no path arguments THEN it SHALL collect and execute tests from `packages/api`, `packages/publisher`, `packages/reimbursement`, and `packages/shared` in one pytest session, sharing one session-scoped Postgres testcontainer from the root `conftest.py`.
 5. WHEN a package's own `tests/` directory contains a bare-name-imported test-support module (e.g. `fakes.py`, `agent_fakes.py`) THEN the root `pyproject.toml`'s `pythonpath` config SHALL continue to include that package's own `tests/` directory so those imports keep resolving.
-6. WHEN each service's Docker image is built and started THEN its entrypoint SHALL use the dotted module path (`api.main:app` for the uvicorn ASGI target; `python -m publisher.consumer`; `python -m reimbursement.consumer`), and the container SHALL start and serve/consume successfully.
-7. WHEN `api`'s migration runner resolves its migrations directory THEN it SHALL use `importlib.resources.files("api")`, not a `Path(__file__).parent`-based lookup.
-8. WHEN `src/reimbursement/pyproject.toml` is inspected THEN it SHALL NOT contain a standalone `[tool.pytest.ini_options]` block, `pythonpath` override, or `--confcutdir` addopt — `reimbursement` participates in the single root pytest config only.
-9. WHEN `src/reimbursement`'s directory name and `shared`'s `pyproject.toml` are inspected THEN the directory SHALL remain named `reimbursement` (not reverted to `agent`), and `shared`'s `pyproject.toml` SHALL be unchanged (`uv_build` still declared).
+6. WHEN each service's Docker image is built and started THEN its entrypoint SHALL use the dotted module path (`api.main:app` for the uvicorn ASGI target; `python -m publisher.consumer`; `python -m reimbursement.consumer`), and the container SHALL start and serve/consume successfully, with every `COPY`/bind-mount path in its Dockerfile and `docker-compose.yml` updated to `packages/...`.
+7. WHEN `api`'s migration runner resolves its migrations directory THEN it SHALL use `importlib.resources.files("api")`, not a `Path(__file__).parent`-based lookup (unaffected by this amendment — already correct).
+8. WHEN `packages/reimbursement/pyproject.toml` is inspected THEN it SHALL NOT contain a standalone `[tool.pytest.ini_options]` block, `pythonpath` override, or `--confcutdir` addopt — `reimbursement` participates in the single root pytest config only.
+9. WHEN the workspace root is inspected THEN there SHALL be no `src/` directory remaining — `pyproject.toml`'s `[tool.uv.workspace] members`, `testpaths`, and `pythonpath` SHALL all reference `packages/*`; `.gitignore`'s whitelist SHALL reference `!packages`/`!packages/**` instead of `!src`/`!src/**`.
+10. WHEN `packages/reimbursement/pyproject.toml` and `packages/reimbursement`'s directory name are inspected THEN the package SHALL remain named/importable as `reimbursement` (not reverted to `agent`).
+11. WHEN `packages/reimbursement/src/agent/agent.py` (or the equivalent file in `api`/`publisher`) is checked with `pyright` (pointed at the workspace `.venv`) THEN it SHALL report zero `reportMissingImports` errors for any first-party (`api`/`publisher`/`reimbursement`/`shared`) or third-party (e.g. `langgraph`) import.
 
-**Independent Test**: From a clean checkout, run `uv sync && uv run pytest` at the workspace root and confirm all four packages' tests collect and pass in one session with no `ImportError`. Then `docker compose up` and confirm every service starts and serves/consumes.
-
----
-
-### P2: Shared-kernel test-helper consolidation
-
-**User Story**: As a developer, I want `publisher` and `reimbursement`'s test suites to depend only on the shared kernel for cross-service test fixtures, so that no service's tests reach into another service's private test tree.
-
-**Why P2**: This was the concrete complaint that started the fix ("reimbursement will depend on the tests from api, and that's not happen") — P1 makes the suite *runnable*, P2 makes the dependency direction correct.
-
-**Acceptance Criteria**:
-
-1. WHEN `publisher`'s or `reimbursement`'s `test_integration.py` needs the canonical reimbursement-creation payload builder THEN it SHALL import `valid_reimbursement_item` from `shared.testing`, not from `api`'s test tree.
-2. WHEN `api`'s own tests need `valid_reimbursement_item` or the seed helpers (`seed_reimbursement`, `seed_reimbursement_with_receipts`, `seed_human_review`) THEN they SHALL also import them from `shared.testing` — no duplicate definitions SHALL remain in `src/api/tests/helpers.py`.
-3. WHEN `shared.testing`'s seed helpers are called with an `original_payload` override THEN the reconciled signature SHALL preserve that parameter (no loss of `api/tests/helpers.py`'s current capability during consolidation).
-4. WHEN the workspace-root `conftest.py` resolves its Postgres-provisioning utilities (`POSTGRES_IMAGE`, `MAINTENANCE_DATABASE`, `disposable_database_name`, `guard_is_test_database`, `maintenance_url`, `with_database`, `database_name`) THEN it SHALL import them from `shared.testing` via a normal package import, not `pythonpath` bare-name resolution into `api`'s test tree.
-5. WHEN the root `conftest.py`'s migration-runner import (`migrate.py` / `apply_migrations`) is inspected THEN it SHALL remain resolved from `api`'s own tree, unchanged — migrations stay `api`-owned, not moved to `shared`.
-6. WHEN `api`'s service-specific test fakes (`FakePool`, `_build_client`, `valid_approve_payload`, `valid_reject_payload`) are inspected THEN they SHALL remain local to `src/api/tests/helpers.py`, unmoved.
-
-**Independent Test**: `grep` for `from helpers import` across `src/publisher/tests` and `src/reimbursement/tests` returns nothing; `uv run pytest src/api src/publisher src/reimbursement src/shared` passes.
+**Independent Test**: From a clean checkout, run `uv sync && uv run pytest` at the workspace root and confirm all four packages' tests collect and pass in one session with no `ImportError`. Then `docker compose up` and confirm every service starts and serves/consumes. Then run `pyright` against each package's entry module and confirm 0 `reportMissingImports` errors.
 
 ---
 
-### P3: Decision log correction
+### P2: Shared-kernel test-helper consolidation *(already delivered — unaffected in substance)*
 
-**User Story**: As a maintainer reading `.specs/STATE.md`, I want this fix recorded as its own decision, and the existing stale "AD-030" citation fixed, so the decision log stays trustworthy.
+Delivered and verified in the original implementation (`validation.md`, PKG-10–15, all PASS). This amendment's directory rename shifts file *paths* (e.g. `src/publisher/tests/test_integration.py` → `packages/publisher/tests/test_integration.py`) but does not change any import statement, helper signature, or dependency direction established by P2. No new acceptance criteria — re-verified as part of this amendment's gate (full `uv run pytest` run) rather than re-specified.
 
-**Why P3**: Housekeeping — doesn't block the fix working, but leaving the log wrong actively misleads future readers.
+---
+
+### P3: Decision log correction *(amended, not re-done)*
+
+**User Story**: As a maintainer reading `.specs/STATE.md`, I want AD-031 amended in place to reflect the corrected mechanism, so the decision log stays trustworthy and doesn't read as if the original `setuptools`/`package-dir` approach is still current.
+
+**Why P3**: Housekeeping — doesn't block the fix working, but leaving the log describing a superseded mechanism actively misleads future readers.
 
 **Acceptance Criteria**:
 
-1. WHEN `.specs/STATE.md` is inspected THEN it SHALL contain a new AD (next sequential number) documenting the `uv_build` → `setuptools` switch for `api`/`publisher`/`reimbursement` and the shared-kernel test-helper consolidation, including rationale and the rejected alternatives (doubled-path revert, pytest-only isolation).
-2. WHEN the root `pyproject.toml`'s `[tool.pytest.ini_options]` comment is inspected THEN it SHALL NOT cite "AD-030" for the pytest-isolation resolution — it SHALL cite the correct new AD number.
+1. WHEN `.specs/STATE.md`'s AD-031 entry is inspected THEN it SHALL contain an amendment note (not a new AD number) documenting the `setuptools` → `uv_build` correction, the IDE-tooling root cause, and the rejected alternatives from this spec's Amendment section.
+2. WHEN the root `pyproject.toml`'s `[tool.pytest.ini_options]` comment is inspected THEN it SHALL continue to cite AD-031 (unchanged — the original correction to the stale "AD-030" citation already holds).
 
-**Independent Test**: `grep -n "AD-030" pyproject.toml` returns nothing; the new AD number appears in both `STATE.md` and the `pyproject.toml` comment.
+**Independent Test**: `.specs/STATE.md`'s AD-031 section contains both the original decision and the amendment note, in one place.
 
 ---
 
 ## Edge Cases
 
-- WHEN `uv sync` is run after the build-backend switch THEN `uv.lock` SHALL regenerate cleanly with `setuptools` resolved for the three affected members, with no dependency-resolution errors.
-- WHEN `docker-compose.yml` and each service's Dockerfile are inspected THEN every entrypoint/CMD SHALL use the dotted-module form — none SHALL reference the old bare entrypoints (`python -m consumer`, bare `main:app`).
+- WHEN `uv sync` is run after the build-backend switch THEN `uv.lock` SHALL regenerate cleanly with `uv_build` resolved for the three affected members, with no dependency-resolution errors.
+- WHEN `docker-compose.yml` and each service's Dockerfile are inspected THEN every path SHALL reference `packages/...`, and every entrypoint/CMD SHALL use the dotted-module form — none SHALL reference `src/...` or bare entrypoints.
+- WHEN `docs/codebase/STRUCTURE.md` (and any other doc with literal `src/<pkg>` path references) is inspected THEN it SHALL reference `packages/<pkg>` instead — a mechanical path correction, distinct from the wording/convention sync explicitly deferred in Out of Scope.
 - WHEN the test suite is run against a freshly cloned checkout (`uv sync` then `uv run pytest`, Docker running) THEN it SHALL pass with no manual environment setup beyond Docker being available for the Postgres testcontainer.
-- WHEN `reimbursement`'s own `agent.py` submodule (the LangGraph agent definition) is imported THEN it SHALL resolve as `reimbursement.agent`, distinct from the top-level `reimbursement` package itself, with no import ambiguity.
+- WHEN `reimbursement`'s own `agent` submodule (the LangGraph agent definition) is imported THEN it SHALL resolve as `reimbursement.agent`, distinct from the top-level `reimbursement` package itself, with no import ambiguity.
 
 ---
 
@@ -113,36 +132,33 @@ Every ambiguity is resolved or recorded here — nothing is left silently unclea
 
 | Requirement ID | Story                                    | Phase  | Status  |
 | --------------- | ----------------------------------------- | ------ | ------- |
-| PKG-01          | P1: Real package namespacing              | Design | Pending |
-| PKG-02          | P1: Real package namespacing              | Design | Pending |
-| PKG-03          | P1: Real package namespacing              | Design | Pending |
-| PKG-04          | P1: Real package namespacing              | Design | Pending |
-| PKG-05          | P1: Real package namespacing              | Design | Pending |
-| PKG-06          | P1: Real package namespacing              | Design | Pending |
-| PKG-07          | P1: Real package namespacing              | Design | Pending |
-| PKG-08          | P1: Real package namespacing              | Design | Pending |
-| PKG-09          | P1: Real package namespacing              | Design | Pending |
-| PKG-10          | P2: Shared-kernel helper consolidation    | Design | Pending |
-| PKG-11          | P2: Shared-kernel helper consolidation    | Design | Pending |
-| PKG-12          | P2: Shared-kernel helper consolidation    | Design | Pending |
-| PKG-13          | P2: Shared-kernel helper consolidation    | Design | Pending |
-| PKG-14          | P2: Shared-kernel helper consolidation    | Design | Pending |
-| PKG-15          | P2: Shared-kernel helper consolidation    | Design | Pending |
-| PKG-16          | P3: Decision log correction               | Design | Pending |
-| PKG-17          | P3: Decision log correction               | Design | Pending |
+| PKG-01          | P1: Real package namespacing (corrected)  | Design | Pending |
+| PKG-02          | P1: Real package namespacing (corrected)  | Design | Pending |
+| PKG-03          | P1: Real package namespacing (corrected)  | Design | Pending |
+| PKG-04          | P1: Real package namespacing (corrected)  | Design | Pending |
+| PKG-05          | P1: Real package namespacing (corrected)  | Design | Pending |
+| PKG-06          | P1: Real package namespacing (corrected)  | Design | Pending |
+| PKG-07          | P1: Real package namespacing (corrected)  | Design | Verified (unaffected) |
+| PKG-08          | P1: Real package namespacing (corrected)  | Design | Pending |
+| PKG-09          | P1: Real package namespacing (corrected)  | Design | Pending |
+| PKG-10          | P1: Real package namespacing (corrected)  | Design | Pending |
+| PKG-11          | P1: Real package namespacing (corrected)  | Design | Pending — new, IDE resolvability |
+| PKG-12–17       | P2: Shared-kernel helper consolidation    | -      | Verified (already delivered, paths re-verified in this amendment's gate) |
+| PKG-18          | P3: Decision log correction (amendment)   | Design | Pending |
+| PKG-19          | P3: Decision log correction (amendment)   | -      | Verified (unaffected) |
 
 **ID format:** `PKG-[NUMBER]`
 
 **Status values:** Pending → In Design → In Tasks → Implementing → Verified
 
-**Coverage:** 17 total, 0 mapped to tasks, 17 unmapped ⚠️ (Tasks phase maps these next)
+**Coverage:** 19 total, 0 mapped to tasks (this amendment), 11 net-new/changed, 8 already-verified-and-unaffected — Tasks phase maps the 11 next
 
 ---
 
 ## Success Criteria
 
 - [ ] `uv run pytest` at the workspace root (no path arguments) passes for all four packages in one session, using one Postgres testcontainer.
-- [ ] `grep -rn "package = false"` across `src/api`, `src/publisher`, `src/reimbursement`'s `pyproject.toml` files returns nothing.
-- [ ] `grep -rn "from helpers import"` across `src/publisher/tests` and `src/reimbursement/tests` returns nothing.
-- [ ] `docker compose up` starts `api`, `publisher`, and `reimbursement` successfully with their new dotted entrypoints.
-- [ ] `.specs/STATE.md` contains the new AD; `pyproject.toml`'s comment no longer cites "AD-030".
+- [ ] `grep -rn "package-dir"` across `packages/api`, `packages/publisher`, `packages/reimbursement`'s `pyproject.toml` files returns nothing.
+- [ ] `pyright` (pointed at `.venv`) reports 0 `reportMissingImports` against `packages/reimbursement/src/reimbursement/agent/agent.py`, and the equivalent entry modules for `api`/`publisher`.
+- [ ] No `src/` directory remains at the workspace root; `docker compose up` starts `api`, `publisher`, and `reimbursement` successfully from `packages/...` paths.
+- [ ] `.specs/STATE.md`'s AD-031 entry contains the amendment note.

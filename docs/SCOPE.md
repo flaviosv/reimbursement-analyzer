@@ -255,11 +255,20 @@
 ### Reject
 
 - If `Receipt Date`is older than 90 days, instantly reject
+  (this rule always wins — it is evaluated first, ahead of the `>2000`
+  mandatory human-review rule below, so an old *and* large receipt is
+  rejected, not routed to human review — see AD-030 in .specs/STATE.md)
 
 ### Auto-Approved
 
 #### Deterministic layer
 - If the payload matches the sample and the minimum required fields are there, move to the deterministic layer, if the required fields to create a minimum Reimbursement entity are not detectable, move to the Probabilistic Layer
+  (amended — this conditional branching is superseded: the Probabilistic
+  layer's extraction step below now runs unconditionally, on every
+  Reimbursement, before this deterministic check — not gated behind field
+  absence. The deterministic layer instead validates completeness and
+  applies the policy thresholds against the extraction step's output — see
+  AD-030 in .specs/STATE.md)
 - Minimum required fields (for correct traceability and reimbursement processing)
     - Request ID
     - Submited By
@@ -267,15 +276,32 @@
     - Submited Date
     - Currency
         - Hardcoded as BRL as the `claimed_amount_brl` would be present
+          (amended — `claimed_amount_brl` being present no longer skips
+          the extraction step below; currency is resolved through that
+          same unconditional step, still fixed to BRL — see AD-030)
 
 #### Probabilistic layer
 - an LLM / SLM must evaluate, by the sent payload, if there are enough data to create a `Reimbursement` entity, returning as json via structured output. 
+  (amended — this extraction step runs first and unconditionally on every
+  Reimbursement, not only when the deterministic layer can't detect
+  required fields. Its internal composition — whether it pre-fills a
+  minimum object from directly-readable fields like `claimed_amount_brl`
+  before calling the LLM, or resolves everything through the LLM in one
+  pass — is intentionally left open, a Design-phase decision — see AD-030)
 - To avoid mistakes by the LLM, do not rely on it to determine if it's auto-approved or rejected. If it doesn't return the enough data to create the `Reimbursement`, move to `Human Review`
 - Find out a reasonable LLM size for it, a big model might not be necessary in here, consider SLM to reduce the cost
 - One prompt per `Reimbursement`, to prevent LLM from hallucinating
+  (clarified — one prompt per extraction call: the extraction step resolves
+  value, currency, and receipt date together in a single call, not batched
+  across Reimbursements. A second, separate call — the guardrail/judge
+  below — is its own single prompt, invoked only for the ambiguous
+  `200 < value ≤ 2000` zone — see AD-030)
 - (?) Add guardrails in order to validate if the data present in the payload is not contraditory internally, i.e
     - if the `claimed_category` doesn't match the Type of the business by name in `raw_ocr_text`
     - If there are more than one reference to the fields to be found detailed below
+  (the specific guardrail checks are intentionally left undetermined — this
+  scope only requires that a consistency-check step exists and gates
+  ambiguous-zone auto-approval; see `.specs/features/agent-decide-reimbursement/spec.md`)
 - Fields to be found 
     - Receipts Date
     - Receipts Value
@@ -283,12 +309,19 @@
 - If any the values are found, rely on the deterministic layer to auto approve or reject
     - Use LLM as Judge to verify if the found data matches what is expected to create the Reimbursement
 - If none of the values are found, send instantly to `Human Review`
-- 
+  (clarified — this applies per-field: an unresolved requested value or an
+  unresolved receipt date each independently route to `Human Review` rather
+  than being auto-approved or auto-rejected on missing data — see
+  `.specs/features/agent-decide-reimbursement/spec.md`)
 
 ### Human review
 - `Requested Value > 2000` must go immediately to `Human Review`
     - `Receipt Date` must be newer than 90 days
 - Run a LLM check using a cheap and fast model help out the human review, adding a side note with the LLM output
+  (whether every `Human Review` outcome gets an LLM-generated note, or only
+  this `>2000` case, is deferred alongside the error-handling mechanism
+  below — cost-sensitive, evaluated in a later session — see AD-030 and
+  R-011 in .specs/STATE.md / .specs/RISKS.md)
 
 ### Error Handling
 
@@ -296,6 +329,12 @@
     - Try to create the `Reimbursement` with `Human Review` status
     - Fallback to log the error in a file if fails
 - If any error happens, rollback any DB transactions and republish incrementing the `retry`
+  (amended — for the decision stage specifically, this retry-then-escalate
+  mechanism is not yet adopted as-is: retrying a billed LLM call is not
+  free like retrying a DB query, so the exact mechanism is deferred to a
+  later, cost-aware evaluation — tracked as R-011 in .specs/RISKS.md. This
+  section's mechanism still governs the resolve stage
+  (`agent-consume-reimbursement`, already shipped) unchanged)
 
 ## Audit
 
@@ -365,6 +404,7 @@
 
 - Adding failures to the log is an ultimate resource and must be monitores by tools such as fluentd
 - The solutions started to become more complex than i could follow up, so i decided to run a round simplyfing the implementatin if applicable
+- A probabilistic layer was added prior to everything to extract fields, as the Recipet Date is not clear and must be extract from some place in order to reject comparing to the submited_by, initially a deterministic layer would be in place to avoid unnecessary tokens, now an node before everthing to filter the data will be in place
 
 # Phase 2
 - Human Review Evaluator
