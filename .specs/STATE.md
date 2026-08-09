@@ -1045,6 +1045,68 @@ shared-Postgres-testcontainer architecture with zero new test-orchestration
 tooling. `uv run pytest` at the workspace root runs all four packages
 together again — 447 tests passed, the actual proof the collision is gone.
 
+**Amendment (2026-08-09) — mechanism corrected: `setuptools`/`package-dir` → `uv_build`.**
+The resolution above fixed the pytest collision but was never checked
+against IDE/static-analysis tooling. It broke go-to-definition and
+autocomplete for `api`/`publisher`/`reimbursement` in every
+Pyright-family editor (VS Code/Pylance, Cursor/cursorpyright), confirmed
+via direct `pyright` CLI runs against the shipped tree
+(`reportMissingImports` on `reimbursement.schema`,
+`reimbursement.agent.nodes`, `reimbursement.config`, etc.).
+
+Root cause: `setuptools`' PEP 660 editable install generates a dynamic
+`MetaPathFinder`-based finder script (`__editable___<pkg>_finder.py`, a
+`MAPPING`/`NAMESPACES` dict executed at import time) to redirect the
+import name onto the differently-named `src` directory. Static analyzers
+don't execute that script — they resolve editable installs by walking
+directory names, so an import name with no physically-matching directory
+fails to resolve. `shared` (never touched by the original AD-031, always
+on `uv_build`, always using a nested `src/shared/src/shared/*.py` layout)
+resolved cleanly throughout, because `uv_build`'s editable install is a
+plain static `.pth` path, not a dynamic finder — empirically confirmed via
+an isolated repro (a throwaway `uv_build` package produced a plain `.pth`
+and 0 `pyright` errors, versus the dynamic-finder case's
+`reportMissingImports`).
+
+Corrected mechanism: `api`, `publisher`, and `reimbursement` move from
+`setuptools`+`package-dir` to `uv_build`, adopting the same conventional
+nested src-layout `shared` already used successfully —
+`packages/<pkg>/src/<pkg>/*.py`, import name matching a real physical
+directory. The workspace-member container also renamed from `src/` to
+`packages/`, matching uv's own documented workspace example
+(`/astral-sh/uv`, `docs/concepts/projects/workspaces.md`, verified via
+Context7). No dynamic remapping remains anywhere in the workspace.
+
+Rejected alternatives:
+1. Keep `src/` as the outer container name, just add the inner `<pkg>/`
+   folder (`src/reimbursement/src/reimbursement/...`) — works, but doesn't
+   match uv's own documented workspace convention (`packages/`, not
+   `src/`); no reason to deviate when adopting the documented pattern
+   costs nothing extra.
+2. Flat layout (`packages/<pkg>/<pkg>/*.py`, no inner `src/`) via
+   `uv_build`'s `module-root = ""` — empirically also resolves cleanly in
+   Pyright and is one directory level shallower, but trades away
+   src-layout's protection against a package being importable straight out
+   of the project directory without being properly installed — the exact
+   class of bug this feature exists to fix once. Not worth the tradeoff
+   for one fewer path segment.
+3. Symlink + `pyrightconfig.json` `extraPaths` workaround, keeping the
+   flat `setuptools` layout on disk — more fragile (git symlink support,
+   Docker `COPY -L`, cross-platform) and only patches the symptom for one
+   tool rather than fixing the underlying dynamic-finder mismatch for all
+   static tooling.
+
+**Practical effect (amendment):** `src/` renamed to `packages/` repo-wide;
+root `pyproject.toml`'s `testpaths`/`pythonpath`/workspace `members` now
+read `packages/...`; `docker-compose.yml`, all three service Dockerfiles,
+and `docs/codebase/*.md` updated to match. `uv run pytest` — 447 passed,
+same count as before. `pyright` against all four packages' entry modules
+(`api/main.py`, `publisher/consumer.py`, `reimbursement/agent/agent.py`,
+`shared/testing.py`) — 0 `reportMissingImports`, confirming the IDE
+regression is resolved. `docker compose up -d api publisher reimbursement`
+— all three healthy, full `api → publisher → reimbursement` message chain
+verified end-to-end via a live smoke POST.
+
 ---
 
 ## Handoff
