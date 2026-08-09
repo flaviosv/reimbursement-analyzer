@@ -9,6 +9,22 @@ from reimbursement.config import load_agent_config
 
 
 @pytest.fixture(autouse=True)
+def _default_agent_ai_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    # AgentConfig now requires GROQ_API_KEY/EXTRACT_FIELDS_MODEL_NAME/
+    # ANALYSIS_MODEL_NAME (AD-032) — every test that transitively calls
+    # load_agent_config() (most of this package, via agent.py/validation.py)
+    # would otherwise fail regardless of what it's actually testing. Sets
+    # all six vars to deterministic placeholders; a fail-fast test overrides
+    # via monkeypatch.delenv on the one var it cares about.
+    monkeypatch.setenv("GROQ_API_KEY", "gsk_test_placeholder")
+    monkeypatch.setenv("EXTRACT_FIELDS_MODEL_NAME", "llama-3.3-70b-versatile")
+    monkeypatch.setenv("ANALYSIS_MODEL_NAME", "llama-3.3-70b-versatile")
+    monkeypatch.setenv("AI_TIMEOUT_SECONDS", "30.0")
+    monkeypatch.setenv("EXTRACT_FIELDS_TEMPERATURE", "0.0")
+    monkeypatch.setenv("ANALYSIS_TEMPERATURE", "0.0")
+
+
+@pytest.fixture(autouse=True)
 def _clear_config_cache() -> None:
     # Both load_config() and load_agent_config() are @lru_cache'd for
     # production (read env once, reuse forever) — without this, whichever
