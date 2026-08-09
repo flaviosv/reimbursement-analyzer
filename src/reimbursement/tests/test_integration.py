@@ -1,15 +1,25 @@
 import asyncio
 import time
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
 import asyncpg
 import pytest
+from agent_fakes import FakeStructuredModel
+import reimbursement.agent.agent as agent_module
+from reimbursement.agent.nodes.analysis import Analysis
+from reimbursement.agent.nodes.apply_agent_decision import ApplyAgentDecision
+from reimbursement.agent.nodes.apply_policies import ApplyPolicies
+from reimbursement.agent.nodes.extract_fields import ExtractedFieldsSchema, ExtractFields
+from reimbursement.agent.nodes.validate import Validate
+from reimbursement.agent.prompts.analysis import PLACEHOLDER_PROMPT as ANALYSIS_PROMPT
+from reimbursement.agent.prompts.extract_fields import PLACEHOLDER_PROMPT as EXTRACT_FIELDS_PROMPT
 from reimbursement.config import AgentConfig, load_agent_config
 from reimbursement.consumer import managed_consumer, run
 from reimbursement.validation import (
+    DECIDED_EVENT,
     GHOST_DROPPED_EVENT,
     RESOLVED_EVENT,
     STALE_IGNORED_EVENT,
@@ -22,6 +32,7 @@ from shared.db import managed_pool
 from shared.models import ReimbursementEnvelope
 from shared.producer import managed_producer, publish
 from shared.reimbursement.repository import insert_pending
+from shared.reimbursement.use_cases.apply_decision import apply_decision
 
 pytestmark = [pytest.mark.integration, pytest.mark.anyio]
 
@@ -124,6 +135,17 @@ class DescribeTheEndToEndRoundTrip:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         monkeypatch.setenv("KAFKA_BOOTSTRAP_SERVERS", kafka_bootstrap_server)
+
+        # T14 wired agent.decide() into this same RESOLVED path -- stubbed
+        # here so this test keeps proving only what it always proved (the
+        # resolve branch is reached and logged, no DB side effect from the
+        # resolve stage itself). The decision graph's own real, end-to-end
+        # DB write is what DescribeTheDecisionGraph below proves.
+        async def _stub_decide(reimbursement: object, conn: object) -> dict[str, object]:
+            return {"status": "auto-approved", "decision_reason": "stub", "persisted": True}
+
+        monkeypatch.setattr(agent_module, "decide", _stub_decide)
+
         config, agent = _config()
         uuid = await _insert_row(migrated_db, "AGENT-E2E-RESOLVED")
         envelope = ReimbursementEnvelope(uuid=uuid, retry=0, published_at=datetime.now(UTC))
@@ -195,3 +217,62 @@ class DescribeTheEndToEndRoundTrip:
         row = await _row(migrated_db, uuid)
         assert row["status"] == "human-review"
         assert row["decision_reason"] is not None
+
+
+class DescribeTheDecisionGraph:
+    """T15: the real decision graph, exercised end to end against real
+    Postgres and Kafka -- only the two Ollama-bound models are faked (via
+    build_graph's own dependency points), so no real network call to
+    Ollama ever happens. `apply_policies`/`apply_agent_decision` call the
+    real `apply_decision` use case, which is what proves the row's
+    `status`/`decision_reason` actually landed."""
+
+    async def it_writes_an_auto_approved_status_and_reason_for_a_fresh_low_value_item(
+        self,
+        kafka_bootstrap_server: str,
+        migrated_db: str,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("KAFKA_BOOTSTRAP_SERVERS", kafka_bootstrap_server)
+        config, agent = _config()
+        uuid = await _insert_row(migrated_db, "AGENT-E2E-DECIDED")
+
+        # submitted_at is valid_reimbursement_item's fixed "2026-01-01
+        # T12:00:00Z" -- same-day receipts_date is 0 days old, well inside
+        # the 90-day reject window, and value=150 clears the <=200 ceiling:
+        # apply_policies alone decides and persists, analysis never runs.
+        extract_model = FakeStructuredModel(
+            result=ExtractedFieldsSchema(value=150.0, currency="BRL", receipts_date=date(2026, 1, 1))
+        )
+        analysis_model = FakeStructuredModel(
+            error=AssertionError("analysis/Ollama must not be invoked for a <=200 item")
+        )
+
+        def _fake_build_graph() -> object:
+            nodes = {
+                "extract_fields": ExtractFields(model=extract_model, prompt=EXTRACT_FIELDS_PROMPT),
+                "validate": Validate(),
+                "apply_policies": ApplyPolicies(apply_decision=apply_decision),
+                "analysis": Analysis(model=analysis_model, prompt=ANALYSIS_PROMPT),
+                "apply_agent_decision": ApplyAgentDecision(apply_decision=apply_decision),
+            }
+            return agent_module._wire(nodes)
+
+        monkeypatch.setattr(agent_module, "build_graph", _fake_build_graph)
+
+        envelope = ReimbursementEnvelope(uuid=uuid, retry=0, published_at=datetime.now(UTC))
+        await _produce(config, envelope)
+
+        with caplog.at_level("INFO"):
+            await _run_agent(config, agent, migrated_db, expected_advance=1)
+
+        row = await _row(migrated_db, uuid)
+        assert row["status"] == "auto-approved"
+        assert row["decision_reason"] is not None
+        # No real Ollama call: the fake extraction model was invoked
+        # exactly once (in-process, no network), and the analysis model
+        # (which would raise if ever invoked) was never called at all.
+        assert len(extract_model.calls) == 1
+        assert len(analysis_model.calls) == 0
+        assert any(DECIDED_EVENT in record.message for record in caplog.records)

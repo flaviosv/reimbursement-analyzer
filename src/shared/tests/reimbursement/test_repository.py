@@ -177,7 +177,12 @@ class DescribeIsDuplicate:
 
 class DescribeFetchReimbursementPage:
     async def it_returns_the_requested_page_slice_via_limit_and_offset(self, db: asyncpg.Connection) -> None:
-        base = datetime(2026, 5, 1, tzinfo=UTC)
+        # Far-future base: unlike the human-review-scoped tests below, exact
+        # LIMIT/OFFSET order can't be made robust with a membership check —
+        # it has to out-rank whatever `now()` an unrelated real commit (e.g.
+        # the agent's own decision-graph integration test, which persists a
+        # genuine auto-approved row) lands at in this same shared migrated_db.
+        base = datetime(2099, 5, 1, tzinfo=UTC)
         # Scoped by status: other tests in the full suite (e.g. create's real
         # broker roundtrip) commit real, uncontrolled `pending` rows into this
         # same shared migrated_db outside this test's rollback — an
@@ -287,7 +292,8 @@ class DescribeFetchReimbursementPage:
         assert by_uuid[without_review]["hr_reason"] is None
 
     async def it_orders_results_by_created_at_descending(self, db: asyncpg.Connection) -> None:
-        base = datetime(2026, 5, 1, tzinfo=UTC)
+        # Far-future base — see it_returns_the_requested_page_slice_via_limit_and_offset above.
+        base = datetime(2099, 5, 1, tzinfo=UTC)
         oldest = await seed_reimbursement(db, "REQ-ORDER-OLD", status="auto-approved", created_at=base)
         middle = await seed_reimbursement(
             db, "REQ-ORDER-MID", status="auto-approved", created_at=base + timedelta(hours=12)
@@ -298,7 +304,13 @@ class DescribeFetchReimbursementPage:
 
         page = await fetch_reimbursement_page(db, statuses=["auto-approved"], limit=100, offset=0)
 
-        assert [row["uuid"] for row in page] == [newest, middle, oldest]
+        # Membership, not exact-set (see it_filters_to_a_single_status above)
+        # — this test's own limit=100/offset=0 has no window to hide an
+        # unrelated real auto-approved commit behind, so relative order is
+        # checked only among these three known rows, by uuid.
+        known = {oldest, middle, newest}
+        ordered_known = [row["uuid"] for row in page if row["uuid"] in known]
+        assert ordered_known == [newest, middle, oldest]
 
     async def it_orders_results_by_created_at_descending_on_the_no_filter_path(
         self, db: asyncpg.Connection
