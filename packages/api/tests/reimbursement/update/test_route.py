@@ -38,6 +38,38 @@ class DescribePutReimbursement:
         status = await db.fetchval("SELECT status FROM reimbursement WHERE uuid = $1", uuid)
         assert status == "human-approved"
 
+    async def it_returns_the_updated_payload_on_a_successful_approve(
+        self, db: asyncpg.Connection
+    ) -> None:
+        uuid = await seed_reimbursement(db, "REQ-PUT-APPROVE-PAYLOAD")
+
+        async with _build_client(FakePool(db)) as client:
+            response = await client.put(f"/api/v1/reimbursement/{uuid}", json=_APPROVE_PAYLOAD)
+
+        body = response.json()
+        assert body["msg"] == "reimbursement decision recorded"
+        assert body["data"]["uuid"] == str(uuid)
+        assert body["data"]["status"] == "human-approved"
+        assert body["data"]["last_human_review"]["status"] == "approved"
+        assert body["data"]["last_human_review"]["reviewed_by"] == _APPROVE_PAYLOAD["approved_by"]
+        assert body["data"]["last_human_review"]["reason"] == _APPROVE_PAYLOAD["reason"]
+
+    async def it_returns_the_updated_payload_on_a_successful_reject(
+        self, db: asyncpg.Connection
+    ) -> None:
+        uuid = await seed_reimbursement_with_receipts(db, "REQ-PUT-REJECT-PAYLOAD")
+
+        async with _build_client(FakePool(db)) as client:
+            response = await client.put(f"/api/v1/reimbursement/{uuid}", json=_REJECT_PAYLOAD)
+
+        body = response.json()
+        assert body["msg"] == "reimbursement decision recorded"
+        assert body["data"]["uuid"] == str(uuid)
+        assert body["data"]["status"] == "human-rejected"
+        assert body["data"]["last_human_review"]["status"] == "rejected"
+        assert body["data"]["last_human_review"]["reviewed_by"] == _REJECT_PAYLOAD["approved_by"]
+        assert body["data"]["last_human_review"]["reason"] == _REJECT_PAYLOAD["reason"]
+
     async def it_returns_422_when_a_required_approve_field_is_missing(self) -> None:
         # FakePool(None): validate_review() raises before pool.acquire() is
         # ever reached, so no real row or connection is needed here.
@@ -281,3 +313,28 @@ class DescribeTheRealApp:
 
         assert response.status_code == 404
         assert response.json() == {"msg": f"no reimbursement with uuid {unknown_uuid}"}
+
+    async def it_returns_a_put_payload_byte_identical_to_a_subsequent_get(
+        self, migrated_db: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # spec.md's edge case: a PUT response's `data` must match what a
+        # follow-up GET returns exactly -- both routes shape their payload
+        # via the same get_reimbursement() use case, so this is a structural
+        # guarantee, not two independently-maintained mappings. Seeded via a
+        # real, separate pool (not the `db` fixture, which wraps its own
+        # connection in an uncommitted transaction the app's own pool below
+        # can't see) -- same pattern as the concurrent-PUT tests above.
+        pool = await asyncpg.create_pool(dsn=migrated_db, min_size=1, max_size=1)
+        try:
+            uuid = await seed_reimbursement(pool, "REQ-PUT-MATCHES-GET")
+        finally:
+            await pool.close()
+        monkeypatch.setenv("DATABASE_URL", migrated_db)
+
+        with TestClient(real_app) as client:
+            put_response = client.put(f"/api/v1/reimbursement/{uuid}", json=_APPROVE_PAYLOAD)
+            get_response = client.get(f"/api/v1/reimbursement/{uuid}")
+
+        assert put_response.status_code == 200
+        assert get_response.status_code == 200
+        assert put_response.json()["data"] == get_response.json()["data"]

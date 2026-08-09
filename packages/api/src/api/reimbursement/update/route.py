@@ -8,7 +8,9 @@ from shared.errors import ReimbursementUuidMismatch
 from api.dependencies import get_pool
 from api.errors import MessageResponse
 from api.reimbursement.create.payload import read_capped
+from api.reimbursement.response import ReimbursementDetailResponse, ReimbursementItem
 from api.reimbursement.update.validation import ApproveReview, validate_review
+from shared.reimbursement.use_cases.get_reimbursement import get_reimbursement
 from shared.reimbursement.use_cases.review_reimbursement import approve_reimbursement, reject_reimbursement
 
 router = APIRouter()
@@ -16,7 +18,7 @@ router = APIRouter()
 
 @router.put(
     "/api/v1/reimbursement/{uuid}",
-    response_model=MessageResponse,
+    response_model=ReimbursementDetailResponse,
     responses={
         400: {"model": MessageResponse, "description": "uuid mismatch, or the row's state disallows this decision"},
         404: {"model": MessageResponse, "description": "Unknown reimbursement"},
@@ -30,7 +32,7 @@ router = APIRouter()
 )
 async def put_reimbursement(
     uuid: UUID, request: Request, pool: asyncpg.Pool = Depends(get_pool)
-) -> MessageResponse:
+) -> ReimbursementDetailResponse:
     """Parse -> check body/path uuid consistency -> delegate to the use case
     -> respond. Every failure mode, including the uuid consistency check, is
     a raise of a typed exception from validation.py, this route, or the use
@@ -54,4 +56,8 @@ async def put_reimbursement(
         else:
             await reject_reimbursement(conn, uuid, reason=review.reason, approved_by=review.approved_by)
 
-    return MessageResponse(msg="reimbursement decision recorded")
+        row = await get_reimbursement(conn, uuid)
+
+    return ReimbursementDetailResponse(
+        msg="reimbursement decision recorded", data=ReimbursementItem.from_record(row)
+    )
