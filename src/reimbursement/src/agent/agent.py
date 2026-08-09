@@ -1,13 +1,122 @@
-from langgraph.graph import StateGraph, START, END
+"""Graph construction and the singleton entry point.
 
-from reimbursement.schema import State
-from reimbursement.agent.nodes import extract_fields, validate, apply_policies, analysis, apply_agent_decision
+`build_graph()` is the only place any node's dependencies — most importantly
+the Ollama client(s) — get constructed. `get_graph()` wraps it in the same
+`@lru_cache(maxsize=1)` singleton shape as `shared.config.load_config`
+(AD-023), so those dependencies are built once per process, not once per
+message (L-003's "compiled once" proxy). `_wire` is split out from
+`build_graph` so tests can wire the same graph shape with fakes at every
+LLM/DB boundary, without constructing a real Ollama client."""
 
-def run():
+import logging
+from functools import lru_cache
+from typing import Any
+
+import asyncpg
+from langchain.chat_models import init_chat_model
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.state import CompiledStateGraph
+from shared.models import Reimbursement
+from shared.reimbursement.use_cases.apply_decision import apply_decision
+
+from reimbursement.agent.nodes.analysis import Analysis, GuardrailVerdict
+from reimbursement.agent.nodes.apply_agent_decision import ApplyAgentDecision
+from reimbursement.agent.nodes.apply_policies import ApplyPolicies, route_after_apply_policies
+from reimbursement.agent.nodes.extract_fields import ExtractedFieldsSchema, ExtractFields
+from reimbursement.agent.nodes.validate import Validate, route_after_validate
+from reimbursement.agent.prompts.analysis import PLACEHOLDER_PROMPT as ANALYSIS_PROMPT
+from reimbursement.agent.prompts.extract_fields import PLACEHOLDER_PROMPT as EXTRACT_FIELDS_PROMPT
+from reimbursement.config import load_agent_config
+from reimbursement.schema import Node, State
+
+logger = logging.getLogger(__name__)
+
+
+def _wire(nodes: dict[str, Node]) -> CompiledStateGraph:
+    """The graph shape (Architecture Overview diagram), parameterized by
+    already-constructed node instances — shared between `build_graph`
+    (real dependencies) and the routing tests (fakes at every LLM/DB
+    boundary)."""
     graph = StateGraph(State)
+    graph.add_node("extract_fields", nodes["extract_fields"])
+    graph.add_node("validate", nodes["validate"])
+    graph.add_node("apply_policies", nodes["apply_policies"])
+    graph.add_node("analysis", nodes["analysis"])
+    graph.add_node("apply_agent_decision", nodes["apply_agent_decision"])
 
-    graph.add_node("extract_fields", extract_fields)
-    graph.add_node("validate", validate)
-    graph.add_node("apply_policies", apply_policies)
-    graph.add_node("analysis", analysis)
-    graph.add_node("apply_agent_decision", apply_agent_decision)
+    graph.add_edge(START, "extract_fields")
+    graph.add_edge("extract_fields", "validate")
+    graph.add_conditional_edges(
+        "validate",
+        route_after_validate,
+        {"apply_policies": "apply_policies", "apply_agent_decision": "apply_agent_decision"},
+    )
+    graph.add_conditional_edges(
+        "apply_policies", route_after_apply_policies, {"analysis": "analysis", "__end__": END}
+    )
+    graph.add_edge("analysis", "apply_agent_decision")
+    graph.add_edge("apply_agent_decision", END)
+
+    return graph.compile()
+
+
+def build_graph() -> CompiledStateGraph:
+    config = load_agent_config()
+
+    extract_model = init_chat_model(
+        f"ollama:{config.ollama_model}", base_url=config.ollama_base_url
+    ).with_structured_output(ExtractedFieldsSchema)
+    analysis_model = init_chat_model(
+        f"ollama:{config.ollama_model}", base_url=config.ollama_base_url
+    ).with_structured_output(GuardrailVerdict)
+
+    nodes: dict[str, Node] = {
+        "extract_fields": ExtractFields(model=extract_model, prompt=EXTRACT_FIELDS_PROMPT),
+        "validate": Validate(),
+        "apply_policies": ApplyPolicies(apply_decision=apply_decision),
+        "analysis": Analysis(model=analysis_model, prompt=ANALYSIS_PROMPT),
+        "apply_agent_decision": ApplyAgentDecision(apply_decision=apply_decision),
+    }
+    return _wire(nodes)
+
+
+@lru_cache(maxsize=1)
+def get_graph() -> CompiledStateGraph:
+    return build_graph()
+
+
+def _langfuse_handlers() -> list[Any]:
+    """AGD-23/24: every LLM invocation traced via LangFuse, file-log
+    fallback when LangFuse is unreachable.
+
+    # SPEC_DEVIATION: design.md's Tech Decisions table assumes `langfuse`
+    # is an installed dependency and wires `CallbackHandler()` directly.
+    # It is not in `pyproject.toml` — no task in this feature's list (T6
+    # added only `langchain-ollama`) adds it, and adding a new dependency
+    # is out of this batch's scope (T13's own "Where" is agent.py only).
+    # Reason: "unreachable" (AGD-24's own fallback trigger) is read here to
+    # include "not installed" — the same already-shipped file/stdout log
+    # sink both cases fall back to, so graph construction never hard-fails
+    # on a dependency this feature's task list never scheduled. Adding the
+    # real `langfuse` dependency is a follow-up, not a silent omission.
+    """
+    try:
+        from langfuse.langchain import CallbackHandler
+    except ImportError:
+        logger.info("FLOW: langfuse not installed; LLM trace falls back to file logging")
+        return []
+
+    try:
+        return [CallbackHandler()]
+    except Exception:
+        logger.exception("FLOW: langfuse handler unavailable; LLM trace falls back to file logging")
+        return []
+
+
+async def decide(reimbursement: Reimbursement, conn: asyncpg.Connection) -> State:
+    graph = get_graph()
+    result = await graph.ainvoke(
+        {"reimbursement": reimbursement},
+        config={"configurable": {"conn": conn}, "callbacks": _langfuse_handlers()},
+    )
+    return result
