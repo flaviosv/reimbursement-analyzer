@@ -31,7 +31,33 @@ def _config(conn: object) -> dict:
 
 
 class DescribeApplyPolicies:
-    async def it_rejects_a_receipt_91_days_old_regardless_of_value(
+    @pytest.mark.parametrize(
+        ("value", "receipts_date", "expected_status"),
+        [
+            pytest.param(5000, date(2026, 1, 9), "auto-rejected", id="91_days_old_regardless_of_value"),
+            pytest.param(150, date(2026, 1, 10), "auto-approved", id="exactly_90_days_old_not_rejected"),
+            pytest.param(5000, date(2026, 1, 1), "auto-rejected", id="old_and_over_2000_reject_wins"),
+            pytest.param(200, date(2026, 4, 1), "auto-approved", id="exactly_200_ceiling"),
+            pytest.param(2000.01, date(2026, 4, 1), "human-review", id="just_over_2000_floor"),
+            pytest.param(0, date(2026, 4, 1), "auto-approved", id="zero_value_clears_the_ceiling"),
+            pytest.param(-5, date(2026, 4, 1), "auto-approved", id="negative_value_clears_the_ceiling"),
+        ],
+    )
+    async def it_resolves_the_expected_status_at_each_threshold(
+        self, value: float, receipts_date: date, expected_status: str
+    ) -> None:
+        # Zero/negative: spec.md states no floor/sanity check beyond the
+        # stated thresholds — the ceiling rule doesn't distinguish them from
+        # any other small value.
+        fake = FakeApplyDecision(result=uuid4())
+        node = ApplyPolicies(apply_decision=fake)
+        state = _state(value=value, receipts_date=receipts_date)
+
+        result = await node(state, _config(object()))
+
+        assert result["status"] == expected_status
+
+    async def it_persists_the_reject_reason_and_calls_apply_decision_with_the_resolved_conn(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         uuid = uuid4()
@@ -43,34 +69,13 @@ class DescribeApplyPolicies:
         with caplog.at_level(logging.INFO):
             result = await node(state, _config(conn))
 
-        assert result["status"] == "auto-rejected"
         assert "2026-01-09" in result["decision_reason"]
         assert "2026-04-10" in result["decision_reason"]
         assert result["persisted"] is True
         assert fake.calls == [(conn, uuid, "auto-rejected", result["decision_reason"])]
         assert any("FLOW: Executing 'apply_policies' node" in r.message for r in caplog.records)
 
-    async def it_does_not_reject_a_receipt_exactly_90_days_old(self) -> None:
-        fake = FakeApplyDecision(result=uuid4())
-        node = ApplyPolicies(apply_decision=fake)
-        state = _state(value=150, receipts_date=date(2026, 1, 10))  # exactly 90 days before
-
-        result = await node(state, _config(object()))
-
-        assert result["status"] != "auto-rejected"
-        assert result["status"] == "auto-approved"
-
-    async def it_rejects_ahead_of_the_mandatory_over_2000_human_review_rule(self) -> None:
-        fake = FakeApplyDecision(result=uuid4())
-        node = ApplyPolicies(apply_decision=fake)
-        # Old AND > 2000: reject must win (AD-030, AGD-07).
-        state = _state(value=5000, receipts_date=date(2026, 1, 1))
-
-        result = await node(state, _config(object()))
-
-        assert result["status"] == "auto-rejected"
-
-    async def it_auto_approves_at_exactly_the_200_ceiling_via_apply_decision(self) -> None:
+    async def it_names_the_ceiling_rule_and_resolved_value_in_the_200_reason(self) -> None:
         uuid = uuid4()
         conn = object()
         fake = FakeApplyDecision(result=uuid)
@@ -79,12 +84,11 @@ class DescribeApplyPolicies:
 
         result = await node(state, _config(conn))
 
-        assert result["status"] == "auto-approved"
         assert fake.calls == [(conn, uuid, "auto-approved", result["decision_reason"])]
         # AGD-13: reason names the ceiling rule and the resolved value.
         assert "200" in result["decision_reason"]
 
-    async def it_routes_a_value_over_2000_to_human_review_via_apply_decision(self) -> None:
+    async def it_names_the_floor_rule_and_resolved_value_in_the_2000_01_reason(self) -> None:
         uuid = uuid4()
         conn = object()
         fake = FakeApplyDecision(result=uuid)
@@ -93,10 +97,21 @@ class DescribeApplyPolicies:
 
         result = await node(state, _config(conn))
 
-        assert result["status"] == "human-review"
         assert fake.calls == [(conn, uuid, "human-review", result["decision_reason"])]
         # AGD-16: reason names the floor rule and the resolved value.
         assert "2000.01" in result["decision_reason"]
+
+    async def it_skips_persisting_a_negative_receipts_value_but_still_auto_approves(self) -> None:
+        # receipts_value's DB column has a >=0 CHECK constraint; the
+        # threshold rule itself doesn't gate on this (spec.md), the
+        # persistence layer does.
+        fake = FakeApplyDecision(result=uuid4())
+        node = ApplyPolicies(apply_decision=fake)
+        state = _state(value=-5, receipts_date=date(2026, 4, 1))
+
+        await node(state, _config(object()))
+
+        assert fake.receipts_calls[0][0] is None
 
     async def it_leaves_exactly_2000_in_the_ambiguous_zone_not_the_mandatory_rule(self) -> None:
         fake = FakeApplyDecision(result=uuid4())
@@ -118,6 +133,42 @@ class DescribeApplyPolicies:
 
         assert result == {"requires_llm_judgment": True}
         assert len(fake.calls) == 0
+
+    async def it_reports_persisted_false_without_raising_on_a_ghost_uuid(self) -> None:
+        fake = FakeApplyDecision(result=None)
+        node = ApplyPolicies(apply_decision=fake)
+        state = _state(value=150, receipts_date=date(2026, 4, 1))
+
+        result = await node(state, _config(object()))
+
+        assert result["persisted"] is False
+
+    async def it_propagates_uncaught_when_submitted_at_is_missing(self) -> None:
+        # validate() doesn't gate on submitted_at's presence before this
+        # node runs — R-011's _decide try/except is what actually catches
+        # this in production, not this node itself.
+        fake = FakeApplyDecision(result=uuid4())
+        node = ApplyPolicies(apply_decision=fake)
+        state = {
+            "reimbursement": Reimbursement(uuid=uuid4(), original_payload={}),
+            "extracted": {"value": 150, "currency": "BRL", "receipts_date": date(2026, 4, 1)},
+        }
+
+        with pytest.raises(KeyError):
+            await node(state, _config(object()))
+
+    async def it_propagates_uncaught_when_submitted_at_is_malformed(self) -> None:
+        fake = FakeApplyDecision(result=uuid4())
+        node = ApplyPolicies(apply_decision=fake)
+        state = {
+            "reimbursement": Reimbursement(
+                uuid=uuid4(), original_payload={"submitted_at": "not-a-date"}
+            ),
+            "extracted": {"value": 150, "currency": "BRL", "receipts_date": date(2026, 4, 1)},
+        }
+
+        with pytest.raises(ValueError):
+            await node(state, _config(object()))
 
 
 class DescribeRouteAfterApplyPolicies:
