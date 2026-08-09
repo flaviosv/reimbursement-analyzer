@@ -14,9 +14,9 @@ have deliberately chosen to live with for now.
 ## R-001 — Dual-write window between the DB commit and the `Reimbursement` publish
 
 **Raised:** 2026-08-07
-**Status:** Accepted, deferred — owner: Flavio
-**Affects:** `publisher-consume-request`, and the future Agent feature
-**Severity:** Low likelihood, moderate blast radius
+**Status:** Partially closed by AD-033 (2026-08-09) — the ghost-message and duplicate-via-commit-failure consequences below no longer occur; a narrower residual risk is accepted in their place (see the AD-033 amendment below) — owner: Flavio
+**Affects:** `publisher-consume-request`, `publisher-compensating-delete`, and the future Agent feature
+**Severity:** Low likelihood, moderate blast radius (as originally raised — see the AD-033 amendment for the current, narrower severity)
 
 ### What breaks
 
@@ -77,6 +77,41 @@ that queue with rows that do not exist.
 
 **This mitigation is not yet written into any spec.** It needs to land in
 the Agent's spec when that feature is specified.
+
+### AD-033 amendment (2026-08-09) — what's closed vs. what's newly opened
+
+`publisher-compensating-delete` (`.specs/features/publisher-compensating-delete/`)
+replaces the design this risk describes: `insert_pending` now commits
+immediately, and the `Reimbursement` publish is attempted only *after* that
+commit — the reverse ordering from the `BEGIN → INSERT → publish → COMMIT`
+sequence above. Because the row is already durable before the publish is
+even attempted, **both consequences this risk originally named are closed
+outright**: there is no window in which the Agent can receive a `Reimbursement`
+message whose row was rolled back (consequence 1), and there is no window in
+which a `COMMIT` failure after a successful publish produces a duplicate row
+with a second uuid (consequence 2) — a `COMMIT` failure now can only occur
+*before* the publish is attempted, in which case no publish happens at all.
+
+This is a distinct, narrower risk, not the same one under a new name: an
+un-recoverable **orphaned `pending` row**. It is possible only if the process
+crashes in the specific window between a publish failure being detected and
+the compensating `DELETE` (gated `WHERE uuid = $1 AND status = 'pending'`)
+completing — a compound of two independently low-probability events, not the
+common-path window the original design held open across every single publish.
+Unlike the two closed consequences, this one is not automatically safe: the
+row is not published, not retried, and not auto-recovered by anything in
+`publisher-compensating-delete`'s scope. It is durably discoverable — every
+compensating-delete outcome (removed, no-op, or itself failed) is logged, the
+failed case via the durable `failure_log` sink — but an operator must act on
+it manually. A future sweep/reconciliation job is a candidate fix, not built
+here (see `publisher-compensating-delete/spec.md`'s Out of Scope table).
+
+The **interim mitigation** above (the Agent tolerating a ghost `Reimbursement`
+message) remains correct as defense-in-depth even though this design narrows
+how often a ghost message can occur in the first place — the only remaining
+path to one is the pre-existing publish-timeout false-negative case (the
+broker actually delivered the message but the client saw `PublishFailed`),
+unchanged by this amendment.
 
 ---
 
