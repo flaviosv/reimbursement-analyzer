@@ -68,6 +68,35 @@ def valid_reimbursement_item(request_id: str = "REQ-0001", **extra: object) -> d
     }
 
 
+def valid_approve_payload(**overrides: object) -> dict:
+    """The canonical minimal-valid PUT /api/v1/reimbursement/{uuid} approve
+    body -- a single source of truth for test_route.py and
+    test_validation.py, which each need a slightly different usage pattern
+    (a fixed dict used as-is vs. one mutated per parametrize case) but were
+    previously maintaining two independently hand-copied versions of this
+    shape."""
+    return {
+        "status": "approved",
+        "reason": "looks good",
+        "receipts_date": "2026-01-05",
+        "receipts_value": "50.00",
+        "receipts_currency": "BRL",
+        "approved_by": "reviewer@example.com",
+        **overrides,
+    }
+
+
+def valid_reject_payload(**overrides: object) -> dict:
+    """The canonical minimal-valid PUT /api/v1/reimbursement/{uuid} reject
+    body -- same rationale as valid_approve_payload above."""
+    return {
+        "status": "rejected",
+        "reason": "missing evidence",
+        "approved_by": "reviewer@example.com",
+        **overrides,
+    }
+
+
 _SEED_REIMBURSEMENT = """
     INSERT INTO reimbursement (uuid, request_id, original_payload, status, created_at)
     VALUES ($1, $2, $3::text::jsonb, $4, $5)

@@ -1,23 +1,12 @@
 import json
 
 import pytest
+from helpers import valid_approve_payload, valid_reject_payload
 from reimbursement.update.validation import ApproveReview, RejectReview, validate_review
 from shared.errors import ReviewInvalid
 
-_APPROVE_PAYLOAD = {
-    "status": "approved",
-    "reason": "looks good",
-    "receipts_date": "2026-01-05",
-    "receipts_value": "50.00",
-    "receipts_currency": "BRL",
-    "approved_by": "reviewer@example.com",
-}
-
-_REJECT_PAYLOAD = {
-    "status": "rejected",
-    "reason": "missing evidence",
-    "approved_by": "reviewer@example.com",
-}
+_APPROVE_PAYLOAD = valid_approve_payload()
+_REJECT_PAYLOAD = valid_reject_payload()
 
 
 def _body(payload: dict) -> bytes:

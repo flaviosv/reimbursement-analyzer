@@ -12,25 +12,14 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from helpers import FakePool, seed_reimbursement, seed_reimbursement_with_receipts
 from helpers import _build_client as _shared_build_client
+from helpers import valid_approve_payload, valid_reject_payload
 from main import app as real_app
 from reimbursement.update.route import router
 
 pytestmark = pytest.mark.anyio
 
-_APPROVE_PAYLOAD = {
-    "status": "approved",
-    "reason": "looks good",
-    "receipts_date": "2026-01-05",
-    "receipts_value": "50.00",
-    "receipts_currency": "BRL",
-    "approved_by": "reviewer@example.com",
-}
-
-_REJECT_PAYLOAD = {
-    "status": "rejected",
-    "reason": "missing evidence",
-    "approved_by": "reviewer@example.com",
-}
+_APPROVE_PAYLOAD = valid_approve_payload()
+_REJECT_PAYLOAD = valid_reject_payload()
 
 
 _build_client = partial(_shared_build_client, router)
