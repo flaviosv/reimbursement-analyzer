@@ -1,8 +1,19 @@
 import dataclasses
+from pathlib import Path
 
 import pytest
 from reimbursement.config import AIConfig, ModelConfig, load_agent_config
 from shared.config import load_config
+
+_ENV_SAMPLE_PATH = Path(__file__).resolve().parents[3] / ".env.sample"
+_REQUIRED_AI_ENV_KEYS = {
+    "GROQ_API_KEY",
+    "AI_TIMEOUT_SECONDS",
+    "EXTRACT_FIELDS_MODEL_NAME",
+    "EXTRACT_FIELDS_TEMPERATURE",
+    "ANALYSIS_MODEL_NAME",
+    "ANALYSIS_TEMPERATURE",
+}
 
 
 @pytest.fixture(autouse=True)
@@ -163,3 +174,15 @@ class DescribeAgentConfigToConsumerConfig:
 
         assert not consumer_config.keys() & {"fetch.max.bytes", "max.partition.fetch.bytes"}
         assert "max.poll.interval.ms" not in consumer_config
+
+
+class DescribeEnvSampleParity:
+    def it_carries_all_six_ai_env_vars_with_non_blank_placeholders(self) -> None:
+        lines = _ENV_SAMPLE_PATH.read_text().splitlines()
+        values = dict(
+            line.split("=", 1) for line in lines if "=" in line and not line.startswith("#")
+        )
+
+        assert _REQUIRED_AI_ENV_KEYS <= values.keys()
+        for key in _REQUIRED_AI_ENV_KEYS:
+            assert values[key].strip() != "", f"{key} must carry a non-blank placeholder"
