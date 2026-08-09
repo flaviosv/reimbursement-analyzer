@@ -12,7 +12,7 @@ A [uv workspace](https://docs.astral.sh/uv/concepts/projects/workspaces/) monore
 
 - `packages/api` — public HTTP API (FastAPI)
 - `packages/publisher` — consumes requests, persists them, republishes for downstream processing
-- `packages/reimbursement` — LLM-based evaluation layer, consumes from Kafka (LangChain / LangGraph); the decision graph is scaffolded but not yet wired into the consume path
+- `packages/reimbursement` — LLM-based evaluation layer, consumes from Kafka (LangChain / LangGraph); the decision graph is implemented and wired into the consume path
 - `packages/shared` — shared kernel: models and code common to the services above
 
 ## Prerequisites

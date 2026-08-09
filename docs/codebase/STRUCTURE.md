@@ -36,18 +36,18 @@
 │   │   │           └── validation.py  # ApproveReview/RejectReview discriminated union
 │   │   ├── tests/                # Mirrors src/api/ layout; helpers.py centralizes shared test builders
 │   │   └── Dockerfile            # Multi-stage: builder / dev / migrate / prod
-│   ├── reimbursement/          # Consume Reimbursement, resolve by uuid (implemented) + LangGraph decision scaffold (not wired)
+│   ├── reimbursement/          # Consume Reimbursement, resolve by uuid, and decide — all implemented (LangGraph graph)
 │   │   ├── src/reimbursement/    # reimbursement's own modules, matching shared's nested src-layout shape
 │   │   │   ├── consumer.py         # Composition root: pool/producer/consumer lifecycle, offset commit
 │   │   │   ├── validation.py       # Decision tree: resolve, staleness guard, requeue, retry-ceiling escalation
 │   │   │   ├── config.py           # AgentConfig (consumer_group_id, consume_timeout_seconds), load_agent_config()
 │   │   │   ├── schema.py           # State TypedDict — reimbursement: shared.models.Reimbursement
-│   │   │   └── agent/                # LangGraph decision graph — scaffolded, not invoked from validation.py yet
-│   │   │       ├── agent.py            # StateGraph builder — nodes registered, no edges/compile/invoke yet
+│   │   │   └── agent/                # LangGraph decision graph — implemented, invoked from validation.py
+│   │   │       ├── agent.py            # StateGraph builder — 5 nodes wired with edges, compiled, LangFuse-traced
 │   │   │       ├── nodes/               # extract_fields, validate, apply_policies, analysis, apply_agent_decision
-│   │   │       │                        # — every node is a stub returning its own name, no logic yet
-│   │   │       └── prompts/             # extract_fields.py, analysis.py — both empty placeholders
-│   │   └── tests/                 # Covers consumer/validation/config only — the agent/ scaffold has no tests yet
+│   │   │       │                        # — deterministic rules + LLM-as-judge guardrail, each with its own test file
+│   │   │       └── prompts/             # extract_fields.py, analysis.py — mid-refactor, currently broken (see CONCERNS.md)
+│   │   └── tests/                 # consumer/validation/config plus one test file per agent/ node + full-graph wiring
 │   │       ├── conftest.py         # Kafka container fixture, local to this package
 │   │       ├── agent_fakes.py      # FakePool/FakeConnection; re-exports shared.testing.FakeProducer
 │   │       ├── test_config.py
@@ -101,6 +101,12 @@
 - **Location:** `packages/api/src/api/reimbursement/list/`
 - **Key files:** `route.py` (endpoint), `params.py` (`LimitQuery`/`OffsetQuery`, `parse_status_filter` — rejects a repeated `?status=` query param), `response.py` (`ReimbursementListItem.from_record`, `HumanReviewSummary`, `ReimbursementListResponse`).
 
+### `api/reimbursement/get`
+
+- **Purpose:** `GET /api/v1/reimbursement/{uuid}` — looks up a single reimbursement by uuid.
+- **Location:** `packages/api/src/api/reimbursement/get/`
+- **Key files:** `route.py` (endpoint, `ReimbursementDetailResponse`).
+
 ### `api/reimbursement/update`
 
 - **Purpose:** `PUT /api/v1/reimbursement/{uuid}` — records a human reviewer's approve or reject decision on a row already at `human-review`/`auto-rejected`/`human-rejected`. Human-driven decision recording, not the automated decision policy.
@@ -120,15 +126,15 @@
 
 ### `publisher`
 
-- **Purpose:** consumes `Request`, creates one `reimbursement` row per item, and publishes one `Reimbursement` message per item — the middle link between `api`'s intake and `reimbursement`'s (not yet wired) decision layer.
+- **Purpose:** consumes `Request`, creates one `reimbursement` row per item, and publishes one `Reimbursement` message per item — the middle link between `api`'s intake and `reimbursement`'s decision layer.
 - **Location:** `packages/publisher/src/publisher/{consumer,processing}.py`, installed via `uv_build`'s nested src-layout like `api`/`shared` (AD-031, amended).
 - **Key files:** `consumer.py` (Kafka consumer lifecycle, offset commit), `processing.py` (the decision tree — insert+publish via `shared.reimbursement.use_cases.publish_pending`, retry-with-requeue, `retry > 3` escalation, duplicate detection). Fully implemented and tested — see `TESTING.md`.
 
 ### `reimbursement`
 
-- **Purpose:** consumes `Reimbursement`, resolves the row by `uuid`, and settles it into one of resolved / stale / ghost / requeued / escalated / logged / invalid — the middle link between `publisher`'s handoff and the service's own (scaffolded, not yet wired) decision policy. Named `reimbursement`, not `agent` — renamed and flattened this branch (`ce80603`) to match `publisher`/`api`'s layout; "the agent" now refers to the LangGraph decision graph nested inside it, not the package itself.
+- **Purpose:** consumes `Reimbursement`, resolves the row by `uuid`, and settles it into one of resolved / stale / ghost / requeued / escalated / logged / invalid — then, on resolve, hands the row to its own decision graph, which classifies it auto-approved / auto-rejected / human-review. Named `reimbursement`, not `agent` — renamed and flattened this branch (`ce80603`) to match `publisher`/`api`'s layout; "the agent" now refers to the LangGraph decision graph nested inside it, not the package itself.
 - **Location:** `packages/reimbursement/src/reimbursement/{consumer,validation,config,schema}.py` plus the `agent/` decision-graph subpackage — a real installed package via `uv_build`'s nested src-layout (AD-031, amended), like `api`/`publisher`/`shared`.
-- **Key files:** `consumer.py` (Kafka consumer lifecycle, offset commit), `validation.py` (the decision tree — `handle_message`, resolve-by-uuid, staleness guard, ghost tolerance (R-001), transient-failure requeue, `retry > 3` escalation reusing `shared.reimbursement.use_cases.send_human_review.escalate_existing`), `config.py` (`AgentConfig`), `schema.py` (`State` — the decision graph's `TypedDict`, `reimbursement: shared.models.Reimbursement`). The consume/resolve layer is fully implemented and tested — see `TESTING.md`. **`agent/` (decision-graph scaffold, not yet wired or tested):** `agent.py` builds a `langgraph.StateGraph` and registers its five nodes, but adds no edges and never compiles/invokes it; `nodes/{extract_fields,validate,apply_policies,analysis,apply_agent_decision}.py` are each a one-line stub returning their own name; `prompts/{extract_fields,analysis}.py` are empty. None of this is called from `validation.py`'s `RESOLVED` branch yet — `langchain`/`langgraph` remain declared dependencies with no functioning call path. See `.specs/features/agent-decide-reimbursement/` for the design in progress.
+- **Key files:** `consumer.py` (Kafka consumer lifecycle, offset commit), `validation.py` (the decision tree — `handle_message`, resolve-by-uuid, staleness guard, ghost tolerance (R-001), transient-failure requeue, `retry > 3` escalation reusing `shared.reimbursement.use_cases.send_human_review.escalate_existing`, then `agent.decide()` on resolve), `config.py` (`AgentConfig`), `schema.py` (`State` — the decision graph's `TypedDict`, `reimbursement: shared.models.Reimbursement`). Both the consume/resolve layer and the decision graph are implemented and tested — see `TESTING.md`. **`agent/` (the decision graph):** `agent.py` builds and compiles a `langgraph.StateGraph` wiring its five nodes with real edges/conditional routing, and traces every LLM call via LangFuse; `nodes/{extract_fields,validate,apply_policies,analysis,apply_agent_decision}.py` each hold real logic (deterministic thresholds in `apply_policies`, an LLM-as-judge guardrail in `analysis`). **Currently broken in the uncommitted working tree** — `prompts/{extract_fields,analysis}.py` are mid a prompt-authoring refactor that drops an export `agent.py` (and the whole test suite) still imports; see `docs/codebase/CONCERNS.md`'s Known Bugs.
 
 ## Where Things Live
 
@@ -144,6 +150,10 @@
 - Query-param parsing: `packages/api/src/api/reimbursement/list/params.py`
 - Response shaping: `packages/api/src/api/reimbursement/list/response.py`
 - Filter/pagination gates + fetch: `packages/shared/src/shared/reimbursement/use_cases/list_reimbursements.py` → `packages/shared/src/shared/reimbursement/repository.py` (`fetch_reimbursement_page`)
+
+**GET /api/v1/reimbursement/{uuid} (detail):**
+- Route: `packages/api/src/api/reimbursement/get/route.py`
+- Fetch: `packages/shared/src/shared/reimbursement/use_cases/get_reimbursement.py` → `packages/shared/src/shared/reimbursement/repository.py`
 
 **PUT /api/v1/reimbursement/{uuid} (approve/reject):**
 - Route + uuid consistency check: `packages/api/src/api/reimbursement/update/route.py`
@@ -168,5 +178,5 @@
 | ------- | ---- | -------------- |
 | `api` | `packages/api` | Public HTTP API — intake, validation, publish to Kafka |
 | `publisher` | `packages/publisher` | Consume `Request`, persist to `reimbursement`, publish `Reimbursement` (implemented) |
-| `reimbursement` | `packages/reimbursement` | Consume `Reimbursement`, resolve by uuid, requeue/escalate (implemented); `agent/` decision-graph scaffold not yet wired |
+| `reimbursement` | `packages/reimbursement` | Consume `Reimbursement`, resolve by uuid, requeue/escalate, and decide via the `agent/` LangGraph graph (all implemented) |
 | `shared` | `packages/shared` | Shared kernel: models, config, Kafka producer, DB pool lifecycle, `reimbursement` persistence + use cases (create/list/review) |

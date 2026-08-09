@@ -40,6 +40,10 @@ Three-tier logging severity, observed consistently in `publisher.processing`:
 2. **Sanitized stdout errors** — `logger.error(...)` paired with `shared.errors.sanitize(exc)`, which renders only the exception type and (if present) the violated constraint name — never a driver's raw `DETAIL` text, which can embed PII.
 3. **Last-resort failure log** — `shared.failure_log.write()`, one full structured JSON record (including the item itself) at `logging.CRITICAL` to a dedicated named logger, for a failure nothing else in the chain could handle. Never raises.
 
+## LLM Prompt Construction
+
+`reimbursement/agent/prompts/{analysis,extract_fields}.py` build each system prompt as a private, module-level string constant (`_ANALYSIS_PROMPT`, `_EXTRACT_FIELDS_PROMPT`) using XML-style tagged sections (`<identity>`, `<brand_guardrails>`, `<guardrails>`, `<processing_guardrails>`, `<goals>`, `<request_data>`, `<uncertainty>`, `<examples>`), rendered by a `get_<name>_prompt(request_data) -> SystemMessage` factory — replacing an earlier `ChatPromptTemplate.from_messages([...])` pattern. **In progress, not yet consistent between the two files**: `extract_fields.py`'s template still carries unresolved placeholder comments in its `<goals>`/`<request_data>` sections, and both files currently have prompt-interpolation bugs — see `CONCERNS.md`'s Known Bugs.
+
 ## Comments
 
 Sparse and high-value — most functions have no inline comments at all. Where present, comments explain a non-obvious *why* (a security/performance tradeoff, a subtle invariant, a rejected alternative), never a *what*. Many non-trivial functions carry a short docstring stating the one thing a reader wouldn't infer from the code alone (e.g. `build_envelope`'s docstring explaining why splicing bytes — not re-serialising — is what makes the byte-identical guarantee hold).
