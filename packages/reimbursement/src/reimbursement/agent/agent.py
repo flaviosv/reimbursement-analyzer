@@ -35,9 +35,10 @@ from reimbursement.agent.prompts.analysis import PLACEHOLDER_PROMPT as ANALYSIS_
 from reimbursement.agent.prompts.extract_fields import (
     PLACEHOLDER_PROMPT as EXTRACT_FIELDS_PROMPT,
 )
+from reimbursement.agent.types import Node
 from reimbursement.config import load_agent_config
 from reimbursement.models import Reimbursement
-from reimbursement.schema import Node, State
+from reimbursement.schema import State
 
 logger = logging.getLogger(__name__)
 

@@ -1,7 +1,5 @@
 from datetime import date
-from typing import Any, Protocol, TypedDict
-
-from langchain_core.runnables import RunnableConfig
+from typing import TypedDict
 
 from reimbursement.models import Reimbursement
 
@@ -31,7 +29,3 @@ class State(TypedDict):
     persisted: bool | None
 
     guardrail_verdict: bool | None
-
-
-class Node(Protocol):
-    async def __call__(self, state: State, config: RunnableConfig) -> dict[str, Any]: ...

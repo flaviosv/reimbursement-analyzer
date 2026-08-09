@@ -3,17 +3,14 @@ decision_reason is already in state, regardless of whether validate or
 analysis put it there. Never authors its own status/decision_reason."""
 
 import logging
-from collections.abc import Awaitable, Callable
 from typing import Any
-from uuid import UUID
 
 from langchain_core.runnables import RunnableConfig
 
+from reimbursement.agent.types import ApplyDecision
 from reimbursement.schema import State
 
 logger = logging.getLogger(__name__)
-
-ApplyDecision = Callable[[Any, UUID, str, str], Awaitable[UUID | None]]
 
 
 class ApplyAgentDecision:

@@ -2,13 +2,12 @@
 <=200/>2000), reject checked first — decides and persists."""
 
 import logging
-from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from typing import Any
-from uuid import UUID
+from typing import Any, Literal
 
 from langchain_core.runnables import RunnableConfig
 
+from reimbursement.agent.types import ApplyDecision
 from reimbursement.schema import State
 
 logger = logging.getLogger(__name__)
@@ -16,8 +15,6 @@ logger = logging.getLogger(__name__)
 REJECT_THRESHOLD_DAYS = 90
 AUTO_APPROVE_CEILING = 200
 HUMAN_REVIEW_FLOOR = 2000
-
-ApplyDecision = Callable[[Any, UUID, str, str], Awaitable[UUID | None]]
 
 
 class ApplyPolicies:
@@ -74,5 +71,5 @@ class ApplyPolicies:
         }
 
 
-def route_after_apply_policies(state: State) -> str:
+def route_after_apply_policies(state: State) -> Literal["analysis", "__end__"]:
     return "analysis" if state["requires_llm_judgment"] else "__end__"
