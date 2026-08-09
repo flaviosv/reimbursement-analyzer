@@ -241,6 +241,12 @@
 - Iterate over each item from the message and, in a single transaction. 
     - Create to the DB the Reimbursement with `UUID` and `Original Payload` 
     - Publish to the topic `Reimbursement`
+  (amended — no longer a single transaction: the insert commits
+  immediately, and the `Reimbursement` publish is attempted only after
+  that commit, with no transaction spanning the Kafka round-trip. A
+  publish failure is compensated by an explicit delete of the
+  just-inserted row rather than a rollback — see AD-033 in
+  .specs/STATE.md)
 
 ### Error handling
 
@@ -250,6 +256,12 @@
     - No other action below must be done
 - If the DB insert fails, no publish to the topic must happen
 - If any the publish to topic fails, it must rollback the DB transaction
+  (amended — there is no DB transaction to roll back anymore: the insert
+  already committed before the publish was attempted, so a publish
+  failure instead triggers an explicit compensating `DELETE` of the
+  just-inserted row, gated `WHERE uuid = $1 AND status = 'pending'` and
+  durably logged on every outcome (removed, no-op, or itself failed) —
+  see AD-033 in .specs/STATE.md)
 - If any error happens, it must republish incrementing the retry
 
 ## Reimbursement Agent
