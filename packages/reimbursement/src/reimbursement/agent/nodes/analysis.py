@@ -1,11 +1,9 @@
 """The LLM-as-judge guardrail for the ambiguous zone only (AGD-17..20) —
 never runs for the other three outcomes. Decides, doesn't persist."""
 
-import json
 import logging
 from typing import Any
 
-from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable, RunnableConfig
 from pydantic import BaseModel
 
@@ -20,7 +18,7 @@ class GuardrailVerdict(BaseModel):
     `.with_structured_output` at graph-build time (agent.py)."""
 
     consistent: bool
-    reasoning: str
+    reason: str
 
 
 class Analysis:
@@ -49,5 +47,5 @@ class Analysis:
         return {
             "guardrail_verdict": verdict.consistent,
             "status": status,
-            "decision_reason": verdict.reasoning,
+            "decision_reason": verdict.reason,
         }
