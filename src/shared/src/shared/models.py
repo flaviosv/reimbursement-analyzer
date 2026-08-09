@@ -1,7 +1,9 @@
+import json
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, Self
 from uuid import UUID
 
+import asyncpg
 from pydantic import (
     AwareDatetime,
     BaseModel,
@@ -97,6 +99,23 @@ class RequestEnvelope(BaseModel):
     # is another — so it re-asserts the cap at its own trust boundary
     # rather than relying solely on fetch.max.bytes to keep item count down.
     payload: Annotated[list[dict[str, Any]], Field(max_length=MAX_BATCH_ITEMS)]
+
+
+class Reimbursement(BaseModel):
+    """The graph's own minimal view of a resolved row — just `uuid` and
+    `original_payload`, not the full table."""
+
+    uuid: UUID
+    original_payload: dict[str, Any]
+
+    @classmethod
+    def from_record(cls, record: asyncpg.Record) -> Self:
+        # original_payload always arrives as raw text: no asyncpg JSON codec
+        # is configured anywhere in this codebase.
+        return cls(
+            uuid=record["uuid"],
+            original_payload=json.loads(record["original_payload"]),
+        )
 
 
 class ReimbursementEnvelope(BaseModel):
