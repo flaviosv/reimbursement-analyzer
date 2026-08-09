@@ -3,7 +3,7 @@
   "promote_threshold": 2,
   "window_days": 45,
   "quarantine_threshold": 2,
-  "next_id": 20,
+  "next_id": 23,
   "lessons": [
     {
       "id": "L-001",
@@ -348,6 +348,60 @@
       ],
       "created": "2026-08-08T19:19:01Z",
       "last_seen": "2026-08-08T19:19:01Z"
+    },
+    {
+      "id": "L-020",
+      "key": "spec_deviation::when design md assumes a tracing observability dependency that a task list never adds land the dependency or formally re scope the ac before tasks closes a documented spec deviation comment is not a substitute for the ac s own test coverage",
+      "text": "When design.md assumes a tracing/observability dependency that a task list never adds, land the dependency (or formally re-scope the AC) before Tasks closes — a documented SPEC_DEVIATION comment is not a substitute for the AC's own test coverage.",
+      "signal": "spec_deviation",
+      "scope": "tracing",
+      "status": "candidate",
+      "features": [
+        "agent-decide-reimbursement"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "packages/reimbursement/src/reimbursement/agent/agent.py:92-101 SPEC_DEVIATION (tracing)"
+      ],
+      "created": "2026-08-09T19:13:04Z",
+      "last_seen": "2026-08-09T19:13:04Z"
+    },
+    {
+      "id": "L-021",
+      "key": "ac_gap::cross check every spec md requirement id against design md and tasks md before tasks starts a requirement absent from both silently drops out of implementation scope with no error anywhere in the pipeline",
+      "text": "Cross-check every spec.md requirement ID against design.md and tasks.md before Tasks starts — a requirement absent from both silently drops out of implementation scope with no error anywhere in the pipeline.",
+      "signal": "ac_gap",
+      "scope": "spec-design-handoff",
+      "status": "candidate",
+      "features": [
+        "agent-decide-reimbursement"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "AGD-26 (spec-design-handoff)"
+      ],
+      "created": "2026-08-09T19:13:04Z",
+      "last_seen": "2026-08-09T19:13:04Z"
+    },
+    {
+      "id": "L-022",
+      "key": "spec_precision_gap::when a spec requires a message reason field to state specific content assert a substring of the expected content not that the captured value equals itself fake calls result field passes for any content",
+      "text": "When a spec requires a message/reason field to state specific content, assert a substring of the expected content, not that the captured value equals itself (fake.calls == [(..., result[field])] passes for any content).",
+      "signal": "spec_precision_gap",
+      "scope": "test-quality",
+      "status": "candidate",
+      "features": [
+        "agent-decide-reimbursement"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "AGD-13, AGD-16 (packages/reimbursement/tests/test_apply_policies.py) (test-quality)"
+      ],
+      "created": "2026-08-09T19:13:04Z",
+      "last_seen": "2026-08-09T19:13:04Z"
     }
   ]
 }
