@@ -4,11 +4,12 @@ from uuid import uuid4
 
 import pytest
 from agent_fakes import FakePool, FakeProducer
-from shared.config import REIMBURSEMENT_TOPIC, load_config
-from shared.models import AttemptError, Reimbursement, ReimbursementEnvelope
 from reimbursement.agent import agent
 from reimbursement.config import load_agent_config
+from reimbursement.models import Reimbursement
 from reimbursement.validation import Dependencies, MessageOutcome, handle_message
+from shared.config import REIMBURSEMENT_TOPIC, load_config
+from shared.models import AttemptError, ReimbursementEnvelope
 
 pytestmark = pytest.mark.anyio
 

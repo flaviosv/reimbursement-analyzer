@@ -3,17 +3,21 @@ from datetime import date
 from uuid import uuid4
 
 import pytest
-from agent_fakes import FakeApplyDecision, FakeStructuredModel
-from shared.models import Reimbursement
-
 import reimbursement.agent.agent as agent
+from agent_fakes import FakeApplyDecision, FakeStructuredModel
 from reimbursement.agent.nodes.analysis import Analysis, GuardrailVerdict
 from reimbursement.agent.nodes.apply_agent_decision import ApplyAgentDecision
 from reimbursement.agent.nodes.apply_policies import ApplyPolicies
-from reimbursement.agent.nodes.extract_fields import ExtractedFieldsSchema, ExtractFields
+from reimbursement.agent.nodes.extract_fields import (
+    ExtractedFieldsSchema,
+    ExtractFields,
+)
 from reimbursement.agent.nodes.validate import Validate
 from reimbursement.agent.prompts.analysis import PLACEHOLDER_PROMPT as ANALYSIS_PROMPT
-from reimbursement.agent.prompts.extract_fields import PLACEHOLDER_PROMPT as EXTRACT_FIELDS_PROMPT
+from reimbursement.agent.prompts.extract_fields import (
+    PLACEHOLDER_PROMPT as EXTRACT_FIELDS_PROMPT,
+)
+from reimbursement.models import Reimbursement
 
 pytestmark = pytest.mark.anyio
 

@@ -2,7 +2,8 @@ from datetime import date
 from typing import Any, Protocol, TypedDict
 
 from langchain_core.runnables import RunnableConfig
-from shared.models import Reimbursement
+
+from reimbursement.models import Reimbursement
 
 
 class ExtractedFields(TypedDict, total=False):

@@ -4,9 +4,11 @@ from uuid import uuid4
 
 import pytest
 from agent_fakes import FakeApplyDecision
-from shared.models import Reimbursement
-
-from reimbursement.agent.nodes.apply_policies import ApplyPolicies, route_after_apply_policies
+from reimbursement.agent.nodes.apply_policies import (
+    ApplyPolicies,
+    route_after_apply_policies,
+)
+from reimbursement.models import Reimbursement
 
 pytestmark = pytest.mark.anyio
 

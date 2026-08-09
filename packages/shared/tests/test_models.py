@@ -3,7 +3,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from pydantic import ValidationError
-from shared.models import AttemptError, Reimbursement, ReimbursementEnvelope, RequestEnvelope
+from shared.models import AttemptError, ReimbursementEnvelope, RequestEnvelope
 
 
 def _entry(attempt: int) -> AttemptError:
@@ -150,24 +150,6 @@ class DescribeRequestEnvelopeErrors:
         assert envelope.errors[0].stage == "publish"
         assert envelope.errors[0].error_type == "PublishFailed"
         assert envelope.errors[0].message == "broker unreachable"
-
-
-class DescribeReimbursement:
-    def it_decodes_a_json_text_original_payload_from_a_record(self) -> None:
-        record = {"uuid": uuid4(), "original_payload": '{"claimed_amount_brl": 93.5}'}
-
-        reimbursement = Reimbursement.from_record(record)
-
-        assert reimbursement.original_payload == {"claimed_amount_brl": 93.5}
-
-    def it_round_trips_the_uuid_as_a_uuid(self) -> None:
-        uuid = uuid4()
-        record = {"uuid": uuid, "original_payload": "{}"}
-
-        reimbursement = Reimbursement.from_record(record)
-
-        assert reimbursement.uuid == uuid
-        assert isinstance(reimbursement.uuid, UUID)
 
 
 class DescribeReimbursementEnvelope:

@@ -4,10 +4,12 @@ from uuid import uuid4
 
 import pytest
 from agent_fakes import FakeStructuredModel
-from shared.models import Reimbursement
-
-from reimbursement.agent.nodes.extract_fields import ExtractedFieldsSchema, ExtractFields
+from reimbursement.agent.nodes.extract_fields import (
+    ExtractedFieldsSchema,
+    ExtractFields,
+)
 from reimbursement.agent.prompts.extract_fields import PLACEHOLDER_PROMPT
+from reimbursement.models import Reimbursement
 
 pytestmark = pytest.mark.anyio
 

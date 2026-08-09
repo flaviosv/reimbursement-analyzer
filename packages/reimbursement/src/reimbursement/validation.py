@@ -19,13 +19,14 @@ from pydantic import ValidationError
 from shared import failure_log
 from shared.config import MAX_RETRY, REIMBURSEMENT_TOPIC, Config
 from shared.errors import PublishFailed, sanitize
-from shared.models import AttemptError, Reimbursement, ReimbursementEnvelope
+from shared.models import AttemptError, ReimbursementEnvelope
 from shared.producer import publish
 from shared.reimbursement import repository
 from shared.reimbursement.use_cases.send_human_review import escalate_existing
 
 from reimbursement.agent import agent
 from reimbursement.config import AgentConfig
+from reimbursement.models import Reimbursement
 
 logger = logging.getLogger(__name__)
 

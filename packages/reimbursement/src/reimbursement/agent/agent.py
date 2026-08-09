@@ -18,17 +18,25 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from shared import failure_log
 from shared.config import load_config
-from shared.models import Reimbursement
 from shared.reimbursement.use_cases.apply_decision import apply_decision
 
 from reimbursement.agent.nodes.analysis import Analysis, GuardrailVerdict
 from reimbursement.agent.nodes.apply_agent_decision import ApplyAgentDecision
-from reimbursement.agent.nodes.apply_policies import ApplyPolicies, route_after_apply_policies
-from reimbursement.agent.nodes.extract_fields import ExtractedFieldsSchema, ExtractFields
+from reimbursement.agent.nodes.apply_policies import (
+    ApplyPolicies,
+    route_after_apply_policies,
+)
+from reimbursement.agent.nodes.extract_fields import (
+    ExtractedFieldsSchema,
+    ExtractFields,
+)
 from reimbursement.agent.nodes.validate import Validate, route_after_validate
 from reimbursement.agent.prompts.analysis import PLACEHOLDER_PROMPT as ANALYSIS_PROMPT
-from reimbursement.agent.prompts.extract_fields import PLACEHOLDER_PROMPT as EXTRACT_FIELDS_PROMPT
+from reimbursement.agent.prompts.extract_fields import (
+    PLACEHOLDER_PROMPT as EXTRACT_FIELDS_PROMPT,
+)
 from reimbursement.config import load_agent_config
+from reimbursement.models import Reimbursement
 from reimbursement.schema import Node, State
 
 logger = logging.getLogger(__name__)
