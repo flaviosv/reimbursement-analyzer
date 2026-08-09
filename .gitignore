@@ -3,8 +3,8 @@
 !.specs/**
 !docs
 !docs/**
-!src
-!src/**
+!packages
+!packages/**
 !.gitignore
 !CLAUDE.md
 !README.md

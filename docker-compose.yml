@@ -265,7 +265,7 @@ services:
   migrate:
     build:
       context: .
-      dockerfile: src/api/Dockerfile
+      dockerfile: packages/api/Dockerfile
       target: migrate
     container_name: reimbursementanalyzer-flavio-migrate
     # One-shot. 'always' (used by every sibling below) would restart it
@@ -277,14 +277,14 @@ services:
     environment:
       DATABASE_URL: postgresql://reimbursementanalyzer:${POSTGRES_PASSWORD}@postgres:5432/reimbursementanalyzer
     volumes:
-      - ./src/api:/app/src/api
-      - ./src/shared:/app/src/shared
+      - ./packages/api:/app/packages/api
+      - ./packages/shared:/app/packages/shared
 
   # --- The 3 uv-workspace services ---
   api:
     build:
       context: .
-      dockerfile: src/api/Dockerfile
+      dockerfile: packages/api/Dockerfile
       target: dev
     container_name: reimbursementanalyzer-flavio-api
     restart: always
@@ -309,13 +309,13 @@ services:
       KAFKA_SASL_PASSWORD: ${KAFKA_SASL_PASSWORD:-}
       KAFKA_SSL_CA_LOCATION: ${KAFKA_SSL_CA_LOCATION:-}
     volumes:
-      - ./src/api:/app/src/api
-      - ./src/shared:/app/src/shared
+      - ./packages/api:/app/packages/api
+      - ./packages/shared:/app/packages/shared
 
   reimbursement:
     build:
       context: .
-      dockerfile: src/reimbursement/Dockerfile
+      dockerfile: packages/reimbursement/Dockerfile
       target: dev
     container_name: reimbursementanalyzer-flavio-reimbursement
     restart: always
@@ -333,13 +333,13 @@ services:
       LANGFUSE_PUBLIC_KEY: *langfuse-public-key
       LANGFUSE_SECRET_KEY: ${LANGFUSE_INIT_PROJECT_SECRET_KEY}
     volumes:
-      - ./src/reimbursement:/app/src/reimbursement
-      - ./src/shared:/app/src/shared
+      - ./packages/reimbursement:/app/packages/reimbursement
+      - ./packages/shared:/app/packages/shared
 
   publisher:
     build:
       context: .
-      dockerfile: src/publisher/Dockerfile
+      dockerfile: packages/publisher/Dockerfile
       target: dev
     container_name: reimbursementanalyzer-flavio-publisher
     restart: always
@@ -354,8 +354,8 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:19092
       DATABASE_URL: postgresql://reimbursementanalyzer:${POSTGRES_PASSWORD}@postgres:5432/reimbursementanalyzer
     volumes:
-      - ./src/publisher:/app/src/publisher
-      - ./src/shared:/app/src/shared
+      - ./packages/publisher:/app/packages/publisher
+      - ./packages/shared:/app/packages/shared
 
 volumes:
   postgres_data:
