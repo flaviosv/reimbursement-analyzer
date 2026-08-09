@@ -54,12 +54,12 @@ class FakeConnection:
         return await self.pool.get(args[0])
 
     async def execute(self, statement: str, *args: Any) -> str:
-        return await self.pool.update(args[0], args[1])
+        return await self.pool.update(args[0], args[1], args[2])
 
 
 class FakePool:
     """Stands in for an asyncpg pool across the two statements agent code
-    issues: a read (`get_by_uuid`) and a status update (`update_human_review`,
+    issues: a read (`get_by_uuid`) and a status update (`update_decision`,
     including via `escalate_existing`).
 
     `rows` maps `uuid -> a dict standing in for an asyncpg.Record` (absent or
@@ -92,12 +92,12 @@ class FakePool:
             raise error
         return self.rows.get(uuid)
 
-    async def update(self, uuid: UUID, reason: str) -> str:
+    async def update(self, uuid: UUID, status: str, reason: str) -> str:
         error = self.update_errors.get(uuid)
         if error is not None:
             raise error
         if uuid not in self.rows:
             return "UPDATE 0"
         self.updated[uuid] = reason
-        self.rows[uuid] = {**self.rows[uuid], "status": "human-review", "decision_reason": reason}
+        self.rows[uuid] = {**self.rows[uuid], "status": status, "decision_reason": reason}
         return "UPDATE 1"
