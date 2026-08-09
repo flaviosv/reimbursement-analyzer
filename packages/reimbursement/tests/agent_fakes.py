@@ -134,10 +134,13 @@ class FakeApplyDecision:
     constructor-injection shape), so a test proves the dependency was called
     with the right arguments without monkeypatching a module import."""
 
-    def __init__(self, result: UUID | None) -> None:
+    def __init__(self, result: UUID | None = None, *, error: Exception | None = None) -> None:
         self.result = result
+        self.error = error
         self.calls: list[tuple[Any, UUID, str, str]] = []
 
     async def __call__(self, conn: Any, uuid: UUID, status: str, decision_reason: str) -> UUID | None:
         self.calls.append((conn, uuid, status, decision_reason))
+        if self.error is not None:
+            raise self.error
         return self.result

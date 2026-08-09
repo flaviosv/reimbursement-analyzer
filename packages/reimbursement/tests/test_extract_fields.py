@@ -89,3 +89,12 @@ class DescribeExtractFields:
         assert len(model.calls) == 1
         rendered = " ".join(str(message.content) for message in model.calls[0])
         assert _PAYLOAD["submitted_by"] not in rendered
+
+    async def it_propagates_an_llm_failure_uncaught(self) -> None:
+        # R-011's interim floor (validation.py's _decide) is the layer that
+        # catches this — the node itself must not swallow it.
+        model = FakeStructuredModel(error=RuntimeError("ollama unreachable"))
+        node = ExtractFields(model=model, prompt=PLACEHOLDER_PROMPT)
+
+        with pytest.raises(RuntimeError, match="ollama unreachable"):
+            await node(_state(_PAYLOAD), {"configurable": {}})

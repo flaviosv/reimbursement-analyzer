@@ -2,7 +2,6 @@ import logging
 
 import pytest
 from agent_fakes import FakeStructuredModel
-
 from reimbursement.agent.nodes.analysis import Analysis, GuardrailVerdict
 from reimbursement.agent.prompts.analysis import PLACEHOLDER_PROMPT
 
@@ -57,3 +56,12 @@ class DescribeAnalysis:
         await node(_state(), {"configurable": None})
 
         assert len(model.calls) == 1
+
+    async def it_propagates_an_llm_failure_uncaught(self) -> None:
+        # R-011's interim floor (validation.py's _decide) is the layer that
+        # catches this — the node itself must not swallow it.
+        model = FakeStructuredModel(error=RuntimeError("ollama unreachable"))
+        node = Analysis(model=model, prompt=PLACEHOLDER_PROMPT)
+
+        with pytest.raises(RuntimeError, match="ollama unreachable"):
+            await node(_state(), {"configurable": None})

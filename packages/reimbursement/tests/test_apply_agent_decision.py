@@ -60,3 +60,13 @@ class DescribeApplyAgentDecision:
         assert "decision_reason" not in result
         assert fake.calls[0][2] == "human-review"
         assert fake.calls[0][3] == "original reason from a predecessor"
+
+    async def it_propagates_an_apply_decision_write_failure_uncaught(self) -> None:
+        # R-011's interim floor (validation.py's _decide) is the layer that
+        # catches this — the node itself must not swallow it.
+        fake = FakeApplyDecision(error=RuntimeError("connection reset"))
+        node = ApplyAgentDecision(apply_decision=fake)
+        state = _state("human-review", "required field(s) unresolved by extraction: value")
+
+        with pytest.raises(RuntimeError, match="connection reset"):
+            await node(state, {"configurable": {"conn": object()}})
