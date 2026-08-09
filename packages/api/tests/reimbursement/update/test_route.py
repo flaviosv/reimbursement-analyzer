@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from functools import partial
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import asyncpg
 import httpx
@@ -15,6 +15,7 @@ from helpers import _build_client as _shared_build_client
 from helpers import valid_approve_payload, valid_reject_payload
 from api.main import app as real_app
 from api.reimbursement.update.route import router
+from shared.errors import ReimbursementNotFound
 from shared.testing import seed_reimbursement, seed_reimbursement_with_receipts
 
 pytestmark = pytest.mark.anyio
@@ -217,6 +218,28 @@ class DescribePutReimbursement:
         assert response.status_code == 500
         assert response.json() == {"msg": "internal error"}
         assert "connection reset" in caplog.text
+
+    async def it_returns_500_when_the_post_commit_reread_fails(
+        self, db: asyncpg.Connection, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.ERROR, logger="errors")
+        uuid = await seed_reimbursement(db, "REQ-PUT-REREAD-FAILS")
+
+        async def _boom(conn: asyncpg.Connection, uuid: UUID) -> asyncpg.Record:
+            raise ReimbursementNotFound(f"no reimbursement with uuid {uuid}")
+
+        monkeypatch.setattr("api.reimbursement.update.route.get_reimbursement", _boom)
+
+        async with _build_client(FakePool(db)) as client:
+            response = await client.put(f"/api/v1/reimbursement/{uuid}", json=_APPROVE_PAYLOAD)
+
+        assert response.status_code == 500
+        assert response.json() == {"msg": "internal error"}
+
+        count = await db.fetchval(
+            "SELECT count(*) FROM human_review WHERE reimbursement_uuid = $1", uuid
+        )
+        assert count == 1
 
     async def it_lets_exactly_one_of_two_concurrent_puts_win(self, migrated_db: str) -> None:
         # A real asyncpg pool (not FakePool's single locked connection): the
