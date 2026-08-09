@@ -607,3 +607,83 @@ quick patch here.
 
 Both gaps are accepted as shipped behavior for this feature; the user
 will evaluate a solution later, per the 2026-08-08 discussion above.
+
+---
+
+## R-010 — `shared.reimbursement.use_cases` is filling with single-consumer code
+
+**Raised:** 2026-08-08
+**Status:** Open, needs evaluation — owner: Flavio
+**Affects:** `shared` (`reimbursement/use_cases/`), `api-get-reimbursement`,
+`api-put-reimbursement`, `publisher-consume-request`
+**Severity:** Low now, compounds with every feature that lands the same way
+
+### What breaks
+
+`CONVENTIONS.md:17` states the rule plainly: `shared` holds code with **more
+than one real consumer across services** — everything with exactly one
+consumer belongs in that consumer's own package. `shared.reimbursement.use_cases`
+is not living up to it:
+
+| Use case | Location | Real consumer(s) |
+| -------- | -------- | ----------------- |
+| `publish_pending` | `use_cases/publish_pending.py` | `publisher` only |
+| `send_human_review` | `use_cases/send_human_review.py` | `publisher` only |
+| `list_reimbursements` (specified, not yet built) | `use_cases/list_reimbursements.py` | `api` only |
+| `review_reimbursement` (specified, not yet built) | `use_cases/review_reimbursement.py` | `api` only |
+
+Every module in the directory has exactly one caller today. Nothing in
+`use_cases/` is actually shared — each function was placed there because its
+*data layer* (`shared.reimbursement.repository`, gated behind `shared.db.managed_pool`
+per AD-029) is genuinely cross-service, and the use case sits one call above
+it. But sharing the repository doesn't require sharing the orchestration
+logic built on top of it — `list_reimbursements` and `review_reimbursement`
+belong to `api-get-reimbursement`/`api-put-reimbursement`, which are
+HTTP-only features per `CONVENTIONS.md`'s own "only `api` serves HTTP" rule
+applied one layer down.
+
+### Why it wasn't stopped earlier
+
+AD-025 already named this exact tension when `send_human_review` first
+landed: "the Agent is still a stub... if the Agent never materialises as a
+second caller, `use_cases/` should collapse back into the slice's
+`repository.py`" — explicitly flagged as a tracked bet, not an oversight.
+That bet has not paid off yet (the Agent feature remains unspecified), and
+the two new API-side designs are about to add two more single-consumer
+modules to the same directory using the identical justification pattern
+(`api-put-reimbursement/design.md:74`: "Direct precedent:
+`send_human_review`... `review_reimbursement.py` follows the identical
+shape"). Each addition individually looks like reuse of an established
+pattern; the aggregate is a `shared` directory where zero of four modules
+have a second consumer.
+
+### Options
+
+1. **Move use cases into their owning service.** `publish_pending` /
+   `send_human_review` relocate into `publisher`; `list_reimbursements` /
+   `review_reimbursement` are authored directly inside `api` from the start.
+   `shared.reimbursement.repository` (the SQL) stays shared, since it is the
+   piece both services genuinely touch. Matches `CONVENTIONS.md:17` exactly;
+   costs an import-path change per relocated module plus superseding AD-025's
+   placement for the two already-shipped use cases.
+2. **Accept `shared.reimbursement.use_cases` as a domain-orchestration layer
+   by convention, not a strict two-consumer test.** Redefine the rule for
+   this specific slice: anything one call above the shared repository lives
+   beside it regardless of consumer count, on the theory that a second
+   consumer (the Agent, a future admin tool) is more likely here than
+   elsewhere. Cheapest — no code moves — but formally waters down
+   `CONVENTIONS.md:17` for one directory rather than resolving the tension.
+3. **Accept and keep as-is, revisit once `agent-consume-reimbursement` is
+   specified.** If the Agent ends up calling `publish_pending` or
+   `send_human_review`, two of the four modules earn their placement
+   retroactively and only `list_reimbursements`/`review_reimbursement` need
+   moving. Defers the decision to when it's cheaper to make with full
+   information — but risks the same pattern repeating a third time before
+   anyone revisits it.
+
+### Trigger to decide
+
+Before `api-get-reimbursement` or `api-put-reimbursement` is implemented —
+once either ships, `list_reimbursements`/`review_reimbursement` are
+already-shipped code in the wrong place, the same way AD-029 had to correct
+`managed_pool`'s placement after the fact.
