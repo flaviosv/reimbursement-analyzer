@@ -9,7 +9,7 @@ Implement these tasks with the `tlc-spec-driven` skill: **activate it by name an
 ---
 
 **Design**: `.specs/features/publisher-compensating-delete/design.md`
-**Status**: Draft (direct transcription of AD-033, already confirmed in `.specs/STATE.md` — treated as user-confirmed for Tasks/Execute)
+**Status**: All 5 tasks (T1-T5) implemented and committed (`c5135b2`, `e6a9438`, `56a9a1c`, `d951089`, `b145a62`); feature-scoped gate green (`uv run pytest packages/shared packages/publisher` — 234 passed); pending the Verifier sub-agent's independent pass
 
 ---
 
@@ -88,10 +88,10 @@ T4 → T5
 - Skill: NONE
 
 **Done when**:
-- [ ] `delete_pending(conn, uuid)` issues `DELETE FROM reimbursement WHERE uuid = $1 AND status = 'pending'` and returns `True` iff exactly one row was removed
-- [ ] `DescribeDeletePending` in `test_repository.py`: removes-one-row case, unmatched-uuid case, and status-not-`pending` case (row left untouched) — matching `DescribeUpdateDecision`'s existing shape
-- [ ] Gate check passes: `uv run pytest packages/shared packages/publisher -m "not integration"`
-- [ ] Test count recorded (no silent deletions vs. pre-task count)
+- [x] `delete_pending(conn, uuid)` issues `DELETE FROM reimbursement WHERE uuid = $1 AND status = 'pending'` and returns `True` iff exactly one row was removed
+- [x] `DescribeDeletePending` in `test_repository.py`: removes-one-row case, unmatched-uuid case, and status-not-`pending` case (row left untouched) — matching `DescribeUpdateDecision`'s existing shape
+- [x] Gate check passes: `uv run pytest packages/shared packages/publisher -m "not integration"`
+- [x] Test count recorded (no silent deletions vs. pre-task count)
 
 **Tests**: integration
 **Gate**: quick
@@ -113,15 +113,15 @@ T4 → T5
 - Skill: NONE
 
 **Done when**:
-- [ ] `publish_pending`'s signature is `(conn, producer, item, errors, publish_timeout_seconds, failure_log_config, retry) -> None`, no `async with conn.transaction():` anywhere in its body
-- [ ] Publish success path unchanged: row stands, `insert_pending`'s uuid is what gets published
-- [ ] Publish failure → `delete_pending` removes the row → `reimbursement.compensating_delete` logged at INFO carrying `uuid`, `request_id`, `retry`, and the publish error's type (`type(exc).__name__`, matching `AttemptError.from_exception`'s existing `error_type` convention) → `PublishFailed` still raised
-- [ ] Publish failure → `delete_pending` affects zero rows → `reimbursement.compensating_delete_noop` logged at INFO (same fields) → `PublishFailed` still raised, not swallowed
-- [ ] Publish failure → `delete_pending` itself raises → `failure_log.write` carries `uuid`, `item`, `retry`, the publish error's type/message, and the delete error's type/message → `PublishFailed` still raised (not the delete's own exception), and nothing raises out of the logging path itself
-- [ ] `test_publish_pending.py`'s existing 3 tests updated for the two new required params (`failure_log_config=load_config().failure_log`, following `test_send_human_review.py`'s existing `load_config()` pattern)
-- [ ] New `DescribeTheCompensatingDelete` class: delete-removes-the-row + its traceability log (real Postgres via `db` fixture, `FakeProducer(errors={...})` to force `PublishFailed`), delete-affects-zero-rows (via `monkeypatch.setattr("shared.reimbursement.use_cases.publish_pending.delete_pending", ...)`, matching the repo's existing `monkeypatch.setattr(module, "name", stub)` convention — no `unittest.mock`, none used anywhere in this repo), delete-itself-raises (same monkeypatch technique, asserting the `failure_log` record and that `PublishFailed` — not the delete exception — is what propagates)
-- [ ] Gate check passes: `uv run pytest packages/shared -m "not integration"` — **scoped to `packages/shared` only, not the combined command**: this task changes `publish_pending`'s signature, and its one production caller (`publisher.processing._insert_and_publish`) is not updated until T3, so `packages/publisher`'s suite is expected to fail on a `TypeError` (missing args) between this commit and T3's — a normal transient state for a signature change split across two atomic commits, not a regression. The combined `packages/shared packages/publisher` gate is deferred to T3, where it must pass clean.
-- [ ] Test count recorded (no silent deletions vs. pre-task count)
+- [x] `publish_pending`'s signature is `(conn, producer, item, errors, publish_timeout_seconds, failure_log_config, retry) -> None`, no `async with conn.transaction():` anywhere in its body
+- [x] Publish success path unchanged: row stands, `insert_pending`'s uuid is what gets published
+- [x] Publish failure → `delete_pending` removes the row → `reimbursement.compensating_delete` logged at INFO carrying `uuid`, `request_id`, `retry`, and the publish error's type (`type(exc).__name__`, matching `AttemptError.from_exception`'s existing `error_type` convention) → `PublishFailed` still raised
+- [x] Publish failure → `delete_pending` affects zero rows → `reimbursement.compensating_delete_noop` logged at INFO (same fields) → `PublishFailed` still raised, not swallowed
+- [x] Publish failure → `delete_pending` itself raises → `failure_log.write` carries `uuid`, `item`, `retry`, the publish error's type/message, and the delete error's type/message → `PublishFailed` still raised (not the delete's own exception), and nothing raises out of the logging path itself
+- [x] `test_publish_pending.py`'s existing 3 tests updated for the two new required params (`failure_log_config=load_config().failure_log`, following `test_send_human_review.py`'s existing `load_config()` pattern)
+- [x] New `DescribeTheCompensatingDelete` class: delete-removes-the-row + its traceability log (real Postgres via `db` fixture, `FakeProducer(errors={...})` to force `PublishFailed`), delete-affects-zero-rows (via `monkeypatch.setattr("shared.reimbursement.use_cases.publish_pending.delete_pending", ...)`, matching the repo's existing `monkeypatch.setattr(module, "name", stub)` convention — no `unittest.mock`, none used anywhere in this repo), delete-itself-raises (same monkeypatch technique, asserting the `failure_log` record and that `PublishFailed` — not the delete exception — is what propagates)
+- [x] Gate check passes: `uv run pytest packages/shared -m "not integration"` — **scoped to `packages/shared` only, not the combined command**: this task changes `publish_pending`'s signature, and its one production caller (`publisher.processing._insert_and_publish`) is not updated until T3, so `packages/publisher`'s suite is expected to fail on a `TypeError` (missing args) between this commit and T3's — a normal transient state for a signature change split across two atomic commits, not a regression. The combined `packages/shared packages/publisher` gate is deferred to T3, where it must pass clean.
+- [x] Test count recorded (no silent deletions vs. pre-task count)
 
 **Tests**: unit + integration
 **Gate**: quick
@@ -143,14 +143,14 @@ T4 → T5
 - Skill: NONE
 
 **Done when**:
-- [ ] `_insert_and_publish` no longer opens `conn.transaction()`; calls `publish_pending(conn, deps.producer, item, envelope.errors, deps.config.kafka.publish_timeout_seconds, deps.config.failure_log, envelope.retry)`
-- [ ] `process_item`'s `except Exception` branch comment rewritten to describe its actual scope post-change (catches only the insert's own failure — `is_duplicate` or a generic `db-insert` requeue — since a `PublishFailed` is now always caught by the `except PublishFailed` branch above it and no commit step can fail after a successful publish anymore)
-- [ ] `FakeConnection.execute()` added to `fakes.py`, returning `"DELETE 1"` (default success stub — no existing test asserts on delete outcomes at this layer, only that the decision tree doesn't crash when the compensating delete fires)
-- [ ] `DescribeTheItemTransaction` renamed to `DescribeInsertThenPublish` (no longer describes a transaction); `it_leaves_no_row_behind_when_the_publish_fails` gets a short comment noting the row is now gone via an explicit compensating delete, not a rollback — assertion itself (`row count == 0`) is unchanged, since the observable outcome (PUB-09) still holds
-- [ ] Full existing `test_processing.py` suite (813-line file, every `ItemOutcome` branch) still passes unmodified in assertions beyond the rename/comment above — no regression in requeue, duplicate, escalation, or db-insert-failure coverage
-- [ ] `grep -n "conn.transaction()" packages/publisher/src/publisher/processing.py` returns no match inside `_insert_and_publish` (structural confirmation of PCD-01, verified by inspection rather than a dedicated runtime test — matches design.md's framing of this as a transaction-boundary/structural requirement)
-- [ ] Gate check passes: `uv run pytest packages/shared packages/publisher -m "not integration"`
-- [ ] Test count recorded (no silent deletions vs. pre-task count)
+- [x] `_insert_and_publish` no longer opens `conn.transaction()`; calls `publish_pending(conn, deps.producer, item, envelope.errors, deps.config.kafka.publish_timeout_seconds, deps.config.failure_log, envelope.retry)`
+- [x] `process_item`'s `except Exception` branch comment rewritten to describe its actual scope post-change (catches only the insert's own failure — `is_duplicate` or a generic `db-insert` requeue — since a `PublishFailed` is now always caught by the `except PublishFailed` branch above it and no commit step can fail after a successful publish anymore)
+- [x] `FakeConnection.execute()` added to `fakes.py`, returning `"DELETE 1"` (default success stub — no existing test asserts on delete outcomes at this layer, only that the decision tree doesn't crash when the compensating delete fires)
+- [x] `DescribeTheItemTransaction` renamed to `DescribeInsertThenPublish` (no longer describes a transaction); `it_leaves_no_row_behind_when_the_publish_fails` gets a short comment noting the row is now gone via an explicit compensating delete, not a rollback — assertion itself (`row count == 0`) is unchanged, since the observable outcome (PUB-09) still holds
+- [x] Full existing `test_processing.py` suite (813-line file, every `ItemOutcome` branch) still passes unmodified in assertions beyond the rename/comment above — no regression in requeue, duplicate, escalation, or db-insert-failure coverage
+- [x] `grep -n "conn.transaction()" packages/publisher/src/publisher/processing.py` returns no match inside `_insert_and_publish` (structural confirmation of PCD-01, verified by inspection rather than a dedicated runtime test — matches design.md's framing of this as a transaction-boundary/structural requirement)
+- [x] Gate check passes: `uv run pytest packages/shared packages/publisher -m "not integration"`
+- [x] Test count recorded (no silent deletions vs. pre-task count)
 
 **Tests**: unit + integration
 **Gate**: quick
@@ -172,10 +172,10 @@ T4 → T5
 - Skill: NONE
 
 **Done when**:
-- [ ] Line 241's "in a single transaction" bullet carries an inline amended note: no longer a single transaction — insert commits immediately, publish attempted after, a publish failure compensated by an explicit delete rather than a rollback — cites AD-033
-- [ ] Line 252's "rollback the DB transaction" bullet carries an inline amended note: no DB transaction to roll back — a publish failure triggers a compensating `DELETE` gated `WHERE uuid = $1 AND status = 'pending'`, durably logged on every outcome — cites AD-033
-- [ ] Neither original bullet's text is deleted or rewritten — amendment only, matching precedent
-- [ ] Gate: N/A (prose-only) — diff manually reviewed against AC9's wording
+- [x] Line 241's "in a single transaction" bullet carries an inline amended note: no longer a single transaction — insert commits immediately, publish attempted after, a publish failure compensated by an explicit delete rather than a rollback — cites AD-033
+- [x] Line 252's "rollback the DB transaction" bullet carries an inline amended note: no DB transaction to roll back — a publish failure triggers a compensating `DELETE` gated `WHERE uuid = $1 AND status = 'pending'`, durably logged on every outcome — cites AD-033
+- [x] Neither original bullet's text is deleted or rewritten — amendment only, matching precedent
+- [x] Gate: N/A (prose-only) — diff manually reviewed against AC9's wording
 
 **Tests**: none
 **Gate**: docs
@@ -197,10 +197,10 @@ T4 → T5
 - Skill: NONE
 
 **Done when**:
-- [ ] New subsection (e.g. `### AD-033 amendment (2026-08-09)`) states, in its own paragraph, which two consequences are closed and why (insert-before-publish removes the window both depended on)
-- [ ] A second, explicitly separate paragraph in the same subsection states the narrower residual risk this design opens (orphaned row, crash-between-delete-dispatch-and-completion only) and that it is not auto-healed
-- [ ] R-001's `**Status:**` line updated to reflect the partial closure (e.g. "two consequences closed by AD-033; a narrower residual risk accepted in their place") without altering the rest of the existing content
-- [ ] Gate: N/A (prose-only) — diff manually reviewed against AC10's wording (closed vs. opened distinguished explicitly, not merged)
+- [x] New subsection (e.g. `### AD-033 amendment (2026-08-09)`) states, in its own paragraph, which two consequences are closed and why (insert-before-publish removes the window both depended on)
+- [x] A second, explicitly separate paragraph in the same subsection states the narrower residual risk this design opens (orphaned row, crash-between-delete-dispatch-and-completion only) and that it is not auto-healed
+- [x] R-001's `**Status:**` line updated to reflect the partial closure (e.g. "two consequences closed by AD-033; a narrower residual risk accepted in their place") without altering the rest of the existing content
+- [x] Gate: N/A (prose-only) — diff manually reviewed against AC10's wording (closed vs. opened distinguished explicitly, not merged)
 
 **Tests**: none
 **Gate**: docs

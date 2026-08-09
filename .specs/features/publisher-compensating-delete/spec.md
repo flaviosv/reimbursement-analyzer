@@ -171,22 +171,22 @@ Each requirement gets a unique ID for tracking across design, tasks, and validat
 
 | Requirement ID | Story | Phase | Status |
 | --- | --- | --- | --- |
-| PCD-01 | P1: Insert commits before publish is attempted | Design | Pending |
-| PCD-02 | P1: Publish success unchanged | Design | Pending |
-| PCD-03 | P1: Publish failure triggers compensating delete | Design | Pending |
-| PCD-04 | P1: Delete-succeeded traceability | Design | Pending |
-| PCD-05 | P1: Delete-no-op traceability | Design | Pending |
-| PCD-06 | P1: Delete-failed traceability (failure_log) | Design | Pending |
-| PCD-07 | P1: Requeue path unchanged | Design | Pending |
-| PCD-08 | P1: DB-insert-failure path unchanged | Design | Pending |
-| PCD-09 | P1: docs/SCOPE.md amendment | Design | Pending |
-| PCD-10 | P1: R-001 amendment | Design | Pending |
+| PCD-01 | P1: Insert commits before publish is attempted | T2, T3 | Implemented |
+| PCD-02 | P1: Publish success unchanged | T2, T3 | Implemented |
+| PCD-03 | P1: Publish failure triggers compensating delete | T1, T2 | Implemented |
+| PCD-04 | P1: Delete-succeeded traceability | T2 | Implemented |
+| PCD-05 | P1: Delete-no-op traceability | T2 | Implemented |
+| PCD-06 | P1: Delete-failed traceability (failure_log) | T2 | Implemented |
+| PCD-07 | P1: Requeue path unchanged | T3 | Implemented |
+| PCD-08 | P1: DB-insert-failure path unchanged | T3 | Implemented |
+| PCD-09 | P1: docs/SCOPE.md amendment | T4 | Implemented |
+| PCD-10 | P1: R-001 amendment | T5 | Implemented |
 
 **ID format:** `PCD-[NUMBER]` (Publisher Compensating Delete)
 
 **Status values:** Pending → In Design → In Tasks → Implementing → Verified
 
-**Coverage:** 10 total, 0 mapped to tasks, 10 unmapped ⚠️ (expected — Tasks phase not yet run)
+**Coverage:** 10 total, 10 mapped to tasks, 0 unmapped — all implemented; final "Verified" status pending the Verifier sub-agent's independent pass (`.specs/features/publisher-compensating-delete/validation.md`)
 
 ---
 
