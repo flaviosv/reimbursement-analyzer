@@ -79,6 +79,8 @@ class DescribeApplyPolicies:
 
         assert result["status"] == "auto-approved"
         assert fake.calls == [(conn, uuid, "auto-approved", result["decision_reason"])]
+        # AGD-13: reason names the ceiling rule and the resolved value.
+        assert "200" in result["decision_reason"]
 
     async def it_routes_a_value_over_2000_to_human_review_via_apply_decision(self) -> None:
         uuid = uuid4()
@@ -91,6 +93,8 @@ class DescribeApplyPolicies:
 
         assert result["status"] == "human-review"
         assert fake.calls == [(conn, uuid, "human-review", result["decision_reason"])]
+        # AGD-16: reason names the floor rule and the resolved value.
+        assert "2000.01" in result["decision_reason"]
 
     async def it_leaves_exactly_2000_in_the_ambiguous_zone_not_the_mandatory_rule(self) -> None:
         fake = FakeApplyDecision(result=uuid4())
