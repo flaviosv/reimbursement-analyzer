@@ -30,24 +30,27 @@ class DescribeGetReimbursementByUuid:
         assert body["data"]["uuid"] == str(uuid)
         assert body["data"]["status"] == "human-approved"
 
-    async def it_includes_the_last_human_review_when_present_and_null_when_absent(
-        self, db: asyncpg.Connection
-    ) -> None:
-        with_review = await seed_reimbursement(db, "REQ-GET-HR-PRESENT", status="human-approved")
+    async def it_includes_last_human_review_when_present(self, db: asyncpg.Connection) -> None:
+        uuid = await seed_reimbursement(db, "REQ-GET-HR-PRESENT", status="human-approved")
         await seed_human_review(
-            db, with_review, reason="first look", created_at=datetime(2026, 5, 1, tzinfo=UTC)
+            db, uuid, reason="first look", created_at=datetime(2026, 5, 1, tzinfo=UTC)
         )
         await seed_human_review(
-            db, with_review, reason="second look", created_at=datetime(2026, 5, 2, tzinfo=UTC)
+            db, uuid, reason="second look", created_at=datetime(2026, 5, 2, tzinfo=UTC)
         )
-        without_review = await seed_reimbursement(db, "REQ-GET-HR-ABSENT", status="human-review")
 
         async with _build_client(FakePool(db)) as client:
-            with_review_response = await client.get(f"/api/v1/reimbursement/{with_review}")
-            without_review_response = await client.get(f"/api/v1/reimbursement/{without_review}")
+            response = await client.get(f"/api/v1/reimbursement/{uuid}")
 
-        assert with_review_response.json()["data"]["last_human_review"]["reason"] == "second look"
-        assert without_review_response.json()["data"]["last_human_review"] is None
+        assert response.json()["data"]["last_human_review"]["reason"] == "second look"
+
+    async def it_returns_last_human_review_null_when_absent(self, db: asyncpg.Connection) -> None:
+        uuid = await seed_reimbursement(db, "REQ-GET-HR-ABSENT", status="human-review")
+
+        async with _build_client(FakePool(db)) as client:
+            response = await client.get(f"/api/v1/reimbursement/{uuid}")
+
+        assert response.json()["data"]["last_human_review"] is None
 
     async def it_returns_404_for_a_well_formed_uuid_that_matches_no_row(
         self, db: asyncpg.Connection
