@@ -3,7 +3,7 @@ from uuid import UUID
 import asyncpg
 from fastapi import APIRouter, Depends, Request
 from shared.config import MAX_BODY_BYTES, load_config
-from shared.errors import ReimbursementUuidMismatch
+from shared.errors import ReimbursementNotFound, ReimbursementUuidMismatch
 from shared.reimbursement.use_cases.get_reimbursement import get_reimbursement
 from shared.reimbursement.use_cases.review_reimbursement import approve_reimbursement, reject_reimbursement
 
@@ -56,7 +56,12 @@ async def put_reimbursement(
         else:
             await reject_reimbursement(conn, uuid, reason=review.reason, approved_by=review.approved_by)
 
-        row = await get_reimbursement(conn, uuid)
+        try:
+            row = await get_reimbursement(conn, uuid)
+        except ReimbursementNotFound as exc:
+            raise RuntimeError(
+                f"reimbursement {uuid} decision committed but could not be re-fetched afterward"
+            ) from exc
 
     return ReimbursementDetailResponse(
         msg="reimbursement decision recorded", data=ReimbursementItem.from_record(row)
