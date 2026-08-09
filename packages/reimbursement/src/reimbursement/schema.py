@@ -1,6 +1,8 @@
 from datetime import date
 from typing import TypedDict
 
+from shared.models import DecisionStatus
+
 from reimbursement.models import Reimbursement
 
 
@@ -21,7 +23,7 @@ class State(TypedDict):
 
     # The decision — written ONCE, by exactly one of the three deciding
     # nodes per run (validate | apply_policies | analysis).
-    status: str | None
+    status: DecisionStatus | None
     decision_reason: str | None
 
     # Set by whichever node actually calls apply_decision (apply_policies or

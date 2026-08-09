@@ -138,9 +138,21 @@ class FakeApplyDecision:
         self.result = result
         self.error = error
         self.calls: list[tuple[Any, UUID, str, str]] = []
+        self.receipts_calls: list[tuple[Any, Any, Any]] = []
 
-    async def __call__(self, conn: Any, uuid: UUID, status: str, decision_reason: str) -> UUID | None:
+    async def __call__(
+        self,
+        conn: Any,
+        uuid: UUID,
+        status: str,
+        decision_reason: str,
+        *,
+        receipts_value: Any = None,
+        receipts_date: Any = None,
+        currency: Any = None,
+    ) -> UUID | None:
         self.calls.append((conn, uuid, status, decision_reason))
+        self.receipts_calls.append((receipts_value, receipts_date, currency))
         if self.error is not None:
             raise self.error
         return self.result

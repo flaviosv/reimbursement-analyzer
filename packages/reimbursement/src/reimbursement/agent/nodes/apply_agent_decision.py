@@ -3,6 +3,7 @@ decision_reason is already in state, regardless of whether validate or
 analysis put it there. Never authors its own status/decision_reason."""
 
 import logging
+from decimal import Decimal
 from typing import Any
 
 from langchain_core.runnables import RunnableConfig
@@ -21,11 +22,19 @@ class ApplyAgentDecision:
         logger.info("FLOW: Executing 'apply_agent_decision' node")
 
         reimbursement = state["reimbursement"]
+        extracted = state.get("extracted") or {}
+        value = extracted.get("value")
+        # Mirrors ApplyPolicies's own guard: receipts_value's DB column has
+        # a >=0 CHECK constraint.
+        receipts_value = Decimal(str(value)) if value is not None and value >= 0 else None
         result = await self._apply_decision(
             config["configurable"]["conn"],
             reimbursement.uuid,
             state["status"],
             state["decision_reason"],
+            receipts_value=receipts_value,
+            receipts_date=extracted.get("receipts_date"),
+            currency=extracted.get("currency"),
         )
         persisted = result is not None
         logger.info("FLOW: apply_agent_decision outcome: persisted=%s", persisted)

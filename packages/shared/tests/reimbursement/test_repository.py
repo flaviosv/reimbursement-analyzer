@@ -5,7 +5,6 @@ from uuid import UUID, uuid4
 
 import asyncpg
 import pytest
-from shared.testing import valid_reimbursement_item
 from shared.reimbursement.repository import (
     approve,
     fetch_reimbursement_page,
@@ -22,6 +21,7 @@ from shared.testing import (
     seed_human_review,
     seed_reimbursement,
     seed_reimbursement_with_receipts,
+    valid_reimbursement_item,
 )
 
 pytestmark = pytest.mark.anyio
@@ -525,3 +525,42 @@ class DescribeUpdateDecision:
         result = await update_decision(db, uuid4(), "human-review", "unreachable reason")
 
         assert result is False
+
+    async def it_backfills_the_receipts_columns_when_given(self, db: asyncpg.Connection) -> None:
+        uuid = await insert_pending(db, valid_reimbursement_item("REQ-UPDATE-RECEIPTS"))
+
+        await update_decision(
+            db,
+            uuid,
+            "auto-approved",
+            "value 93.5 <= 200 threshold",
+            receipts_value=Decimal("93.50"),
+            receipts_date=date(2026, 4, 9),
+            currency="BRL",
+        )
+
+        row = await db.fetchrow("SELECT * FROM reimbursement WHERE uuid = $1", uuid)
+        assert row["receipts_value"] == Decimal("93.50")
+        assert row["receipts_date"] == date(2026, 4, 9)
+        assert row["currency"] == "BRL"
+
+    async def it_coalesces_the_existing_receipts_columns_when_not_given(
+        self, db: asyncpg.Connection
+    ) -> None:
+        uuid = await insert_pending(db, valid_reimbursement_item("REQ-UPDATE-NO-RECEIPTS"))
+        await update_decision(
+            db,
+            uuid,
+            "human-review",
+            "first pass",
+            receipts_value=Decimal("64.80"),
+            receipts_date=date(2026, 4, 11),
+            currency="BRL",
+        )
+
+        await update_decision(db, uuid, "human-review", "retry ceiling reached")
+
+        row = await db.fetchrow("SELECT * FROM reimbursement WHERE uuid = $1", uuid)
+        assert row["receipts_value"] == Decimal("64.80")
+        assert row["receipts_date"] == date(2026, 4, 11)
+        assert row["currency"] == "BRL"

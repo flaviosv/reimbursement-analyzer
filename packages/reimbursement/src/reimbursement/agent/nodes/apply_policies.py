@@ -3,6 +3,7 @@
 
 import logging
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any, Literal
 
 from langchain_core.runnables import RunnableConfig
@@ -57,8 +58,20 @@ class ApplyPolicies:
             return {"requires_llm_judgment": True}
 
         logger.info("FLOW: apply_policies rule fired: status=%s", status)
+        # receipts_value's own DB column has a >=0 CHECK constraint; spec.md
+        # deliberately lets a zero/negative extracted value clear the <=200
+        # ceiling unmodified (no floor on the threshold rule itself), so a
+        # negative value is skipped here rather than persisted and failing
+        # the write outright.
+        receipts_value = Decimal(str(value)) if value is not None and value >= 0 else None
         result = await self._apply_decision(
-            config["configurable"]["conn"], reimbursement.uuid, status, decision_reason
+            config["configurable"]["conn"],
+            reimbursement.uuid,
+            status,
+            decision_reason,
+            receipts_value=receipts_value,
+            receipts_date=receipts_date,
+            currency=extracted["currency"],
         )
         persisted = result is not None
         logger.info("FLOW: apply_policies apply_decision outcome: persisted=%s", persisted)
