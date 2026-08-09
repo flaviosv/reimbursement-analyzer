@@ -23,7 +23,7 @@ async def _stub_decide(
 @pytest.fixture(autouse=True)
 def _fake_agent_decide(monkeypatch: pytest.MonkeyPatch) -> None:
     # A default stub so every test that reaches the RESOLVED path's
-    # agent.decide() call (T14) never builds a real graph or calls Ollama.
+    # agent.decide() call (T14) never builds a real graph or calls Groq.
     # DescribeDecideIntegration's own cases below override this per test.
     monkeypatch.setattr(agent, "decide", _stub_decide)
 
@@ -390,7 +390,7 @@ class DescribeDecideIntegration:
         async def _failing_decide(
             reimbursement: Reimbursement, pool: object, *, acquire_timeout_seconds: float
         ) -> dict[str, object]:
-            raise RuntimeError("ollama unreachable")
+            raise RuntimeError("groq unreachable")
 
         monkeypatch.setattr(agent, "decide", _failing_decide)
 
@@ -401,7 +401,7 @@ class DescribeDecideIntegration:
 
         assert outcome == MessageOutcome.LOGGED
         assert any("reimbursement.decision_failed" in r.message for r in caplog.records)
-        assert any("ollama unreachable" in r.message for r in caplog.records)
+        assert any("groq unreachable" in r.message for r in caplog.records)
         # No retry, no auto-escalation: the row itself is never touched.
         assert pool.rows[uuid]["status"] == "pending"
 
