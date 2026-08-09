@@ -14,14 +14,9 @@ from langchain_core.runnables import Runnable, RunnableConfig
 from pydantic import BaseModel
 
 from reimbursement.schema import ExtractedFields, State
+from reimbursement.agent.prompts.extract_fields import get_extract_fields_prompt
 
 logger = logging.getLogger(__name__)
-
-# AGD-26: only the fields extraction operationally needs reach the LLM
-# prompt — excludes `submitted_by` (PII) and every other payload key
-# (`request_id`, `submitted_at`, `attachments`) this node doesn't read.
-_PROMPT_PAYLOAD_FIELDS = ("claimed_amount_brl", "claimed_category", "raw_ocr_text")
-
 
 class ExtractedFieldsSchema(BaseModel):
     """This node's own structured-output contract — bound onto `model` via
@@ -33,18 +28,15 @@ class ExtractedFieldsSchema(BaseModel):
 
 
 class ExtractFields:
-    def __init__(self, model: Runnable, prompt: ChatPromptTemplate) -> None:
+    def __init__(self, model: Runnable) -> None:
         self._model = model
-        self._prompt = prompt
 
     async def __call__(self, state: State, config: RunnableConfig) -> dict[str, Any]:
         logger.info("FLOW: Executing 'extract_fields' node")
 
         payload = state["reimbursement"].original_payload
-        prompt_payload = {
-            key: payload[key] for key in _PROMPT_PAYLOAD_FIELDS if key in payload
-        }
-        messages = self._prompt.format_messages(payload=json.dumps(prompt_payload))
+        
+        messages = [get_extract_fields_prompt(payload)]
         result = await self._model.ainvoke(messages)
 
         extracted: ExtractedFields = {

@@ -12,8 +12,8 @@ from typing import Any
 
 from shared.config import KafkaConfig
 
-_DEFAULT_OLLAMA_MODEL = "llama3.2"
-_DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
+_DEFAULT_OLLAMA_MODEL = "qwen3.5:4b"
+_DEFAULT_OLLAMA_BASE_URL = "http://host.docker.internal:11434"
 _DEFAULT_OLLAMA_TIMEOUT_SECONDS = 30.0
 
 

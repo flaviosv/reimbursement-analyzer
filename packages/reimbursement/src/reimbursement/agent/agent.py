@@ -31,10 +31,7 @@ from reimbursement.agent.nodes.extract_fields import (
     ExtractFields,
 )
 from reimbursement.agent.nodes.validate import Validate, route_after_validate
-from reimbursement.agent.prompts.analysis import PLACEHOLDER_PROMPT as ANALYSIS_PROMPT
-from reimbursement.agent.prompts.extract_fields import (
-    PLACEHOLDER_PROMPT as EXTRACT_FIELDS_PROMPT,
-)
+
 from reimbursement.agent.types import Node
 from reimbursement.config import load_agent_config
 from reimbursement.models import Reimbursement
@@ -86,10 +83,10 @@ def build_graph() -> CompiledStateGraph:
     ).with_structured_output(GuardrailVerdict)
 
     nodes: dict[str, Node] = {
-        "extract_fields": ExtractFields(model=extract_model, prompt=EXTRACT_FIELDS_PROMPT),
+        "extract_fields": ExtractFields(model=extract_model),
         "validate": Validate(),
         "apply_policies": ApplyPolicies(apply_decision=apply_decision),
-        "analysis": Analysis(model=analysis_model, prompt=ANALYSIS_PROMPT, model_name=config.ollama_model),
+        "analysis": Analysis(model=analysis_model, model_name=config.ollama_model),
         "apply_agent_decision": ApplyAgentDecision(apply_decision=apply_decision),
     }
     return _wire(nodes)

@@ -367,7 +367,7 @@ log reads as a deliberate release rather than a lost entry.
 ### AD-017 — `asyncpg` pool + implicit-transaction as the project's async DB pattern
 
 **Date:** 2026-08-08
-**Status:** Active
+**Status:** Amended by AD-033 (publisher's insert+publish unit of work only — the pattern below remains Active for every other write-plus-side-effect unit of work) — 2026-08-09
 
 Every service reaching Postgres at runtime does so through an `asyncpg` pool
 opened by a `managed_pool()` async context manager, and wraps any
@@ -1106,6 +1106,94 @@ same count as before. `pyright` against all four packages' entry modules
 regression is resolved. `docker compose up -d api publisher reimbursement`
 — all three healthy, full `api → publisher → reimbursement` message chain
 verified end-to-end via a live smoke POST.
+
+### AD-032 — Reimbursement's LLM provider switches Ollama → Groq; per-node `ModelConfig` nesting is the project's convention for LLM-node configuration
+
+**Date:** 2026-08-09
+**Status:** Active
+
+`reimbursement/config.py`'s `AgentConfig` replaces its flat `ollama_model`/
+`ollama_base_url`/`ollama_timeout_seconds` fields with `ai: AIConfig`
+(`api_key`, `timeout_seconds` — shared across every node's model) and
+`models: AgentModelsConfig` (one `ModelConfig(model_name, temperature)` per
+LLM node — `extract_fields` and `analysis` today). `build_graph()`
+constructs two independent `init_chat_model("groq:<model>", ...)` instances,
+one per node, each reading its own `ModelConfig` and sharing `AIConfig`.
+
+**Why:** user decision — Ollama required a self-hosted GPU host with no
+config-layer parity to `shared.config`'s `KafkaConfig`/`DatabaseConfig`
+pattern, and both LLM nodes shared one model/temperature-less config with no
+independent tuning. `model_name` deliberately has **no code-level default**
+(fails fast via a `_require_env` helper if unset) — a financial-decision
+agent should never silently run on an unvetted default model, unlike
+Ollama's old `llama3.2` fallback. `temperature` defaults to `0.0` for both
+nodes (low-variance output wanted for both structured extraction and a
+pass/fail guardrail verdict). `timeout_seconds` stays on the shared
+`AIConfig`, not per-node — it's an operational HTTP-call bound, not a
+model-quality knob like `model_name`/`temperature`, so duplicating it per
+node would gain nothing.
+
+**Implication:** any future LLM node the reimbursement agent gains follows
+this same nesting — a new `ModelConfig` field added to `AgentModelsConfig`,
+sharing the existing `AIConfig`. `.env.sample` carries settled (non-blank)
+placeholders for the two required model-name vars
+(`EXTRACT_FIELDS_MODEL_NAME`/`ANALYSIS_MODEL_NAME` — `llama-3.3-70b-versatile`,
+verified live via Groq's own model docs) so a fresh
+`cp .env.sample .env` still works out of the box, even though the code
+itself enforces no silent default. A real compliance-posture question was
+flagged to the user during design — prompt payloads (`raw_ocr_text` in
+particular) now leave the local Docker network for Groq's cloud API instead
+of a host-machine Ollama instance — and the user chose to proceed without
+adding scrubbing/redaction as part of this change.
+
+---
+
+### AD-033 — Publisher's insert+publish unit of work drops its transaction: insert commits immediately, a publish failure triggers an explicit compensating `DELETE`
+
+**Date:** 2026-08-09
+**Status:** Active
+**Amends:** AD-017 (scoped — publisher's insert+publish only; AD-017's implicit-transaction pattern stays Active for every other write-plus-side-effect unit of work: `escalate_item`'s `send_human_review`, `review_reimbursement`'s `approve`/`reject` + `record_human_review_decision`)
+
+`shared.reimbursement.use_cases.publish_pending` no longer runs inside
+`async with conn.transaction():`. `insert_pending` commits immediately; the
+`Reimbursement` publish is attempted after that commit; if it raises
+`PublishFailed`, a new `delete_pending(conn, uuid)` (gated
+`WHERE uuid = $1 AND status = 'pending'`) removes the row before the
+existing `_requeue` path fires. Every branch of the delete (removed one row,
+removed zero, or raised) is logged — the zero-and-removed cases via a
+structured `logger.info` event, the raised case via `failure_log.write` (the
+project's durable last-resort sink), per `CLAUDE.md`'s hard traceability
+requirement.
+
+**Why:** user decision, made under an explicit time constraint that ruled
+out the transactional-outbox pattern `.specs/RISKS.md` R-001 already names
+as the proper fix. Traced precisely during Design rather than assumed: this
+is not a straight downgrade from AD-017's guarantee. Because the insert now
+commits *before* the publish is even attempted, there is no window where a
+`Reimbursement` message exists but its row doesn't — this closes R-001's
+ghost-message case and its duplicate-via-commit-failure case outright, both
+of which depended on the commit happening *after* the publish. What it opens
+instead is narrower: an orphaned, un-recoverable `pending` row, possible only
+if the process crashes between a publish failure and the compensating delete
+completing — a compound of two independently low-probability events, not the
+common-path window AD-017's transaction closed. This residual gap is
+accepted knowingly, not discovered after the fact, and is why every delete
+outcome is durably logged rather than silently absorbed the way a database's
+own rollback would have been.
+
+**Implication:** `docs/SCOPE.md:241-252` (Reimbursement Publisher / Error
+Handling) is amended in place with an inline dated note — the "single
+transaction" / "rollback the DB transaction" language it originally
+specified no longer describes the shipped behavior for this path.
+`.specs/RISKS.md` R-001 is updated to record the two consequences this
+design closes and the narrower one it opens, distinguished explicitly rather
+than merged into the same paragraph. `publish_pending`'s signature gains two
+parameters (`failure_log_config: FailureLogConfig`, `retry: int`) — its one
+production caller (`publisher.processing._insert_and_publish`) and its
+direct-call test file (`shared/tests/reimbursement/use_cases/test_publish_pending.py`)
+both update accordingly. See `.specs/features/publisher-compensating-delete/`
+for the full spec/design and `is_duplicate`'s unchanged behavior (the INSERT's
+own unique-constraint path is untouched by this change).
 
 ---
 

@@ -10,6 +10,7 @@ from langchain_core.runnables import Runnable, RunnableConfig
 from pydantic import BaseModel
 
 from reimbursement.schema import State
+from reimbursement.agent.prompts.analysis import get_analysis_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +24,8 @@ class GuardrailVerdict(BaseModel):
 
 
 class Analysis:
-    def __init__(self, model: Runnable, prompt: ChatPromptTemplate, model_name: str) -> None:
+    def __init__(self, model: Runnable, model_name: str) -> None:
         self._model = model
-        self._prompt = prompt
         # AGD-23/24's LangFuse trace already captures the full prompt/
         # response per call; this is the durable, no-cross-reference-needed
         # record of which model authored this specific decision_reason.
@@ -35,7 +35,7 @@ class Analysis:
         logger.info("FLOW: Executing 'analysis' node")
 
         extracted = state["extracted"]
-        messages = self._prompt.format_messages(extracted=json.dumps(extracted, default=str))
+        messages = [get_analysis_prompt(extracted)]
         verdict = await self._model.ainvoke(messages)
 
         status = "auto-approved" if verdict.consistent else "human-review"

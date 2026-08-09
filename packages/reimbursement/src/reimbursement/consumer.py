@@ -63,6 +63,8 @@ async def run(deps: Dependencies, consumer: AIOConsumer, stopping: asyncio.Event
         if not messages:
             continue
 
+        logger.info("consumer received message: %s", messages[0].value())
+
         message = messages[0]
         error = message.error()
         if error is not None:

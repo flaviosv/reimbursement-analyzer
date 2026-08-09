@@ -179,6 +179,14 @@
         }
         ```
 
+### GET /api/v1/reimbursement/:uuid
+- Return a single Reimbursement by the uuid
+- **Responses**
+    - 200
+    - 400
+    - 404
+    - 500
+
 ### PUT /api/v1/reimbursement/:uuid 
 - Only recheable for `Reimbursement` in `Human-Rejected` or `Auto-Rejected` or `Human-Review` status
   (confirmed as literally listed — the Decisions section's "not possible to
@@ -348,79 +356,107 @@
 
 # Decisions
 
-- Request
-    - The project assume that the payload can vary, just a set of fields has been set as required, for the sake of requester's identity
-        - `request_id`
-        - `submitted_by`
-        - `submitted_at`
-    - Considering the project is missions critical, no requests must be lost, so the `POST /api/v1/reimbursement` will publish to a Kafka topic to minimize the loses. The internal processing will make sure the requests will be fully processed or monitored in case of errors
-    - Even though the attachmets could be used to validate if the `raw_ocr_text` matches the data in the attachment, I deliberatedly decided to leave this feature out of the scope to reduce the complexity
-- Authentication
-    - Didn't add authentication to allow focus on the business rule
-    - The Human Review data schema contains an Reviewed By, what keeps a plain text email, even though the endpoint is receiving an email, the correct approach would be extract from the JWT, as example, or other method relying on the authentication step
+### Authentication
+- Didn't add authentication to allow focus on the business rule
+- The Human Review data schema contains an Reviewed By, what keeps a plain text email, even though the endpoint is receiving an email, the correct approach would be extract from the JWT, as example, or other method relying on the authentication step
+
+## API Layer
+
+### Request
+- The project assume that the payload can vary, just a set of fields has been set as required, for the sake of requester's identity
+    - `request_id`
+    - `submitted_by`
+    - `submitted_at`
+- Considering the project is missions critical, no requests must be lost, so the `POST /api/v1/reimbursement` will publish to a Kafka topic to minimize the loses. The internal processing will make sure the requests will be fully processed or monitored in case of errors
+- Even though the attachmets could be used to validate if the `raw_ocr_text` matches the data in the attachment, I deliberatedly decided to leave this feature out of the scope to reduce the complexity
+
+### Cache
+- No cache has been applied, no reason for adding it
+
+## Agent Layer
+
+### Deterministic
+- It's gonna exist to either support the Agent as a tool or to simply move to the correct status if no LLM are needed at all
+
+### Probabilistic Layer
+- The Agent starts with the task of finding the `Receipt Date`, this project prioritize the `Reject First`.
+    - The sample payload doesn't contain a `Receipt Date`, and the document is explicity that the payload can vary
+- The LLM is getting two responsabilities
+    - Locate all the required information to deterministically auto-approve or reject (Currency, `Receipt Date` and `Receipt Value`)
+    - Run analysis in order to fill the gap, where if the `Reimbursement`is not rejected, and `20 > Receipt Value < 2000`. 
+        - The agent is gonna if the information is solid and not contradictory, with the intetion of covering the gap from the document where. 
+        - i.e the category is hotel but the service name is "Mexican Restaurant", if this happens, then it's gonna send to `Human Review`
+- Not reject / discard requests if errors
+    - If repeat errors / edge scenarios happens, immediately is gonna be sent to Human Review, to avoid losing request
+    - Fallback to logging in the output if any services are unavailable (DB / Kafka)
+    - This decision can polute the `Human Review` flow, however monitoring tools can be added in order to evaluate the impact in this flow and apply other approaches after real data comes in
+
+## Human Review
+- If the a `Human-Approve` operation gappens without the fields below, it's gonna be blocked
+    - Currency
+    - Receipt Date
+    - Receipt Value
+    - Reason
+-  It's possible to `Human-Approve`if the `Reimbursement`is in `Human-Rejected` or `Auto-Rejected` or `Human-Review`
+    - It has been decided to let the `Auto-Rejected` to ba `Human-Approved` to allow the system recover from the possible agent / human errors
+- It's not possible to `Human-Approve` if the `Reimbursement` is rejected, as it's not possible assure the system can get back the money 
+    - This is an edge caase not covered by this project
+
+## General Decisions
+- This project took over 30h, definitely higher than the expectation from the document
+    - I assumed this project as a professional one as requested by the documentation, taking care of as many details as i could in the deadline i had
+- AI Usage
+    - This document, and the overral architecture was defined by me
+    - The implementation was done wit the following flow
+        - Grilling Sessions (if needed)
+        - SDD 
+        - AI Code review
+        - Manual review limited due to the deadline
+    - I decided to rely heavily on agentic engineering due to world's reality
+- Manual intervention
+    - All the planning phase has been done manually, with grilling sessions at the end to refinement
+    - The code has been validated manually as well, however not in a deep level, otherwise there wouldn't have enough time
+    - The prompts has been done manually with AI validation
+    - The architecture has strong personal decision with AI suggestions
 - Tests
-    - All the unit / integration tests will be generated by AI and validated manually due to the time available to complete the test
-- Observability
-    - LangFuse support added for Agent's tracing
-    - Regular logging output so other tools can read it
-    - Assuming monitoring tools are in place to detect errors in any layers and monitoring the number of human reviewes being placed
+    - All the unit / integration tests will be generated by AI, there wouldn't have enough time to write them down carefuly
+- The document [Risks.md](RISKS.md) contains some aspects that i've identified during this test development, however I didn't have enough time to take care of them all
+
+## Architecture decisions
+- **All or nothing**: The API layer receives the request and publish to Kafka, the first Consumer create the records in DB then, a second consumer send over to the agent
+     - If any of the reimbursements in the request has a bad payload, all the request is rejected
+     - Duplicated requests are rejected and logged
+- Reject first deterministically, Human Review if any doubts
+    - If the `Receipt Date` older than 90 days, reject immediately
+    - Any other cases that can't approve, it's gonna be sent to `Human Review`
+        The decision on this is to initially monitor the agent and see what the `Human Review` is receiving. A Phase 2 can collect data and add new approaches in order to auto reject more accurately
 - Async processing
     - It has been chosen event-driven architecture to make the system scalable, each consumer can scale as the requests are indepotent
-- Reimbursement Agent
-    - Deterministic Layer
-        - It's gonna exist to either support the Agent as a tool or to simply move to the correct status if no LLM are needed at all
-    - Probabilistic Layer
-        - The LLM is getting two responsabilities
-            - Find the information in a payload different of the expected format
-            - If there are enough information found in the payload, use the LLM to evaluate if the information is solid and not contradictory, with the intetion of covering the gap from the document where
-                - `Value < 200`: Automatically approves
-                - `Value < 200`: Send for Human Review
-        - Reject only `Receipt Date` older than 90 days
-            - If the probabilistic layer find all the required information to evaluate the status and the default policies can't be automatically applied, send to Human Review
-            -
-        - Not reject / discard requests if errors
-            - If repeat errors / edge scenarios happens, immediately is gonna be sent to Human Review, to avoid losing request
-            - Fallback to logging in the output if any services are unavailable (DB / Kafka)
-            - This decision can polute the `Human Review` flow, however monitoring tools can be added in order to evaluate the impact in this flow and apply other approaches after real data comes in
-- Data Extraction
-    - It wasn't considered in this project the possible extraction of data from `raw_ocr_text` or other possible fields via probabilistic layer / ETL, even though would be a good practice for Data Analyzes
-- Human Review
-    - If the system tries to `Human-Approve` without the fields below present in the `Reimbursement` entity, it's gonna be blocked, all those fields are mandatory to have the data consistent
-      (resolved: no fields beyond what's already required — the PUT payload's
-      own required-for-approval fields backfill `receipts_value`/
-      `receipts_date`/`receipts_currency`, and `submitted_by`/`submitted_at`
-      are already guaranteed non-null by `POST /api/v1/reimbursement`'s own
-      validation. No separate application-level completeness gate exists —
-      see AD-027 in .specs/STATE.md)
-    -  It's possible to `Human-Approve`if the `Reimbursement`is in `Human-Rejected` or `Auto-Rejected` or `Human-Review`
-        - It has been decided to let the `Auto-Rejected` to ba `Human-Approved` to allow the system recover from the possible agent errors
-    - It's not possible to `Human-Approve` if the `Reimbursement` is rejected, as it's not possible assure the system can get back the money 
-        - This is an edge caase not covered by this project
-        (clarified: "rejected" here means the already-*approved* statuses —
-        `Auto-Approved`/`Human-Approved` — since only disbursed money can't be
-        clawed back. `Human-Rejected` remains PUT-eligible per the bullet
-        above — see AD-027 in .specs/STATE.md)
+- Observability
+    - LangFuse support added for tracing the agent
+    - Regular output so other tools can read it and monitor
+    - Assuming monitoring tools watching the output to gather metrics
 
+## What i would have done with extra time
+- Run a detailed code review, making sure the architecture / design has better practices
+    - I fully relied on agentic engineering, running code reviews, but the codebase is not small
+- I would have review the [Risks.md](RISKS.md), making sure would be ready for a launch
+- The prompts can receive better instructions and testing
+- I would have added authentication
+- Tested small / bigger models, in order to evaluate performance x cost x accuracy
+- The prompts are receiving the full payload, if by any chance it receives just one payload with 1MB, the cost of tokens will not worth probably
 
-- Adding failures to the log is an ultimate resource and must be monitores by tools such as fluentd
-- The solutions started to become more complex than i could follow up, so i decided to run a round simplyfing the implementatin if applicable
-- A probabilistic layer was added prior to everything to extract fields, as the Recipet Date is not clear and must be extract from some place in order to reject comparing to the submited_by, initially a deterministic layer would be in place to avoid unnecessary tokens, now an node before everthing to filter the data will be in place
+## What i would have done better
+- Even though the [Scope.md](SCOPE.md) was made completely by me, I decided to start with no architecture pre-defined, due to that, need to run rounds of refactoring and i wasted at least 4h-6h on it
+- I would have prepared better my harness for this project, i made several adjusments to improve the performance and the cost savings in order to have better and performatic results
+- Improved the Human Review experience
 
-# Phase 2
-- Human Review Evaluator
-    - Identify what are the most gaps going to Human Review, in order to improve the agent
+# Next Phases
+
+## Phase 2
+Those are possible Phase 2 tasks 
+- Authentication
+- Human Review evaluator
+    - Identify what are the most gaps going to Human Review, in order to improve the agent capabilities
 - Add an event structure to trigger to other topic when an event happen
 - Improve the deterministic layer, reducing the chance of going to the probabilistic layer, saving tokens and resources
-- Add loading test
-- Add E2E testing
-- Add Authentication
-
-# Let the LLM decide a few things
-- It's possible starting with a small model, reducing cost, as performance is not a hard requirement at the moment
-- If the claimed_category matches the raw_ocr_text data
-- If the claimed_amount_brl matches what is described in the raw_ocr_text
-
-# Technical Decisions
-- Use a Python library that retries automatically if fails
-- Make sure kafka can handle a 1mb message, to respect the validation
-  (amended from 25mb — see AD-020 in .specs/STATE.md)
