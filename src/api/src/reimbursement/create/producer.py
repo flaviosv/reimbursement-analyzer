@@ -16,7 +16,7 @@ def build_envelope(raw: bytes, published_at: datetime) -> bytes:
     safe — this is what makes the payload byte-for-byte identical to the
     request body true by construction."""
     stamp = published_at.astimezone(UTC).isoformat().encode()
-    prefix = b'{"retry":0,"published_at":"' + stamp + b'","payload":'
+    prefix = b'{"retry":0,"published_at":"' + stamp + b'","errors":[],"payload":'
     return prefix + raw + b"}"
 
 

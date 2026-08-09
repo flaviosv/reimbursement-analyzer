@@ -29,16 +29,41 @@
 │   │   │           └── producer.py    # Envelope building + publish wrapper
 │   │   ├── tests/                # Mirrors src/ layout
 │   │   └── Dockerfile            # Multi-stage: builder / dev / migrate / prod
-│   ├── agent/                 # LLM evaluation layer — stub only
-│   │   └── src/agent/consumer.py  # Placeholder Kafka consumer
-│   ├── publisher/              # Persist + republish — stub only
-│   │   └── src/publisher/consumer.py  # Placeholder Kafka consumer
+│   ├── agent/                 # Consume Reimbursement, resolve by uuid — implemented; decision layer not yet
+│   │   ├── src/agent/            # Real installable package (unlike flattened api/publisher)
+│   │   │   ├── consumer.py         # Composition root: pool/producer/consumer lifecycle, offset commit
+│   │   │   ├── validation.py       # Decision tree: resolve, staleness guard, requeue, retry-ceiling escalation
+│   │   │   └── config.py           # AgentConfig (consumer_group_id, consume_timeout_seconds), load_agent_config()
+│   │   └── tests/
+│   │       ├── conftest.py         # Agent-local Kafka container fixture
+│   │       ├── agent_fakes.py      # FakePool/FakeConnection; re-exports shared.testing.FakeProducer
+│   │       ├── test_config.py
+│   │       ├── test_consumer.py
+│   │       ├── test_validation.py
+│   │       └── test_integration.py   # Real Kafka + Postgres round trip
+│   ├── publisher/              # Consume Request, persist, publish Reimbursement — implemented
+│   │   ├── src/                  # Loose modules, no package dir (flat layout, like api)
+│   │   │   ├── consumer.py         # Composition root: pool/producer/consumer lifecycle, offset commit
+│   │   │   └── processing.py       # Decision tree: insert+publish, retry/requeue, escalation, duplicates
+│   │   └── tests/
+│   │       ├── conftest.py         # Publisher-local Kafka container fixture
+│   │       ├── fakes.py            # Test doubles as classes (FakeProducer, FakePool, RealPool)
+│   │       ├── test_consumer.py
+│   │       ├── test_processing.py
+│   │       └── test_integration.py   # Real Kafka + Postgres round trip
 │   └── shared/                 # Shared kernel, installable package
 │       └── src/shared/
-│           ├── config.py          # KafkaConfig, load_config() — cached config loader
-│           ├── errors.py          # Cross-service exception classes
-│           ├── models.py          # Cross-service pydantic models
-│           └── producer.py        # Generic Kafka publish + producer lifecycle
+│           ├── config.py          # KafkaConfig, DatabaseConfig, FailureLogConfig, PublisherConfig, load_config()
+│           ├── errors.py          # Cross-service exception classes, sanitize()
+│           ├── failure_log.py     # Last-resort structured JSON log (critical level)
+│           ├── models.py          # Cross-service pydantic models, AttemptError, ReimbursementEnvelope
+│           ├── producer.py        # Generic Kafka publish + producer lifecycle
+│           └── reimbursement/     # Domain slice: persistence for the reimbursement table
+│               ├── repository.py           # managed_pool(), insert_pending, insert_human_review, is_duplicate, get_by_uuid
+│               └── use_cases/
+│                   └── send_human_review.py  # render_history(), send_human_review(), escalate_existing()
+│           ├── signals.py         # install_shutdown_handlers() — SIGINT/SIGTERM → asyncio.Event (used by agent only so far)
+│           └── testing.py         # FakeProducer — the one test double genuinely reused across service test suites
 ├── docker-compose.yml          # Full local stack (app infra + LangFuse + 3 services)
 ├── pyproject.toml              # Workspace root — pytest config, dev dependency group
 └── uv.lock
@@ -60,14 +85,21 @@
 
 ### `shared`
 
-- **Purpose:** code genuinely reusable across `api`, `agent`, and `publisher` — cross-service pydantic models, exception classes, and Kafka config/publish primitives.
+- **Purpose:** code genuinely reusable across `api`, `agent`, and `publisher` — cross-service pydantic models, exception classes, Kafka config/publish primitives, and (new) the `reimbursement` domain's persistence layer.
 - **Location:** `src/shared/src/shared/`.
-- **Key files:** `config.py` (`load_config()` — single cached env-config entrypoint), `producer.py` (`managed_producer`, `publish` — technology-specific but domain-agnostic), `models.py` (`ReimbursementRequest`, `RequestEnvelope`, `SampleMessage`, `HealthStatus`), `errors.py` (`PayloadTooLarge`, `BatchInvalid`, `PublishFailed`).
+- **Key files:** `config.py` (`load_config()` — single cached env-config entrypoint), `producer.py` (`managed_producer`, `publish` — technology-specific but domain-agnostic), `models.py` (`ReimbursementRequest`, `RequestEnvelope`, `ReimbursementEnvelope`, `AttemptError`, `SampleMessage`, `HealthStatus`), `errors.py` (`PayloadTooLarge`, `BatchInvalid`, `PublishFailed`, `sanitize()`), `failure_log.py` (`write()` — last-resort structured log), `reimbursement/repository.py` + `reimbursement/use_cases/send_human_review.py` (asyncpg persistence + the human-review escalation action).
 
-### `agent`, `publisher`
+### `publisher`
 
-- **Purpose (intended):** `agent` — consumes from Kafka, runs the LLM/rules decision layer (LangGraph), records the decision. `publisher` — consumes requests, persists them, republishes for downstream processing.
-- **Current state:** each is a single `consumer.py` that subscribes to a placeholder topic (`sample-topic` / `sample-queue`) and prints whatever `shared.models.SampleMessage` it receives — structural scaffolding only, not real business logic.
+- **Purpose:** consumes `Request`, creates one `reimbursement` row per item, and publishes one `Reimbursement` message per item — the middle link between `api`'s intake and the Agent's (not yet built) decision layer.
+- **Location:** `src/publisher/src/{consumer,processing}.py`, flattened like `api` (no `publisher/` package dir, `package = false`).
+- **Key files:** `consumer.py` (Kafka consumer lifecycle, offset commit), `processing.py` (the decision tree — insert+publish, retry-with-requeue, `retry > 3` escalation, duplicate detection). Fully implemented and tested — see `TESTING.md`.
+
+### `agent`
+
+- **Purpose:** consumes `Reimbursement`, resolves the row by `uuid`, and settles it into one of resolved / stale / ghost / requeued / escalated / logged / invalid — the middle link between `publisher`'s handoff and a (not yet built) decision policy.
+- **Location:** `src/agent/src/agent/{consumer,validation,config}.py` — a real installable package, unlike the flattened `api`/`publisher`.
+- **Key files:** `consumer.py` (Kafka consumer lifecycle, offset commit), `validation.py` (the decision tree — `handle_message`, resolve-by-uuid, staleness guard, ghost tolerance (R-001), transient-failure requeue, `retry > 3` escalation reusing `shared.reimbursement.use_cases.send_human_review.escalate_existing`), `config.py` (`AgentConfig`). Fully implemented and tested — see `TESTING.md`. **Not yet implemented:** the actual decision/rules/LLM evaluation policy (auto-approve/auto-reject/human-review classification) — `langchain`/`langgraph` remain declared, unused dependencies.
 
 ## Where Things Live
 
@@ -93,6 +125,6 @@
 | Package | Path | Responsibility |
 | ------- | ---- | -------------- |
 | `api` | `src/api` | Public HTTP API — intake, validation, publish to Kafka |
-| `agent` | `src/agent` | LLM-based decision evaluation (stub) |
-| `publisher` | `src/publisher` | Persistence + republishing (stub) |
-| `shared` | `src/shared` | Shared kernel: models, config, Kafka producer primitives |
+| `agent` | `src/agent` | Consume `Reimbursement`, resolve by uuid, requeue/escalate (implemented); decision policy not yet built |
+| `publisher` | `src/publisher` | Consume `Request`, persist to `reimbursement`, publish `Reimbursement` (implemented) |
+| `shared` | `src/shared` | Shared kernel: models, config, Kafka producer, `reimbursement` persistence |

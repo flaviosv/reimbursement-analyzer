@@ -75,6 +75,7 @@ class DescribeRealBrokerRoundTrip:
         delivered = _consume_matching(kafka_bootstrap_server, request_id, timeout=30.0)
         published = json.loads(delivered)
         assert published["payload"] == json.loads(raw)
+        assert published["errors"] == []
 
     def it_publishes_a_ceiling_sized_batch_and_consumes_it_back_byte_identical(
         self, kafka_bootstrap_server: str, monkeypatch: pytest.MonkeyPatch

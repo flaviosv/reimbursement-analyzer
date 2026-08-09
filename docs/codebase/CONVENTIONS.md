@@ -14,7 +14,11 @@
 
 - **Vertical slices, not horizontal layers:** each operation under `reimbursement/<op>/` owns its route, validation, and publish logic end to end, rather than spreading them across shared `routes/`, `services/`, `repositories/` directories.
 - **App-root vs. slice-local:** a module lives at the package root (`api/src/*.py`) only when it is genuinely slice-independent infrastructure (FastAPI app/lifespan, DI accessors, the app-wide error contract). Anything with exactly one consumer belongs inside that consumer's slice — `payload.py` moved from the package root into `reimbursement/create/` for this reason.
-- **Shared kernel discipline:** `shared` holds only code with more than one real consumer across services, or a documented cross-service wire contract (`shared.models`, `shared.config`, `shared.errors`, `shared.producer`). Framework-specific code (FastAPI response shaping) stays in `api`, since `api` is the only HTTP service.
+- **Shared kernel discipline:** `shared` holds only code with more than one real consumer across services, or a documented cross-service wire contract (`shared.models`, `shared.config`, `shared.errors`, `shared.producer`, `shared.failure_log`, `shared.reimbursement`). Framework-specific code (FastAPI response shaping) stays in `api`, since `api` is the only HTTP service.
+- **`use_cases/` for multi-statement actions:** inside a `shared` domain slice, a single SQL statement lives directly in `repository.py`; an action spanning more than one statement (or combining a statement with non-trivial logic, like rendering an error history to prose) gets its own module under `use_cases/` — first instance: `shared/reimbursement/use_cases/send_human_review.py`.
+- **Test doubles as a module, not fixtures:** when a test needs a double constructed with different arguments per test (injectable errors, delays, ordering), it's a plain class in a `fakes.py`-style module (`src/publisher/tests/fakes.py`, `src/agent/tests/agent_fakes.py`), reachable by bare name via the workspace `pythonpath` — not a conftest fixture, which is reserved for shared session-scoped resources.
+- **Shared test doubles for a shared contract:** a fake that doubles a contract `shared` itself owns (e.g. `AIOProducer.produce()`, which `shared.producer.publish` wraps) lives in `shared/testing.py` and is re-exported, not redefined, by each service's own fakes module — `src/agent/tests/agent_fakes.py` re-exports `shared.testing.FakeProducer` via a normal package import (no bare-name collision risk, unlike `fakes.py`-named modules). Distinct from the bullet above: this is for doubles of code `shared` owns; a fake for a service-specific contract (e.g. `FakePool`) stays local to that service.
+- **`.from_exception(...)` classmethod for sequence construction:** a pydantic model representing one entry in an accumulating sequence exposes a `.from_exception(attempt, stage, exc, occurred_at=None)` classmethod that builds the next entry directly from a caught exception — e.g. `AttemptError.from_exception(len(errors) + 1, stage, exc)` — rather than callers computing `attempt=len(errors) + 1` and the error fields themselves at each call site. (Renamed from `.next(...)` this merge — same pattern, a clearer name for what it does.)
 - **Import ordering** (observed, not `ruff`-enforced — see `CONCERNS.md`): standard library, blank line, third-party + workspace packages (`fastapi`, `pydantic`, `shared.*`), blank line, local same-package modules.
 
 ## Type Safety / Documentation
@@ -24,6 +28,14 @@ Full type hints everywhere, including test fixtures and helper functions. `pydan
 ## Error Handling
 
 Business/domain code raises typed exceptions from `shared.errors` (`PayloadTooLarge`, `BatchInvalid`, `PublishFailed`) — it never constructs an HTTP response itself. Only `api/errors.py`'s registered handlers translate exceptions into responses, so the `{"msg": "..."}` contract is defined in exactly one place. One documented exception to "catch narrowly": `PublishFailed` deliberately catches `Exception` broadly rather than a specific broker-exception type, with the failing exception's class name folded into the message so the failure mode stays identifiable without narrowing the catch surface (a recorded decision, not an oversight).
+
+`publisher.processing` uses a different, complementary shape for its own decision tree: every branch returns an `ItemOutcome` enum member instead of raising, and the top-level `handle_message` never raises either. Per-item independence under concurrent `asyncio.gather` fan-out becomes structural rather than a discipline to remember — one item's exception literally cannot exist to propagate into another's.
+
+Three-tier logging severity, observed consistently in `publisher.processing`:
+
+1. **Structured informational events** — `logger.info(json.dumps({"event": "<domain>.<event_name>", ...}))` for countable, expected outcomes (e.g. `reimbursement.duplicate_dropped`), so a log-based monitor can count occurrences without parsing prose.
+2. **Sanitized stdout errors** — `logger.error(...)` paired with `shared.errors.sanitize(exc)`, which renders only the exception type and (if present) the violated constraint name — never a driver's raw `DETAIL` text, which can embed PII.
+3. **Last-resort failure log** — `shared.failure_log.write()`, one full structured JSON record (including the item itself) at `logging.CRITICAL` to a dedicated named logger, for a failure nothing else in the chain could handle. Never raises.
 
 ## Comments
 

@@ -1,5 +1,11 @@
 import pytest
-from shared.config import KAFKA_MAX_MESSAGE_BYTES, load_config
+from shared.config import (
+    KAFKA_MAX_MESSAGE_BYTES,
+    MAX_LIST_LIMIT,
+    MAX_RETRY,
+    REIMBURSEMENT_TOPIC,
+    load_config,
+)
 
 
 class DescribeLoadConfig:
@@ -66,6 +72,67 @@ class DescribeLoadConfig:
             "sasl.password": "pass",
             "ssl.ca.location": "/etc/ca.pem",
         }
+
+
+class DescribeWireConstants:
+    def it_names_the_reimbursement_topic_and_the_retry_ceiling(self) -> None:
+        # Both are cross-service wire values: the Agent subscribes to this
+        # exact topic name, and SCOPE.md:215 sets the ceiling at "retry > 3".
+        assert REIMBURSEMENT_TOPIC == "Reimbursement"
+        assert MAX_RETRY == 3
+
+    def it_sets_the_list_endpoint_pagination_ceiling(self) -> None:
+        assert MAX_LIST_LIMIT == 500
+
+
+class DescribeDatabaseConfig:
+    def it_loads_with_no_database_url_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # api never touches Postgres, and load_config() is process-wide — an
+        # os.environ[...] read here would break its boot.
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+
+        config = load_config()
+
+        assert config.database.dsn is None
+
+    def it_reads_the_database_url_from_the_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DATABASE_URL", "postgresql://user:pw@db:5432/reimbursementanalyzer")
+
+        config = load_config()
+
+        assert config.database.dsn == "postgresql://user:pw@db:5432/reimbursementanalyzer"
+
+    def it_bounds_every_query_at_ten_seconds(self) -> None:
+        # Without a command_timeout, a stuck connection (broker failover,
+        # network partition, lock contention) hangs the caller forever --
+        # neither service's consume loop has its own per-call timeout.
+        config = load_config()
+
+        assert config.database.command_timeout == 10.0
+
+    def it_sizes_the_pool_explicitly_rather_than_at_asyncpg_defaults(self) -> None:
+        config = load_config()
+
+        assert (config.database.pool_min_size, config.database.pool_max_size) != (10, 10)
+
+    def it_sizes_the_pool_from_the_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Configurable, not just a literal, so a deployment that raises
+        # PUBLISHER_ITEM_CONCURRENCY without raising this in step is a
+        # startup failure (publisher's check_startup_config) rather than
+        # silent connection starvation under load (R-005).
+        monkeypatch.setenv("DATABASE_POOL_MAX_SIZE", "42")
+
+        config = load_config()
+
+        assert config.database.pool_max_size == 42
+
+
+class DescribeFailureLogConfig:
+    def it_carries_a_logger_name_and_a_message_cap(self) -> None:
+        config = load_config()
+
+        assert config.failure_log.logger_name == "reimbursementanalyzer.failures"
+        assert config.failure_log.max_message_chars > 0
 
 
 class DescribeKafkaConfigToProducerConfig:

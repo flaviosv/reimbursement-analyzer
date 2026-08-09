@@ -8,6 +8,7 @@
 !.gitignore
 !CLAUDE.md
 !README.md
+!conftest.py
 !pyproject.toml
 !uv.lock
 !.python-version

@@ -14,9 +14,14 @@ dependencies = [
     "watchfiles>=1.2.0",
 ]
 
-[build-system]
-requires = ["uv_build>=0.12.2,<0.13.0"]
-build-backend = "uv_build"
+[tool.uv]
+# No [build-system]: publisher's own modules sit directly in
+# src/publisher/src (no wrapping package directory uv_build could build a
+# wheel around) — a virtual, non-installed workspace member, like api
+# (AD-018/AD-026). Its dependencies still resolve into the shared venv;
+# publisher itself runs straight from source via PYTHONPATH (see Dockerfile),
+# not an installed import.
+package = false
 
 [tool.uv.sources]
 shared = { workspace = true }

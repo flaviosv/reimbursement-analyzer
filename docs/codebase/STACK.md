@@ -15,21 +15,21 @@
 | `uvicorn[standard]` | >=0.52.1 | ASGI server | `api` |
 | `pydantic[email]` | >=2.13.4 | Request/message validation, `EmailStr` | `shared`, `api` |
 | `confluent-kafka` | >=2.15.0 | Kafka producer/consumer client (`confluent_kafka.aio.AIOProducer` for the async producer) | `api`, `shared`, `agent`, `publisher` |
-| `asyncpg` | >=0.31.0 | Postgres async driver — declared but **not yet imported anywhere** in the codebase | `api`, `agent`, `publisher` (dependency only) |
+| `asyncpg` | >=0.31.0 | Postgres async driver — pool + statements in `shared.reimbursement.repository` | `publisher`, `agent` (both real use, via `shared`) |
 | `python-dotenv` | >=1.2.2 | Loads `.env` at process start (`load_dotenv()`) | `api`, `agent`, `publisher` |
-| `langchain` | >=1.3.14 | LLM orchestration — declared, not yet used (agent is a stub) | `agent` |
+| `langchain` | >=1.3.14 | LLM orchestration — declared, not yet used (agent's consume/resolve layer is implemented; its decision layer is not) | `agent` |
 | `langgraph` | >=1.2.10 | Agentic graph orchestration — declared, not yet used | `agent` |
 | `watchfiles` | >=1.2.0 | Dev-mode hot reload | `agent`, `publisher` |
 | `yoyo-migrations` | >=9.0.0 | Plain-SQL schema migrations | `api` (`migrations` extra only) |
 | `psycopg[binary]` | >=3.3.4 | Sync Postgres driver, used by the migration runner and the advisory lock | `api` (`migrations` extra only) |
 | `pytest` | >=9.1.1 | Test runner (workspace-wide, root `dependency-groups.dev`) | all |
-| `testcontainers[kafka,postgres]` | >=4.15.0 | Ephemeral Postgres/Kafka containers for tests | `api`, `shared` |
+| `testcontainers[kafka,postgres]` | >=4.15.0 | Ephemeral Postgres/Kafka containers for tests | `api`, `shared`, `publisher`, `agent` |
 | `httpx` | >=0.28.1 | Used transitively by FastAPI's `TestClient` | `api` tests |
 
 ## Backend
 
 - API style: REST, single versioned prefix `/api/v1/...`, OpenAPI schema generated from the same `pydantic.TypeAdapter` that validates requests (no hand-duplicated schema).
-- Database: PostgreSQL 18 (app's own), schema owned by `api`'s migrations. No ORM — raw SQL migrations via `yoyo`; no query layer exists yet (nothing currently reads/writes the tables).
+- Database: PostgreSQL 18 (app's own), schema owned by `api`'s migrations. No ORM — raw SQL migrations via `yoyo`; runtime access is raw SQL statements via `asyncpg` (`shared.reimbursement.repository`), used by `publisher`.
 - Messaging: Apache Kafka 4.3.1 (KRaft mode, single node, no ZooKeeper).
 - Authentication: none implemented on the public API.
 
@@ -74,6 +74,7 @@
 | `DATABASE_URL` | Full app Postgres DSN (compose sets this per-service; local runs must set it manually) |
 | `KAFKA_BOOTSTRAP_SERVERS` | Kafka bootstrap address (`kafka:19092` inside compose, `localhost:9092` default outside it) |
 | `KAFKA_SECURITY_PROTOCOL`, `KAFKA_SASL_MECHANISM`, `KAFKA_SASL_USERNAME`, `KAFKA_SASL_PASSWORD`, `KAFKA_SSL_CA_LOCATION` | Optional Kafka SASL/TLS — unset means PLAINTEXT |
+| `AGENT_CONSUMER_GROUP_ID` | `agent`'s Kafka consumer group id (defaults to `"agent"`) |
 | `LANGFUSE_POSTGRES_PASSWORD`, `SALT`, `ENCRYPTION_KEY`, `NEXTAUTH_SECRET`, `CLICKHOUSE_PASSWORD`, `REDIS_AUTH`, `MINIO_ROOT_PASSWORD`, `LANGFUSE_S3_*_SECRET_ACCESS_KEY` | LangFuse stack's own infra credentials |
 | `LANGFUSE_INIT_PROJECT_SECRET_KEY`, `LANGFUSE_INIT_USER_PASSWORD` | LangFuse first-boot bootstrap credentials; `agent` will authenticate with the same project key pair |
 | `TEST_DATABASE_URL` | Points the test suite at a supplied Postgres server instead of a throwaway container |
