@@ -7,11 +7,11 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-import consumer as consumer_module
+import reimbursement.consumer as consumer_module
 import pytest
-from config import load_agent_config
-from consumer import check_startup_config, managed_consumer, run
-from validation import Dependencies
+from reimbursement.config import load_agent_config
+from reimbursement.consumer import check_startup_config, managed_consumer, run
+from reimbursement.validation import Dependencies
 from agent_fakes import FakePool, FakeProducer
 from confluent_kafka.aio import AIOConsumer
 from shared.config import REIMBURSEMENT_TOPIC, Config, load_config

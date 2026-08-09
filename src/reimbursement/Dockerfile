@@ -27,11 +27,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY src/reimbursement src/reimbursement
 COPY src/shared src/shared
 
-# reimbursement is a virtual workspace member (package = false in its
-# pyproject.toml — src/reimbursement/src holds loose modules, not a package
-# uv_build can wheel up), so there is nothing to (re-)install here beyond its
-# already-synced dependencies; every stage below runs reimbursement straight
-# from source via PYTHONPATH instead of an installed import.
+# Editable: the venv links back to /app/src/reimbursement/src instead of
+# baking the code in, so the dev stage below can bind-mount live source
+# over it.
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --package reimbursement
 
@@ -42,12 +40,11 @@ WORKDIR /app
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
 COPY --from=builder --chown=app:app /app/src /app/src
 USER app
-ENV PATH="/app/.venv/bin:$PATH" \
-    PYTHONPATH="/app/src/reimbursement/src"
+ENV PATH="/app/.venv/bin:$PATH"
 
 # consumer is a plain script (no framework-level reload like uvicorn), so
 # watchfiles restarts the process on any change under /app/src.
-CMD ["watchfiles", "python -m consumer", "/app/src"]
+CMD ["watchfiles", "python -m reimbursement.consumer", "/app/src"]
 
 # --- prod: same source, no reload, runs standalone ---
 FROM builder AS prod-builder
@@ -60,7 +57,6 @@ WORKDIR /app
 COPY --from=prod-builder --chown=app:app /app/.venv /app/.venv
 COPY --from=prod-builder --chown=app:app /app/src /app/src
 USER app
-ENV PATH="/app/.venv/bin:$PATH" \
-    PYTHONPATH="/app/src/reimbursement/src"
+ENV PATH="/app/.venv/bin:$PATH"
 
-CMD ["python", "-m", "consumer"]
+CMD ["python", "-m", "reimbursement.consumer"]

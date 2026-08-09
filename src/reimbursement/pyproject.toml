@@ -17,47 +17,16 @@ dependencies = [
     "watchfiles>=1.2.0",
 ]
 
-[tool.uv]
-# No [build-system]: reimbursement's own modules sit directly in
-# src/reimbursement/src (no wrapping package directory uv_build could build a
-# wheel around) — a virtual, non-installed workspace member, like api and
-# publisher (AD-018/AD-026). Its dependencies still resolve into the shared
-# venv; reimbursement itself runs straight from source via PYTHONPATH (see
-# Dockerfile), not an installed import.
-package = false
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+# src/reimbursement/src holds reimbursement's own modules directly (no
+# wrapping package directory) — package-dir maps the "reimbursement" import
+# name onto that directory, and setuptools' explicit-layout discovery picks
+# up the nested agent/ subpackage automatically.
+[tool.setuptools.package-dir]
+reimbursement = "src"
 
 [tool.uv.sources]
 shared = { workspace = true }
-
-[tool.pytest.ini_options]
-# A standalone pytest root, deliberately separate from the workspace root's
-# pyproject.toml: reimbursement's flat src/reimbursement/src (config.py,
-# consumer.py, validation.py) shares bare module names with publisher's flat
-# src/publisher/src (config.py, consumer.py) — both packages keep plain,
-# unprefixed names, so the only way to avoid a sys.path collision is to never
-# put both on the same pytest session's sys.path at once. Verified against
-# pytest's own source (locate_config/determine_setup): a nested pyproject.toml
-# with its own [tool.pytest.ini_options] is picked up as a fully separate,
-# unmerged config the moment a test path under this directory is targeted —
-# rootdir becomes src/reimbursement, and pythonpath below resolves relative
-# to it, isolated from the root config's pythonpath entirely.
-testpaths = ["tests"]
-python_classes = ["Describe*"]
-python_functions = ["it_*"]
-# ../api/tests: `helpers.py` (valid_reimbursement_item) is shared across
-# publisher's and reimbursement's test_integration.py — same reasoning as the
-# root config's own comment about why it isn't duplicated per package.
-pythonpath = ["tests", "src", "../api/tests"]
-addopts = [
-    "--import-mode=importlib",
-    # confcutdir defaults to this file's own directory (pytest's own default:
-    # the discovered inifile's parent), which would hide the real repo-root
-    # conftest.py — the one holding the shared Postgres testcontainer fixtures
-    # (server_url/migrated_db/db) every package's integration tests reuse, on
-    # purpose, to avoid a second container. Pointing it back at the repo root
-    # restores that visibility without merging the two pytest configs.
-    "--confcutdir=../..",
-]
-markers = [
-    "integration: requires a container beyond the suite's own Postgres default",
-]

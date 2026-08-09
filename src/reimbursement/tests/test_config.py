@@ -1,5 +1,5 @@
 import pytest
-from config import load_agent_config
+from reimbursement.config import load_agent_config
 from shared.config import load_config
 
 

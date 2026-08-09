@@ -6,8 +6,8 @@ import pytest
 from agent_fakes import FakePool, FakeProducer
 from shared.config import REIMBURSEMENT_TOPIC, load_config
 from shared.models import AttemptError, ReimbursementEnvelope
-from config import load_agent_config
-from validation import Dependencies, MessageOutcome, handle_message
+from reimbursement.config import load_agent_config
+from reimbursement.validation import Dependencies, MessageOutcome, handle_message
 
 pytestmark = pytest.mark.anyio
 

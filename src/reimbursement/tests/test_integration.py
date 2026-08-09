@@ -7,9 +7,9 @@ from uuid import UUID, uuid4
 
 import asyncpg
 import pytest
-from config import AgentConfig, load_agent_config
-from consumer import managed_consumer, run
-from validation import (
+from reimbursement.config import AgentConfig, load_agent_config
+from reimbursement.consumer import managed_consumer, run
+from reimbursement.validation import (
     GHOST_DROPPED_EVENT,
     RESOLVED_EVENT,
     STALE_IGNORED_EVENT,

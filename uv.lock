@@ -741,6 +741,7 @@ dev = [
     { name = "httpx" },
     { name = "publisher" },
     { name = "pytest" },
+    { name = "reimbursement" },
     { name = "testcontainers" },
 ]
 
@@ -752,13 +753,14 @@ dev = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "publisher", editable = "src/publisher" },
     { name = "pytest", specifier = ">=9.1.1" },
+    { name = "reimbursement", editable = "src/reimbursement" },
     { name = "testcontainers", extras = ["kafka", "postgres"], specifier = ">=4.15.0" },
 ]
 
 [[package]]
 name = "reimbursement"
 version = "0.1.0"
-source = { virtual = "src/reimbursement" }
+source = { editable = "src/reimbursement" }
 dependencies = [
     { name = "asyncpg" },
     { name = "confluent-kafka" },
