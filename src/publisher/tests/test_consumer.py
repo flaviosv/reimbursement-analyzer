@@ -6,13 +6,13 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
-import consumer as consumer_module
+import publisher.consumer as consumer_module
 import pytest
-from config import PublisherConfig, load_publisher_config
-from consumer import _install_signal_handlers, check_startup_config, managed_consumer, run
+from publisher.config import PublisherConfig, load_publisher_config
+from publisher.consumer import _install_signal_handlers, check_startup_config, managed_consumer, run
 from fakes import FakePool, FakeProducer
 from helpers import valid_reimbursement_item
-from processing import Dependencies
+from publisher.processing import Dependencies
 from shared.config import REIMBURSEMENT_TOPIC, REQUEST_TOPIC, Config, load_config
 from shared.models import RequestEnvelope
 

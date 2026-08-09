@@ -578,7 +578,7 @@ wheels = [
 [[package]]
 name = "publisher"
 version = "0.1.0"
-source = { virtual = "src/publisher" }
+source = { editable = "src/publisher" }
 dependencies = [
     { name = "asyncpg" },
     { name = "confluent-kafka" },
@@ -739,6 +739,7 @@ source = { virtual = "." }
 dev = [
     { name = "api", extra = ["migrations"] },
     { name = "httpx" },
+    { name = "publisher" },
     { name = "pytest" },
     { name = "testcontainers" },
 ]
@@ -749,6 +750,7 @@ dev = [
 dev = [
     { name = "api", extras = ["migrations"], editable = "src/api" },
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "publisher", editable = "src/publisher" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "testcontainers", extras = ["kafka", "postgres"], specifier = ">=4.15.0" },
 ]

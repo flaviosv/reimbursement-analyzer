@@ -6,12 +6,12 @@ from typing import Any
 from uuid import UUID
 
 import asyncpg
-import processing
+import publisher.processing as processing
 import pytest
-from config import load_publisher_config
+from publisher.config import load_publisher_config
 from fakes import FakePool, FakeProducer, RealPool
 from helpers import valid_reimbursement_item
-from processing import (
+from publisher.processing import (
     DUPLICATE_DROPPED_EVENT,
     EMPTY_PAYLOAD_EVENT,
     Dependencies,
