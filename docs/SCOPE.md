@@ -364,12 +364,16 @@
 
 
 - Adding failures to the log is an ultimate resource and must be monitores by tools such as fluentd
+- The solutions started to become more complex than i could follow up, so i decided to run a round simplyfing the implementatin if applicable
 
 # Phase 2
 - Human Review Evaluator
     - Identify what are the most gaps going to Human Review, in order to improve the agent
 - Add an event structure to trigger to other topic when an event happen
 - Improve the deterministic layer, reducing the chance of going to the probabilistic layer, saving tokens and resources
+- Add loading test
+- Add E2E testing
+- Add Authentication
 
 # Let the LLM decide a few things
 - It's possible starting with a small model, reducing cost, as performance is not a hard requirement at the moment
