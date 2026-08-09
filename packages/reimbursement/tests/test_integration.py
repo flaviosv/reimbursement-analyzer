@@ -10,7 +10,7 @@ import pytest
 import reimbursement.agent.agent as agent_module
 from agent_fakes import FakeStructuredModel
 from confluent_kafka import KafkaException, TopicPartition
-from reimbursement.agent.nodes.analysis import Analysis
+from reimbursement.agent.nodes.analysis import Analysis, GuardrailVerdict
 from reimbursement.agent.nodes.apply_agent_decision import ApplyAgentDecision
 from reimbursement.agent.nodes.apply_policies import ApplyPolicies
 from reimbursement.agent.nodes.extract_fields import (
@@ -282,4 +282,61 @@ class DescribeTheDecisionGraph:
         # (which would raise if ever invoked) was never called at all.
         assert len(extract_model.calls) == 1
         assert len(analysis_model.calls) == 0
+        assert any(DECIDED_EVENT in record.message for record in caplog.records)
+        # AGD-23/24: this is the one test exercising the real, memoized
+        # agent.decide() -> _langfuse_handlers() path end to end. langfuse
+        # is a real dependency (FU-1) and CallbackHandler() construction
+        # succeeds even without credentials configured (just a disabled
+        # client), so the durable fallback must NOT have fired here — if it
+        # had, tracing would be silently broken for every real decision.
+        assert not any(
+            agent_module.LANGFUSE_FALLBACK_EVENT in record.message for record in caplog.records
+        )
+
+    async def it_writes_a_human_review_status_via_the_apply_agent_decision_path(
+        self,
+        kafka_bootstrap_server: str,
+        migrated_db: str,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # Unlike the <=200 case above, this drives a value into the
+        # ambiguous zone so the write lands via ApplyAgentDecision's own
+        # call to the real apply_decision/repository.update_decision — a
+        # call site the <=200 case's own ApplyPolicies write never
+        # exercises against real Postgres.
+        monkeypatch.setenv("KAFKA_BOOTSTRAP_SERVERS", kafka_bootstrap_server)
+        config, agent = _config()
+        uuid = await _insert_row(migrated_db, "AGENT-E2E-DECIDED-AMBIGUOUS")
+
+        extract_model = FakeStructuredModel(
+            result=ExtractedFieldsSchema(value=1000.0, currency="BRL", receipts_date=date(2026, 1, 1))
+        )
+        analysis_model = FakeStructuredModel(
+            result=GuardrailVerdict(consistent=False, reasoning="claimed amount contradicts OCR total")
+        )
+
+        def _fake_build_graph() -> object:
+            nodes = {
+                "extract_fields": ExtractFields(model=extract_model, prompt=EXTRACT_FIELDS_PROMPT),
+                "validate": Validate(),
+                "apply_policies": ApplyPolicies(apply_decision=apply_decision),
+                "analysis": Analysis(model=analysis_model, prompt=ANALYSIS_PROMPT, model_name="llama3.2"),
+                "apply_agent_decision": ApplyAgentDecision(apply_decision=apply_decision),
+            }
+            return agent_module._wire(nodes)
+
+        monkeypatch.setattr(agent_module, "build_graph", _fake_build_graph)
+
+        envelope = ReimbursementEnvelope(uuid=uuid, retry=0, published_at=datetime.now(UTC))
+        await _produce(config, envelope)
+
+        with caplog.at_level("INFO"):
+            await _run_agent(config, agent, migrated_db, expected_advance=1)
+
+        row = await _row(migrated_db, uuid)
+        assert row["status"] == "human-review"
+        assert row["decision_reason"] == "claimed amount contradicts OCR total"
+        assert len(extract_model.calls) == 1
+        assert len(analysis_model.calls) == 1
         assert any(DECIDED_EVENT in record.message for record in caplog.records)
