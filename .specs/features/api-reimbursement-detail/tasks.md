@@ -9,7 +9,9 @@ Implement these tasks with the `tlc-spec-driven` skill: **activate it by name an
 ---
 
 **Design**: `.specs/features/api-reimbursement-detail/design.md`
-**Status**: Draft
+**Status**: Done — all 6 tasks complete, Verifier pending
+
+**Commits**: T1 `bfa3f9e`, T2 `b434ef0`, T3 `f76d84d`, T4 `a130ace`, T5 `cfd3c10`, T6 `e0071bd`
 
 ---
 
@@ -86,11 +88,11 @@ T5 → T6
 
 **Done when**:
 
-- [ ] `fetch_reimbursement_by_uuid` returns a row with `hr_*`-prefixed columns populated when a `human_review` exists
-- [ ] Returns a row with `hr_*` columns `NULL` when none exists
-- [ ] Returns `None` for a non-existent uuid
-- [ ] Gate check passes: `uv run pytest`
-- [ ] Test count: 3 new tests pass (no silent deletions)
+- [x] `fetch_reimbursement_by_uuid` returns a row with `hr_*`-prefixed columns populated when a `human_review` exists
+- [x] Returns a row with `hr_*` columns `NULL` when none exists
+- [x] Returns `None` for a non-existent uuid
+- [x] Gate check passes: `uv run pytest`
+- [x] Test count: 3 new tests pass (no silent deletions)
 
 **Tests**: integration
 **Gate**: full
@@ -114,10 +116,10 @@ T5 → T6
 
 **Done when**:
 
-- [ ] Returns the row when `fetch_reimbursement_by_uuid` finds one
-- [ ] Raises `ReimbursementNotFound` when it returns `None`
-- [ ] Gate check passes: `uv run pytest`
-- [ ] Test count: 2 new tests pass (no silent deletions)
+- [x] Returns the row when `fetch_reimbursement_by_uuid` finds one
+- [x] Raises `ReimbursementNotFound` when it returns `None`
+- [x] Gate check passes: `uv run pytest`
+- [x] Test count: 2 new tests pass (no silent deletions)
 
 **Tests**: integration (mixed — the not-found branch is exercised against real Postgres too, since there's no DB-touching gate worth isolating a fake for here)
 **Gate**: full
@@ -141,10 +143,10 @@ T5 → T6
 
 **Done when**:
 
-- [ ] `ReimbursementItem.from_record` behaves identically to the old `ReimbursementListItem.from_record` (same 3 cases: `last_human_review` present/null/all-nullable-pending-row)
-- [ ] `ReimbursementDetailResponse` composes `msg`/`data` correctly (`model_dump()` round-trips both fields)
-- [ ] Gate check passes: `uv run pytest -m "not integration"`
-- [ ] Test count: 3 relocated + 1 new test pass (no silent deletions)
+- [x] `ReimbursementItem.from_record` behaves identically to the old `ReimbursementListItem.from_record` (same 3 cases: `last_human_review` present/null/all-nullable-pending-row)
+- [x] `ReimbursementDetailResponse` composes `msg`/`data` correctly (`model_dump()` round-trips both fields)
+- [x] Gate check passes: `uv run pytest -m "not integration"`
+- [x] Test count: 3 relocated + 1 new test pass (no silent deletions)
 
 **Tests**: unit
 **Gate**: quick
@@ -168,11 +170,11 @@ T5 → T6
 
 **Done when**:
 
-- [ ] `list/response.py` no longer defines `HumanReviewSummary`/`ReimbursementListItem`
-- [ ] `list/route.py` imports and calls `ReimbursementItem.from_record`
-- [ ] Existing `packages/api/tests/reimbursement/list/test_route.py` still passes unmodified (proves the rename didn't change observable behavior)
-- [ ] Gate check passes: `uv run pytest`
-- [ ] Test count: 0 new tests (pure refactor); existing list route-test count unchanged, no silent deletions
+- [x] `list/response.py` no longer defines `HumanReviewSummary`/`ReimbursementListItem`
+- [x] `list/route.py` imports and calls `ReimbursementItem.from_record`
+- [x] Existing `packages/api/tests/reimbursement/list/test_route.py` still passes unmodified (proves the rename didn't change observable behavior)
+- [x] Gate check passes: `uv run pytest`
+- [x] Test count: 0 new tests (pure refactor); existing list route-test count unchanged, no silent deletions
 
 **Tests**: none (covered by existing `list/test_route.py`, per the layer's own "none" matrix entry)
 **Gate**: full
@@ -196,13 +198,13 @@ T5 → T6
 
 **Done when**:
 
-- [ ] `200` + `{"msg": "reimbursement found", "data": {...}}` on a match, `data` matching one list-endpoint item's shape
-- [ ] `404` on a well-formed, non-existent uuid
-- [ ] `400` on a malformed uuid path segment, no query run
-- [ ] `500` on a simulated DB/pool failure
-- [ ] `DescribeTheRealApp` proves the route through `main.app`'s real wiring
-- [ ] Gate check passes: `uv run pytest`
-- [ ] Test count: 5 new tests pass (no silent deletions)
+- [x] `200` + `{"msg": "reimbursement found", "data": {...}}` on a match, `data` matching one list-endpoint item's shape
+- [x] `404` on a well-formed, non-existent uuid
+- [x] `400` on a malformed uuid path segment, no query run
+- [x] `500` on a simulated DB/pool failure
+- [x] `DescribeTheRealApp` proves the route through `main.app`'s real wiring
+- [x] Gate check passes: `uv run pytest`
+- [x] Test count: 5 new tests pass (no silent deletions)
 
 **Tests**: route-level
 **Gate**: full
@@ -226,12 +228,12 @@ T5 → T6
 
 **Done when**:
 
-- [ ] Approve success: `200` with `data.status == "human-approved"` and `data.last_human_review` matching the submitted decision
-- [ ] Reject success: `200` with `data.status == "human-rejected"` and `data.last_human_review` matching the submitted decision
-- [ ] A subsequent `GET /api/v1/reimbursement/{uuid}` returns `data` byte-identical to the `PUT` response's `data`
-- [ ] Existing `400`/`404`/`413`/`422`/`500` error-body assertions in `update/test_route.py` still pass unmodified (regression proof for DETAIL-06)
-- [ ] Gate check passes: `uv run pytest`
-- [ ] Test count: 3 new tests pass, existing error-path tests unchanged (no silent deletions)
+- [x] Approve success: `200` with `data.status == "human-approved"` and `data.last_human_review` matching the submitted decision
+- [x] Reject success: `200` with `data.status == "human-rejected"` and `data.last_human_review` matching the submitted decision
+- [x] A subsequent `GET /api/v1/reimbursement/{uuid}` returns `data` byte-identical to the `PUT` response's `data`
+- [x] Existing `400`/`404`/`413`/`422`/`500` error-body assertions in `update/test_route.py` still pass unmodified (regression proof for DETAIL-06)
+- [x] Gate check passes: `uv run pytest`
+- [x] Test count: 3 new tests pass, existing error-path tests unchanged (no silent deletions)
 
 **Tests**: route-level
 **Gate**: full

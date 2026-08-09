@@ -137,12 +137,12 @@ the `PUT` response returned.
 
 | Requirement ID | Story | Phase | Status |
 | -------------- | ----- | ----- | ------ |
-| DETAIL-01 | P1: Retrieve by uuid (found → 200) | Design | Pending |
-| DETAIL-02 | P1: Retrieve by uuid (well-formed, no match → 404) | Design | Pending |
-| DETAIL-03 | P1: Retrieve by uuid (malformed uuid → 400) | Design | Pending |
-| DETAIL-04 | P1: Retrieve by uuid (DB failure → 500) | Design | Pending |
-| DETAIL-05 | P1: PUT returns updated payload (success → 200 + data) | Design | Pending |
-| DETAIL-06 | P1: PUT error responses unchanged | Design | Pending |
+| DETAIL-01 | P1: Retrieve by uuid (found → 200) | Design | Implementing |
+| DETAIL-02 | P1: Retrieve by uuid (well-formed, no match → 404) | Design | Implementing |
+| DETAIL-03 | P1: Retrieve by uuid (malformed uuid → 400) | Design | Implementing |
+| DETAIL-04 | P1: Retrieve by uuid (DB failure → 500) | Design | Implementing |
+| DETAIL-05 | P1: PUT returns updated payload (success → 200 + data) | Design | Implementing |
+| DETAIL-06 | P1: PUT error responses unchanged | Design | Implementing |
 
 **ID format:** `DETAIL-NN`
 
