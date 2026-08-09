@@ -61,6 +61,27 @@ _FETCH_REIMBURSEMENT_PAGE = """
     LIMIT $2 OFFSET $3
 """
 
+# Same hr_*-prefixed LATERAL enrichment as _FETCH_REIMBURSEMENT_PAGE, kept as
+# its own statement (rather than a uuid-filtered branch of that query) so
+# each statement stays single-purpose.
+_FETCH_REIMBURSEMENT_BY_UUID = """
+    SELECT
+        r.*,
+        hr.status AS hr_status,
+        hr.reviewed_by AS hr_reviewed_by,
+        hr.reason AS hr_reason,
+        hr.created_at AS hr_created_at
+    FROM reimbursement r
+    LEFT JOIN LATERAL (
+        SELECT status, reviewed_by, reason, created_at
+        FROM human_review
+        WHERE reimbursement_uuid = r.uuid
+        ORDER BY created_at DESC
+        LIMIT 1
+    ) hr ON true
+    WHERE r.uuid = $1
+"""
+
 # Column is `currency`, not `receipts_currency` — the parameter/keyword stays
 # `receipts_currency` to match the payload field name (SCOPE.md/spec.md), the
 # repository maps it onto the real column here.
@@ -160,6 +181,13 @@ async def fetch_reimbursement_page(
     `human_review` (if any) via a LATERAL join. Pure SQL, no validation —
     trusts its caller to have already gated `statuses`/`limit`/`offset`."""
     return await conn.fetch(_FETCH_REIMBURSEMENT_PAGE, statuses, limit, offset)
+
+
+async def fetch_reimbursement_by_uuid(conn: asyncpg.Connection, uuid: UUID) -> asyncpg.Record | None:
+    """Single-row equivalent of fetch_reimbursement_page(): the row paired
+    with its most recent human_review (if any) via the same LATERAL join.
+    None on no match."""
+    return await conn.fetchrow(_FETCH_REIMBURSEMENT_BY_UUID, uuid)
 
 
 async def approve(
