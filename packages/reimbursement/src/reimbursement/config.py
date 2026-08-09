@@ -14,6 +14,7 @@ from shared.config import KafkaConfig
 
 _DEFAULT_OLLAMA_MODEL = "llama3.2"
 _DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
+_DEFAULT_OLLAMA_TIMEOUT_SECONDS = 30.0
 
 
 @dataclass(frozen=True)
@@ -25,6 +26,9 @@ class AgentConfig:
     # shared.config — Ollama is reimbursement-only today.
     ollama_model: str = _DEFAULT_OLLAMA_MODEL
     ollama_base_url: str = _DEFAULT_OLLAMA_BASE_URL
+    # Bounds each LLM call so a hung Ollama server can't hold the decision
+    # graph (and, transitively, a checked-out pool connection) open forever.
+    ollama_timeout_seconds: float = _DEFAULT_OLLAMA_TIMEOUT_SECONDS
 
     def to_consumer_config(self, kafka: KafkaConfig) -> dict[str, Any]:
         # No fetch.max.bytes/max.partition.fetch.bytes override, unlike
@@ -43,6 +47,9 @@ class AgentConfig:
 def load_agent_config() -> AgentConfig:
     return AgentConfig(
         consumer_group_id=os.getenv("AGENT_CONSUMER_GROUP_ID", "agent"),
-        ollama_model=os.getenv("OLLAMA_MODEL", "llama3.2"),
-        ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+        ollama_model=os.getenv("OLLAMA_MODEL", _DEFAULT_OLLAMA_MODEL),
+        ollama_base_url=os.getenv("OLLAMA_BASE_URL", _DEFAULT_OLLAMA_BASE_URL),
+        ollama_timeout_seconds=float(
+            os.getenv("OLLAMA_TIMEOUT_SECONDS", str(_DEFAULT_OLLAMA_TIMEOUT_SECONDS))
+        ),
     )

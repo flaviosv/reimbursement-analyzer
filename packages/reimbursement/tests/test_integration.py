@@ -7,15 +7,21 @@ from uuid import UUID, uuid4
 
 import asyncpg
 import pytest
-from agent_fakes import FakeStructuredModel
 import reimbursement.agent.agent as agent_module
+from agent_fakes import FakeStructuredModel
+from confluent_kafka import KafkaException, TopicPartition
 from reimbursement.agent.nodes.analysis import Analysis
 from reimbursement.agent.nodes.apply_agent_decision import ApplyAgentDecision
 from reimbursement.agent.nodes.apply_policies import ApplyPolicies
-from reimbursement.agent.nodes.extract_fields import ExtractedFieldsSchema, ExtractFields
+from reimbursement.agent.nodes.extract_fields import (
+    ExtractedFieldsSchema,
+    ExtractFields,
+)
 from reimbursement.agent.nodes.validate import Validate
 from reimbursement.agent.prompts.analysis import PLACEHOLDER_PROMPT as ANALYSIS_PROMPT
-from reimbursement.agent.prompts.extract_fields import PLACEHOLDER_PROMPT as EXTRACT_FIELDS_PROMPT
+from reimbursement.agent.prompts.extract_fields import (
+    PLACEHOLDER_PROMPT as EXTRACT_FIELDS_PROMPT,
+)
 from reimbursement.config import AgentConfig, load_agent_config
 from reimbursement.consumer import managed_consumer, run
 from reimbursement.validation import (
@@ -25,14 +31,13 @@ from reimbursement.validation import (
     STALE_IGNORED_EVENT,
     Dependencies,
 )
-from confluent_kafka import KafkaException, TopicPartition
-from shared.testing import valid_reimbursement_item
 from shared.config import REIMBURSEMENT_TOPIC, Config, load_config
 from shared.db import managed_pool
 from shared.models import ReimbursementEnvelope
 from shared.producer import managed_producer, publish
 from shared.reimbursement.repository import insert_pending
 from shared.reimbursement.use_cases.apply_decision import apply_decision
+from shared.testing import valid_reimbursement_item
 
 pytestmark = [pytest.mark.integration, pytest.mark.anyio]
 
@@ -141,7 +146,9 @@ class DescribeTheEndToEndRoundTrip:
         # resolve branch is reached and logged, no DB side effect from the
         # resolve stage itself). The decision graph's own real, end-to-end
         # DB write is what DescribeTheDecisionGraph below proves.
-        async def _stub_decide(reimbursement: object, conn: object) -> dict[str, object]:
+        async def _stub_decide(
+            reimbursement: object, pool: object, *, acquire_timeout_seconds: float
+        ) -> dict[str, object]:
             return {"status": "auto-approved", "decision_reason": "stub", "persisted": True}
 
         monkeypatch.setattr(agent_module, "decide", _stub_decide)

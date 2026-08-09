@@ -14,7 +14,9 @@ from shared.models import AttemptError, ReimbursementEnvelope
 pytestmark = pytest.mark.anyio
 
 
-async def _stub_decide(reimbursement: Reimbursement, conn: object) -> dict[str, object]:
+async def _stub_decide(
+    reimbursement: Reimbursement, pool: object, *, acquire_timeout_seconds: float
+) -> dict[str, object]:
     return {"status": "auto-approved", "decision_reason": "stub", "persisted": True}
 
 
@@ -311,10 +313,10 @@ class DescribeResolveTransientFailureRequeue:
 
 
 class DescribeDecideIntegration:
-    """T14: `_resolve` invokes `agent.decide()` on the same connection the
-    row was fetched with, and applies the R-011 interim floor — a `decide()`
-    failure is caught, durably logged, and returns LOGGED, never
-    propagates."""
+    """T14: `_resolve` invokes `agent.decide()` with the pool (not the
+    connection the row was fetched with — that one's already released by
+    then), and applies the R-011 interim floor — a `decide()` failure is
+    caught, durably logged, and returns LOGGED, never propagates."""
 
     async def it_logs_the_decided_status_and_returns_resolved_on_success(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
@@ -325,9 +327,15 @@ class DescribeDecideIntegration:
         deps = _deps(pool=pool)
         envelope = _envelope(uuid=uuid, retry=0, published_at=row_updated_at)
 
-        async def _fake_decide(reimbursement: Reimbursement, conn: object) -> dict[str, object]:
+        async def _fake_decide(
+            reimbursement: Reimbursement, pool: object, *, acquire_timeout_seconds: float
+        ) -> dict[str, object]:
             assert reimbursement.uuid == uuid
-            return {"status": "auto-approved", "decision_reason": "value 150 <= 200", "persisted": True}
+            return {
+                "status": "auto-approved",
+                "decision_reason": "value 150 <= 200",
+                "persisted": True,
+            }
 
         monkeypatch.setattr(agent, "decide", _fake_decide)
 
@@ -336,7 +344,9 @@ class DescribeDecideIntegration:
 
         assert outcome == MessageOutcome.RESOLVED
         assert any(
-            "reimbursement.decided" in r.message and '"status": "auto-approved"' in r.message
+            "reimbursement.decided" in r.message
+            and '"status": "auto-approved"' in r.message
+            and '"decision_reason": "value 150 <= 200"' in r.message
             for r in caplog.records
         )
 
@@ -349,7 +359,9 @@ class DescribeDecideIntegration:
         deps = _deps(pool=pool)
         envelope = _envelope(uuid=uuid, retry=0, published_at=row_updated_at)
 
-        async def _fake_decide(reimbursement: Reimbursement, conn: object) -> dict[str, object]:
+        async def _fake_decide(
+            reimbursement: Reimbursement, pool: object, *, acquire_timeout_seconds: float
+        ) -> dict[str, object]:
             return {"status": "human-review", "decision_reason": "unresolved value", "persisted": False}
 
         monkeypatch.setattr(agent, "decide", _fake_decide)
@@ -375,7 +387,9 @@ class DescribeDecideIntegration:
         deps = _deps(pool=pool)
         envelope = _envelope(uuid=uuid, retry=0, published_at=row_updated_at)
 
-        async def _failing_decide(reimbursement: Reimbursement, conn: object) -> dict[str, object]:
+        async def _failing_decide(
+            reimbursement: Reimbursement, pool: object, *, acquire_timeout_seconds: float
+        ) -> dict[str, object]:
             raise RuntimeError("ollama unreachable")
 
         monkeypatch.setattr(agent, "decide", _failing_decide)
@@ -390,3 +404,27 @@ class DescribeDecideIntegration:
         assert any("ollama unreachable" in r.message for r in caplog.records)
         # No retry, no auto-escalation: the row itself is never touched.
         assert pool.rows[uuid]["status"] == "pending"
+
+    async def it_catches_a_malformed_original_payload_as_a_decision_failure(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # Reimbursement.from_record's json.loads used to run outside this
+        # function's own try/except (before the agent.decide() call it now
+        # precedes), so a corrupted payload surfaced as an unhandled
+        # exception from _resolve's outer try instead of R-011's intended
+        # durable decision-failure log.
+        uuid = uuid4()
+        row_updated_at = datetime(2026, 4, 10, 9, 0, 0, tzinfo=UTC)
+        pool = FakePool(
+            rows={
+                uuid: _row(uuid=uuid, updated_at=row_updated_at, original_payload="{not valid json")
+            }
+        )
+        deps = _deps(pool=pool)
+        envelope = _envelope(uuid=uuid, retry=0, published_at=row_updated_at)
+
+        with caplog.at_level(logging.CRITICAL, logger="reimbursementanalyzer.failures"):
+            outcome = await handle_message(deps, envelope.model_dump_json().encode())
+
+        assert outcome == MessageOutcome.LOGGED
+        assert any("reimbursement.decision_failed" in r.message for r in caplog.records)

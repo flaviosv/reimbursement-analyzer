@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 import reimbursement.agent.agent as agent
-from agent_fakes import FakeApplyDecision, FakeStructuredModel
+from agent_fakes import FakeAcquirePool, FakeApplyDecision, FakeStructuredModel
 from reimbursement.agent.nodes.analysis import Analysis, GuardrailVerdict
 from reimbursement.agent.nodes.apply_agent_decision import ApplyAgentDecision
 from reimbursement.agent.nodes.apply_policies import ApplyPolicies
@@ -107,7 +107,7 @@ class DescribeGraphRouting:
 
         with caplog.at_level(logging.INFO):
             result = await graph.ainvoke(
-                _initial_state(uuid), config={"configurable": {"conn": object()}}
+                _initial_state(uuid), config={"configurable": {"pool": FakeAcquirePool(object()), "acquire_timeout_seconds": 5.0}}
             )
 
         assert result["status"] == "auto-rejected"
@@ -140,7 +140,7 @@ class DescribeGraphRouting:
 
         with caplog.at_level(logging.INFO):
             result = await graph.ainvoke(
-                _initial_state(uuid), config={"configurable": {"conn": object()}}
+                _initial_state(uuid), config={"configurable": {"pool": FakeAcquirePool(object()), "acquire_timeout_seconds": 5.0}}
             )
 
         assert result["status"] == "auto-approved"
@@ -172,7 +172,7 @@ class DescribeGraphRouting:
 
         with caplog.at_level(logging.INFO):
             result = await graph.ainvoke(
-                _initial_state(uuid), config={"configurable": {"conn": object()}}
+                _initial_state(uuid), config={"configurable": {"pool": FakeAcquirePool(object()), "acquire_timeout_seconds": 5.0}}
             )
 
         assert result["status"] == "human-review"
@@ -202,7 +202,7 @@ class DescribeGraphRouting:
 
         with caplog.at_level(logging.INFO):
             result = await graph.ainvoke(
-                _initial_state(uuid), config={"configurable": {"conn": object()}}
+                _initial_state(uuid), config={"configurable": {"pool": FakeAcquirePool(object()), "acquire_timeout_seconds": 5.0}}
             )
 
         assert result["status"] == "auto-approved"
@@ -234,7 +234,7 @@ class DescribeGraphRouting:
 
         with caplog.at_level(logging.INFO):
             result = await graph.ainvoke(
-                _initial_state(uuid), config={"configurable": {"conn": object()}}
+                _initial_state(uuid), config={"configurable": {"pool": FakeAcquirePool(object()), "acquire_timeout_seconds": 5.0}}
             )
 
         assert result["status"] == "human-review"
@@ -263,7 +263,7 @@ class DescribeGraphRouting:
 
         with caplog.at_level(logging.INFO):
             result = await graph.ainvoke(
-                _initial_state(uuid), config={"configurable": {"conn": object()}}
+                _initial_state(uuid), config={"configurable": {"pool": FakeAcquirePool(object()), "acquire_timeout_seconds": 5.0}}
             )
 
         assert result["status"] == "human-review"
@@ -315,13 +315,13 @@ class DescribeDecide:
 
         monkeypatch.setattr(agent, "get_graph", lambda: _FakeGraph())
         expected_handlers = agent._langfuse_handlers()
-        conn = object()
+        pool = FakeAcquirePool(object())
 
         result = await agent.decide(
-            Reimbursement(uuid=uuid4(), original_payload={}), conn
+            Reimbursement(uuid=uuid4(), original_payload={}), pool, acquire_timeout_seconds=5.0
         )
 
         assert result == {"status": "auto-approved"}
         assert len(calls) == 1
         assert calls[0]["callbacks"] == expected_handlers
-        assert calls[0]["configurable"] == {"conn": conn}
+        assert calls[0]["configurable"] == {"pool": pool, "acquire_timeout_seconds": 5.0}

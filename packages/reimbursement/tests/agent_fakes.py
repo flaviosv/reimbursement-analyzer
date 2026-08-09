@@ -33,6 +33,7 @@ __all__ = [
     "FakeProducer",
     "FakePool",
     "FakeConnection",
+    "FakeAcquirePool",
     "FakeStructuredModel",
     "FakeApplyDecision",
 ]
@@ -107,6 +108,31 @@ class FakePool:
         self.updated[uuid] = reason
         self.rows[uuid] = {**self.rows[uuid], "status": status, "decision_reason": reason}
         return "UPDATE 1"
+
+
+class _FakeAcquireContext:
+    def __init__(self, conn: Any) -> None:
+        self._conn = conn
+
+    async def __aenter__(self) -> Any:
+        return self._conn
+
+    async def __aexit__(self, *exc_info: object) -> bool:
+        return False
+
+
+class FakeAcquirePool:
+    """A trivial pool double for node-level tests: `ApplyPolicies`/
+    `ApplyAgentDecision` each acquire a connection from
+    `config["configurable"]["pool"]` around their own write. Always yields
+    the same `conn` object the test constructs, so identity-checking
+    assertions (`fake.calls == [(conn, ...)]`) keep working unchanged."""
+
+    def __init__(self, conn: Any) -> None:
+        self._conn = conn
+
+    def acquire(self, *, timeout: float | None = None) -> _FakeAcquireContext:
+        return _FakeAcquireContext(self._conn)
 
 
 class FakeStructuredModel:

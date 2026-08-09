@@ -4,7 +4,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
-from agent_fakes import FakeApplyDecision
+from agent_fakes import FakeAcquirePool, FakeApplyDecision
 from reimbursement.agent.nodes.apply_agent_decision import ApplyAgentDecision
 from reimbursement.models import Reimbursement
 
@@ -22,6 +22,10 @@ def _state(
     }
 
 
+def _config(conn: object) -> dict:
+    return {"configurable": {"pool": FakeAcquirePool(conn), "acquire_timeout_seconds": 5.0}}
+
+
 class DescribeApplyAgentDecision:
     async def it_persists_exactly_the_status_and_reason_already_set_by_a_predecessor(
         self, caplog: pytest.LogCaptureFixture
@@ -35,7 +39,7 @@ class DescribeApplyAgentDecision:
         )
 
         with caplog.at_level(logging.INFO):
-            result = await node(state, {"configurable": {"conn": conn}})
+            result = await node(state, _config(conn))
 
         assert fake.calls == [
             (conn, uuid, "human-review", "required field(s) unresolved by extraction: value")
@@ -50,7 +54,7 @@ class DescribeApplyAgentDecision:
         node = ApplyAgentDecision(apply_decision=fake)
         state = _state("auto-approved", "value 150 <= 200 threshold")
 
-        result = await node(state, {"configurable": {"conn": object()}})
+        result = await node(state, _config(object()))
 
         assert result == {"persisted": False}
 
@@ -59,7 +63,7 @@ class DescribeApplyAgentDecision:
         node = ApplyAgentDecision(apply_decision=fake)
         state = _state("human-review", "original reason from a predecessor")
 
-        result = await node(state, {"configurable": {"conn": object()}})
+        result = await node(state, _config(object()))
 
         assert "status" not in result
         assert "decision_reason" not in result
@@ -75,7 +79,7 @@ class DescribeApplyAgentDecision:
             extracted={"value": 1000.0, "currency": "BRL", "receipts_date": date(2026, 4, 1)},
         )
 
-        await node(state, {"configurable": {"conn": object()}})
+        await node(state, _config(object()))
 
         assert fake.receipts_calls == [(Decimal("1000.0"), date(2026, 4, 1), "BRL")]
 
@@ -89,7 +93,7 @@ class DescribeApplyAgentDecision:
             extracted={"value": -5.0, "currency": "BRL", "receipts_date": date(2026, 4, 1)},
         )
 
-        await node(state, {"configurable": {"conn": object()}})
+        await node(state, _config(object()))
 
         assert fake.receipts_calls[0][0] is None
 
@@ -101,4 +105,4 @@ class DescribeApplyAgentDecision:
         state = _state("human-review", "required field(s) unresolved by extraction: value")
 
         with pytest.raises(RuntimeError, match="connection reset"):
-            await node(state, {"configurable": {"conn": object()}})
+            await node(state, _config(object()))

@@ -3,7 +3,7 @@ from datetime import date
 from uuid import uuid4
 
 import pytest
-from agent_fakes import FakeApplyDecision
+from agent_fakes import FakeAcquirePool, FakeApplyDecision
 from reimbursement.agent.nodes.apply_policies import (
     ApplyPolicies,
     route_after_apply_policies,
@@ -27,7 +27,7 @@ def _state(*, value: float, receipts_date: date, uuid: object = None) -> dict:
 
 
 def _config(conn: object) -> dict:
-    return {"configurable": {"conn": conn}}
+    return {"configurable": {"pool": FakeAcquirePool(conn), "acquire_timeout_seconds": 5.0}}
 
 
 class DescribeApplyPolicies:

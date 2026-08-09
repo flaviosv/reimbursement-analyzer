@@ -75,10 +75,14 @@ def build_graph() -> CompiledStateGraph:
     config = load_agent_config()
 
     extract_model = init_chat_model(
-        f"ollama:{config.ollama_model}", base_url=config.ollama_base_url
+        f"ollama:{config.ollama_model}",
+        base_url=config.ollama_base_url,
+        timeout=config.ollama_timeout_seconds,
     ).with_structured_output(ExtractedFieldsSchema)
     analysis_model = init_chat_model(
-        f"ollama:{config.ollama_model}", base_url=config.ollama_base_url
+        f"ollama:{config.ollama_model}",
+        base_url=config.ollama_base_url,
+        timeout=config.ollama_timeout_seconds,
     ).with_structured_output(GuardrailVerdict)
 
     nodes: dict[str, Node] = {
@@ -132,10 +136,19 @@ def _langfuse_handlers() -> list[Any]:
         return []
 
 
-async def decide(reimbursement: Reimbursement, conn: asyncpg.Connection) -> State:
+async def decide(
+    reimbursement: Reimbursement, pool: asyncpg.Pool, *, acquire_timeout_seconds: float
+) -> State:
+    """Threads the pool itself into the graph, not a live connection: the
+    two write nodes (ApplyPolicies/ApplyAgentDecision) each acquire their
+    own connection only for the duration of their own write, so a pool
+    connection isn't held checked-out for the LLM round-trips in between."""
     graph = get_graph()
     result = await graph.ainvoke(
         {"reimbursement": reimbursement},
-        config={"configurable": {"conn": conn}, "callbacks": _langfuse_handlers()},
+        config={
+            "configurable": {"pool": pool, "acquire_timeout_seconds": acquire_timeout_seconds},
+            "callbacks": _langfuse_handlers(),
+        },
     )
     return result

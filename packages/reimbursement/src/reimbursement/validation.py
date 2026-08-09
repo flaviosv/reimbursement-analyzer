@@ -124,8 +124,7 @@ async def _escalate(deps: Dependencies, envelope: ReimbursementEnvelope) -> Mess
 
 async def _resolve(deps: Dependencies, envelope: ReimbursementEnvelope) -> MessageOutcome:
     """The retry<=3 path: resolve the row by uuid, tolerate a ghost (R-001),
-    apply the staleness guard, then invoke the decision graph on the same
-    connection the row was fetched with. Never raises."""
+    apply the staleness guard, then invoke the decision graph. Never raises."""
     try:
         async with deps.pool.acquire(timeout=deps.config.database.acquire_timeout_seconds) as conn:
             row = await repository.get_by_uuid(conn, envelope.uuid)
@@ -146,23 +145,30 @@ async def _resolve(deps: Dependencies, envelope: ReimbursementEnvelope) -> Messa
                 logger.info(json.dumps({"event": STALE_IGNORED_EVENT, "uuid": str(envelope.uuid)}))
                 return MessageOutcome.STALE
 
-            logger.info(json.dumps({"event": RESOLVED_EVENT, "uuid": str(envelope.uuid)}))
-            return await _decide(deps, envelope, conn, row)
+        # conn released here, before the decision graph runs: the graph's
+        # own LLM round-trips must not hold a pool connection checked out —
+        # its write nodes each re-acquire one of their own, only for the
+        # duration of their own write (see agent.decide()'s docstring).
+        logger.info(json.dumps({"event": RESOLVED_EVENT, "uuid": str(envelope.uuid)}))
+        return await _decide(deps, envelope, row)
     except Exception as exc:
         return await _requeue(deps, envelope, exc)
 
 
 async def _decide(
-    deps: Dependencies, envelope: ReimbursementEnvelope, conn: asyncpg.Connection, row: asyncpg.Record
+    deps: Dependencies, envelope: ReimbursementEnvelope, row: asyncpg.Record
 ) -> MessageOutcome:
-    """R-011's interim floor: a decision-stage failure (Ollama unreachable,
-    malformed structured output, a genuine `apply_decision` write failure)
-    is caught here, never propagated — no retry, no auto-escalation, just a
-    durable failure_log record. The row stays exactly as it was; an
-    operator uses the log to notice and manually reprocess."""
-    reimbursement = Reimbursement.from_record(row)
+    """R-011's interim floor: a decision-stage failure (a malformed
+    original_payload, Ollama unreachable, malformed structured output, a
+    genuine `apply_decision` write failure) is caught here, never
+    propagated — no retry, no auto-escalation, just a durable failure_log
+    record. The row stays exactly as it was; an operator uses the log to
+    notice and manually reprocess."""
     try:
-        final_state = await agent.decide(reimbursement, conn)
+        reimbursement = Reimbursement.from_record(row)
+        final_state = await agent.decide(
+            reimbursement, deps.pool, acquire_timeout_seconds=deps.config.database.acquire_timeout_seconds
+        )
     except Exception as exc:
         logger.error("uuid=%s decision failed: %s", envelope.uuid, sanitize(exc))
         failure_log.write(
@@ -176,6 +182,7 @@ async def _decide(
                 "event": DECIDED_EVENT,
                 "uuid": str(envelope.uuid),
                 "status": final_state.get("status"),
+                "decision_reason": final_state.get("decision_reason"),
                 "persisted": final_state.get("persisted"),
             }
         )

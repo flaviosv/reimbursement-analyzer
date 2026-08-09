@@ -64,15 +64,21 @@ class ApplyPolicies:
         # negative value is skipped here rather than persisted and failing
         # the write outright.
         receipts_value = Decimal(str(value)) if value is not None and value >= 0 else None
-        result = await self._apply_decision(
-            config["configurable"]["conn"],
-            reimbursement.uuid,
-            status,
-            decision_reason,
-            receipts_value=receipts_value,
-            receipts_date=receipts_date,
-            currency=extracted["currency"],
-        )
+        # Acquired only for this write, not held across the LLM round-trip(s)
+        # earlier in the graph (agent.decide() threads the pool, not a live
+        # connection, for exactly this reason).
+        pool = config["configurable"]["pool"]
+        timeout = config["configurable"]["acquire_timeout_seconds"]
+        async with pool.acquire(timeout=timeout) as conn:
+            result = await self._apply_decision(
+                conn,
+                reimbursement.uuid,
+                status,
+                decision_reason,
+                receipts_value=receipts_value,
+                receipts_date=receipts_date,
+                currency=extracted["currency"],
+            )
         persisted = result is not None
         logger.info("FLOW: apply_policies apply_decision outcome: persisted=%s", persisted)
 
