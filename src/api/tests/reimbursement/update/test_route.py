@@ -10,11 +10,12 @@ from api.dependencies import get_pool
 from api.errors import register_handlers
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from helpers import FakePool, seed_reimbursement, seed_reimbursement_with_receipts
+from helpers import FakePool
 from helpers import _build_client as _shared_build_client
 from helpers import valid_approve_payload, valid_reject_payload
 from api.main import app as real_app
 from api.reimbursement.update.route import router
+from shared.testing import seed_reimbursement, seed_reimbursement_with_receipts
 
 pytestmark = pytest.mark.anyio
 

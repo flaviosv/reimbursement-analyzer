@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 
 import asyncpg
 import pytest
-from helpers import valid_reimbursement_item
+from shared.testing import valid_reimbursement_item
 from shared.reimbursement.repository import (
     approve,
     fetch_reimbursement_page,

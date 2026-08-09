@@ -16,7 +16,7 @@ from reimbursement.validation import (
     Dependencies,
 )
 from confluent_kafka import KafkaException, TopicPartition
-from helpers import valid_reimbursement_item
+from shared.testing import valid_reimbursement_item
 from shared.config import REIMBURSEMENT_TOPIC, Config, load_config
 from shared.db import managed_pool
 from shared.models import ReimbursementEnvelope

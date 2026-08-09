@@ -3,7 +3,7 @@ import json
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from helpers import valid_reimbursement_item
+from shared.testing import valid_reimbursement_item
 
 from api.dependencies import get_producer
 from api.errors import register_handlers

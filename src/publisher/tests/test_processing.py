@@ -10,7 +10,7 @@ import publisher.processing as processing
 import pytest
 from publisher.config import load_publisher_config
 from fakes import FakePool, FakeProducer, RealPool
-from helpers import valid_reimbursement_item
+from shared.testing import valid_reimbursement_item
 from publisher.processing import (
     DUPLICATE_DROPPED_EVENT,
     EMPTY_PAYLOAD_EVENT,

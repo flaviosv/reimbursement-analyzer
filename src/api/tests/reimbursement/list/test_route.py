@@ -5,10 +5,11 @@ from functools import partial
 import asyncpg
 import pytest
 from fastapi.testclient import TestClient
-from helpers import FakePool, seed_human_review, seed_reimbursement
+from helpers import FakePool
 from helpers import _build_client as _shared_build_client
 from api.main import app as real_app
 from api.reimbursement.list.route import router
+from shared.testing import seed_human_review, seed_reimbursement
 
 pytestmark = pytest.mark.anyio
 

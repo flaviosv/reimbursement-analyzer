@@ -1,7 +1,7 @@
 import json
 
 import pytest
-from helpers import valid_reimbursement_item
+from shared.testing import valid_reimbursement_item
 from shared.errors import BatchInvalid
 
 from api.reimbursement.create.validation import MAX_BATCH_ITEMS, validate_batch

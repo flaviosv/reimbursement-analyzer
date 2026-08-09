@@ -1,5 +1,5 @@
-"""Test doubles and DB seed helpers for the contracts `shared` itself
-defines, importable by any service's own test suite via a normal package
+"""Test doubles, DB seed helpers, and generic cross-service test-provisioning
+utilities, importable by any service's own test suite via a normal package
 import — not bare-name pythonpath resolution, so there is nothing to
 collide with.
 
@@ -8,12 +8,68 @@ Production code never imports this module.
 
 import asyncio
 import json
+import os
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from secrets import token_hex
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID, uuid4
 
 import asyncpg
+
+# Matches the postgres service in docker-compose.yml, so tests exercise the
+# same major version the stack runs.
+POSTGRES_IMAGE = "postgres:18"
+# Dropping and creating a database needs a session that is not attached to it;
+# 'postgres' always exists on the server.
+MAINTENANCE_DATABASE = "postgres"
+
+
+def database_name(url: str) -> str:
+    return urlsplit(url).path.lstrip("/")
+
+
+def with_database(url: str, name: str) -> str:
+    return urlunsplit(urlsplit(url)._replace(path=f"/{name}"))
+
+
+def maintenance_url(url: str) -> str:
+    return with_database(url, MAINTENANCE_DATABASE)
+
+
+def disposable_database_name() -> str:
+    """A database name no concurrent run can collide with.
+
+    The suite drops its database WITH (FORCE), which terminates whatever
+    backends are attached. Under a shared constant name that is not a race but
+    mutual destruction -- two runs against one server tear each other down
+    mid-assertion -- and pytest-xdist cannot work at all.
+    """
+    return f"reimbursementanalyzer_{os.getpid()}_{token_hex(4)}_test"
+
+
+def guard_is_test_database(url: str) -> None:
+    name = database_name(url)
+    if not name.endswith("_test"):
+        raise RuntimeError(
+            f"refusing to run against database {name!r}: the test suite drops "
+            "and recreates its database, so the name must end in '_test'"
+        )
+
+
+def valid_reimbursement_item(request_id: str = "REQ-0001", **extra: object) -> dict:
+    """The canonical minimal-valid POST /api/v1/reimbursement item shape —
+    a single source of truth across api's, publisher's, and reimbursement's
+    own test suites, which each need a slightly different usage pattern
+    (a fixed dict vs. a request_id-keyed factory) but previously maintained
+    independently hand-copied versions of this shape."""
+    return {
+        "request_id": request_id,
+        "submitted_by": "person@example.com",
+        "submitted_at": "2026-01-01T12:00:00Z",
+        **extra,
+    }
 
 
 class FakeProducer:
@@ -44,7 +100,7 @@ class FakeProducer:
 
 _SEED_REIMBURSEMENT = """
     INSERT INTO reimbursement (uuid, request_id, original_payload, status, created_at)
-    VALUES ($1, $2, '{}'::jsonb, $3, $4)
+    VALUES ($1, $2, $3::text::jsonb, $4, $5)
 """
 
 _SEED_REIMBURSEMENT_WITH_RECEIPTS = """
@@ -66,13 +122,20 @@ async def seed_reimbursement(
     *,
     status: str = "human-review",
     created_at: datetime | None = None,
+    original_payload: dict[str, Any] | None = None,
 ) -> UUID:
-    """Row-level seed shared by shared's own repository and
-    review_reimbursement use-case tests — both need a reimbursement row
-    present at a given status without going through the real insert/approve
-    flow."""
+    """Row-level seed shared across every service's own test suite — each
+    needs a reimbursement row present at a given status without going
+    through the real insert/approve flow."""
     uuid = uuid4()
-    await db.execute(_SEED_REIMBURSEMENT, uuid, request_id, status, created_at or datetime.now(UTC))
+    await db.execute(
+        _SEED_REIMBURSEMENT,
+        uuid,
+        request_id,
+        json.dumps(original_payload or {}),
+        status,
+        created_at or datetime.now(UTC),
+    )
     return uuid
 
 

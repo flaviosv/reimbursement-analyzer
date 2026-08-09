@@ -11,7 +11,7 @@ import pytest
 from publisher.config import PublisherConfig, load_publisher_config
 from publisher.consumer import _install_signal_handlers, check_startup_config, managed_consumer, run
 from fakes import FakePool, FakeProducer
-from helpers import valid_reimbursement_item
+from shared.testing import valid_reimbursement_item
 from publisher.processing import Dependencies
 from shared.config import REIMBURSEMENT_TOPIC, REQUEST_TOPIC, Config, load_config
 from shared.models import RequestEnvelope
