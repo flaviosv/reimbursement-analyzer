@@ -29,7 +29,12 @@ from uuid import UUID
 
 from shared.testing import FakeProducer
 
-__all__ = ["FakeProducer", "FakePool", "FakeConnection"]
+__all__ = [
+    "FakeProducer",
+    "FakePool",
+    "FakeConnection",
+    "FakeStructuredModel",
+]
 
 
 class _FakeAcquisition:
@@ -101,3 +106,22 @@ class FakePool:
         self.updated[uuid] = reason
         self.rows[uuid] = {**self.rows[uuid], "status": status, "decision_reason": reason}
         return "UPDATE 1"
+
+
+class FakeStructuredModel:
+    """Stands in for an Ollama chat model bound via `.with_structured_output`
+    (T8/T11's `ExtractFields`/`Analysis` constructor dependency) — returns a
+    fixed structured result (or raises) from `ainvoke`, and records every
+    call it received, so a test can assert exactly-one-invocation without a
+    real Ollama call."""
+
+    def __init__(self, result: Any = None, *, error: Exception | None = None) -> None:
+        self.result = result
+        self.error = error
+        self.calls: list[Any] = []
+
+    async def ainvoke(self, input: Any, *args: Any, **kwargs: Any) -> Any:
+        self.calls.append(input)
+        if self.error is not None:
+            raise self.error
+        return self.result
