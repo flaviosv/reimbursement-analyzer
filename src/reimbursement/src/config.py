@@ -17,6 +17,11 @@ from shared.config import KafkaConfig
 class AgentConfig:
     consumer_group_id: str
     consume_timeout_seconds: float = 1.0
+    # Ollama-only: single-service tuning, not process-wide, mirrors this
+    # same file's own reasoning for keeping consumer_group_id out of
+    # shared.config — Ollama is reimbursement-only today.
+    ollama_model: str = "llama3.2"
+    ollama_base_url: str = "http://localhost:11434"
 
     def to_consumer_config(self, kafka: KafkaConfig) -> dict[str, Any]:
         # No fetch.max.bytes/max.partition.fetch.bytes override, unlike
@@ -35,4 +40,6 @@ class AgentConfig:
 def load_agent_config() -> AgentConfig:
     return AgentConfig(
         consumer_group_id=os.getenv("AGENT_CONSUMER_GROUP_ID", "agent"),
+        ollama_model=os.getenv("OLLAMA_MODEL", "llama3.2"),
+        ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
     )

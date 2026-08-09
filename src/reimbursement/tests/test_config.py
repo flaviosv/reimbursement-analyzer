@@ -18,6 +18,24 @@ class DescribeAgentConfig:
 
         assert config.consumer_group_id == "agent-canary"
 
+    def it_defaults_the_ollama_settings_when_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("OLLAMA_MODEL", raising=False)
+        monkeypatch.delenv("OLLAMA_BASE_URL", raising=False)
+
+        config = load_agent_config()
+
+        assert config.ollama_model == "llama3.2"
+        assert config.ollama_base_url == "http://localhost:11434"
+
+    def it_reads_the_ollama_settings_from_the_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OLLAMA_MODEL", "mistral")
+        monkeypatch.setenv("OLLAMA_BASE_URL", "http://ollama.internal:11434")
+
+        config = load_agent_config()
+
+        assert config.ollama_model == "mistral"
+        assert config.ollama_base_url == "http://ollama.internal:11434"
+
 
 class DescribeAgentConfigToConsumerConfig:
     def it_never_lets_librdkafka_commit_offsets_on_a_timer(self) -> None:
