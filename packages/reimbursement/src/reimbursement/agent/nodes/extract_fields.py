@@ -32,10 +32,11 @@ class ExtractFields:
         self._model = model
 
     async def __call__(self, state: State, config: RunnableConfig) -> dict[str, Any]:
-        logger.info("FLOW: Executing 'extract_fields' node")
+        uuid = state["reimbursement"].uuid
+        logger.info("FLOW: Executing 'extract_fields' node uuid=%s", uuid)
 
         payload = state["reimbursement"].original_payload
-        
+
         messages = [get_extract_fields_prompt(payload)]
         result = await self._model.ainvoke(messages)
 
@@ -45,9 +46,10 @@ class ExtractFields:
             "receipts_date": result.receipts_date,
         }
         logger.info(
-            "FLOW: extract_fields resolved value=%s currency=%s receipts_date=%s",
+            "FLOW: extract_fields resolved value=%s currency=%s receipts_date=%s uuid=%s",
             extracted["value"],
             extracted["currency"],
             extracted["receipts_date"],
+            uuid,
         )
         return {"extracted": extracted}
