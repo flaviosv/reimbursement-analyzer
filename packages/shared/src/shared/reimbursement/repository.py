@@ -39,11 +39,9 @@ _UPDATE_HUMAN_REVIEW = """
 
 # hr_*-prefixed columns: r.* already carries its own status/created_at, so
 # the LATERAL side needs distinct aliases to avoid a name collision on the
-# returned Record. $1::text[] IS NULL takes the no-filter path; ANY($1)
-# matches any status in the caller's whitelist-gated list, single or multi.
-_FETCH_REIMBURSEMENT_PAGE = """
-    SELECT
-        r.*,
+# returned Record. Shared by both queries below via f-string interpolation
+# so the enrichment logic can't drift between them.
+_HR_LATERAL_ENRICHMENT = """r.*,
         hr.status AS hr_status,
         hr.reviewed_by AS hr_reviewed_by,
         hr.reason AS hr_reason,
@@ -55,30 +53,23 @@ _FETCH_REIMBURSEMENT_PAGE = """
         WHERE reimbursement_uuid = r.uuid
         ORDER BY created_at DESC
         LIMIT 1
-    ) hr ON true
+    ) hr ON true"""
+
+# $1::text[] IS NULL takes the no-filter path; ANY($1)
+# matches any status in the caller's whitelist-gated list, single or multi.
+_FETCH_REIMBURSEMENT_PAGE = f"""
+    SELECT
+        {_HR_LATERAL_ENRICHMENT}
     WHERE ($1::text[] IS NULL OR r.status = ANY($1))
     ORDER BY r.created_at DESC
     LIMIT $2 OFFSET $3
 """
 
-# Same hr_*-prefixed LATERAL enrichment as _FETCH_REIMBURSEMENT_PAGE, kept as
-# its own statement (rather than a uuid-filtered branch of that query) so
-# each statement stays single-purpose.
-_FETCH_REIMBURSEMENT_BY_UUID = """
+# Kept as its own statement (rather than a uuid-filtered branch of the page
+# query above) so each statement stays single-purpose.
+_FETCH_REIMBURSEMENT_BY_UUID = f"""
     SELECT
-        r.*,
-        hr.status AS hr_status,
-        hr.reviewed_by AS hr_reviewed_by,
-        hr.reason AS hr_reason,
-        hr.created_at AS hr_created_at
-    FROM reimbursement r
-    LEFT JOIN LATERAL (
-        SELECT status, reviewed_by, reason, created_at
-        FROM human_review
-        WHERE reimbursement_uuid = r.uuid
-        ORDER BY created_at DESC
-        LIMIT 1
-    ) hr ON true
+        {_HR_LATERAL_ENRICHMENT}
     WHERE r.uuid = $1
 """
 
