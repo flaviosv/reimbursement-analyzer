@@ -7,8 +7,8 @@ import pytest
 from fastapi.testclient import TestClient
 from helpers import FakePool, seed_human_review, seed_reimbursement
 from helpers import _build_client as _shared_build_client
-from main import app as real_app
-from reimbursement.list.route import router
+from api.main import app as real_app
+from api.reimbursement.list.route import router
 
 pytestmark = pytest.mark.anyio
 

@@ -2,7 +2,7 @@ import json
 
 import pytest
 from helpers import valid_approve_payload, valid_reject_payload
-from reimbursement.update.validation import ApproveReview, RejectReview, validate_review
+from api.reimbursement.update.validation import ApproveReview, RejectReview, validate_review
 from shared.errors import ReviewInvalid
 
 _APPROVE_PAYLOAD = valid_approve_payload()

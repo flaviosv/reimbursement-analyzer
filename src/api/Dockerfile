@@ -27,11 +27,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY src/api src/api
 COPY src/shared src/shared
 
-# api is a virtual workspace member (package = false in its pyproject.toml —
-# src/api/src holds loose modules, not a package uv_build can wheel up), so
-# there is nothing to (re-)install here beyond its already-synced
-# dependencies; every stage below runs api straight from source via
-# PYTHONPATH instead of an installed import.
+# Editable: the venv links back to /app/src/api/src instead of baking the
+# code in, so the dev stage below can bind-mount live source over it.
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --package api
 
@@ -42,11 +39,10 @@ WORKDIR /app
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
 COPY --from=builder --chown=app:app /app/src /app/src
 USER app
-ENV PATH="/app/.venv/bin:$PATH" \
-    PYTHONPATH="/app/src/api/src"
+ENV PATH="/app/.venv/bin:$PATH"
 
 EXPOSE 8000
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/src"]
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/src"]
 
 # --- migrate: the only image that gets the DDL tooling, runs once and exits ---
 FROM builder AS migrate-builder
@@ -61,10 +57,9 @@ COPY --from=migrate-builder --chown=app:app /app/.venv /app/.venv
 # the image.
 COPY --from=migrate-builder --chown=app:app /app/src /app/src
 USER app
-ENV PATH="/app/.venv/bin:$PATH" \
-    PYTHONPATH="/app/src/api/src"
+ENV PATH="/app/.venv/bin:$PATH"
 
-CMD ["python", "-m", "migrate"]
+CMD ["python", "-m", "api.migrate"]
 
 # --- prod: same source, no reload, runs standalone ---
 FROM builder AS prod-builder
@@ -77,8 +72,7 @@ WORKDIR /app
 COPY --from=prod-builder --chown=app:app /app/.venv /app/.venv
 COPY --from=prod-builder --chown=app:app /app/src /app/src
 USER app
-ENV PATH="/app/.venv/bin:$PATH" \
-    PYTHONPATH="/app/src/api/src"
+ENV PATH="/app/.venv/bin:$PATH"
 
 EXPOSE 8000
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

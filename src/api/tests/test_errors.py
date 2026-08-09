@@ -12,7 +12,7 @@ from shared.errors import (
     ReviewInvalid,
 )
 
-from errors import register_handlers
+from api.errors import register_handlers
 
 
 class _Payload(BaseModel):

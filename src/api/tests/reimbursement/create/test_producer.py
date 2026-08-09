@@ -10,7 +10,7 @@ from shared.config import KafkaConfig
 from shared.errors import PublishFailed
 from shared.models import RequestEnvelope
 
-from reimbursement.create.producer import build_envelope, publish
+from api.reimbursement.create.producer import build_envelope, publish
 
 pytestmark = pytest.mark.anyio
 

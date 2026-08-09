@@ -5,10 +5,10 @@ from fastapi import APIRouter, Depends, Request
 from shared.config import MAX_BODY_BYTES, load_config
 from shared.errors import ReimbursementUuidMismatch
 
-from dependencies import get_pool
-from errors import MessageResponse
-from reimbursement.create.payload import read_capped
-from reimbursement.update.validation import ApproveReview, validate_review
+from api.dependencies import get_pool
+from api.errors import MessageResponse
+from api.reimbursement.create.payload import read_capped
+from api.reimbursement.update.validation import ApproveReview, validate_review
 from shared.reimbursement.use_cases.review_reimbursement import approve_reimbursement, reject_reimbursement
 
 router = APIRouter()

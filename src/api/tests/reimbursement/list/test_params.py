@@ -1,7 +1,7 @@
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from reimbursement.list.params import LimitQuery, OffsetQuery, parse_status_filter
+from api.reimbursement.list.params import LimitQuery, OffsetQuery, parse_status_filter
 from shared.errors import ReimbursementFilterInvalid
 
 

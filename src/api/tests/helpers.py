@@ -10,8 +10,8 @@ from uuid import UUID, uuid4
 
 import asyncpg
 import httpx
-from dependencies import get_pool
-from errors import register_handlers
+from api.dependencies import get_pool
+from api.errors import register_handlers
 from fastapi import APIRouter, FastAPI
 
 # Matches the postgres service in docker-compose.yml, so tests exercise the

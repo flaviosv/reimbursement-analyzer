@@ -3,7 +3,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from uuid import uuid4
 
-from reimbursement.list.response import ReimbursementListItem
+from api.reimbursement.list.response import ReimbursementListItem
 
 _BASE_RECORD = {
     "uuid": uuid4(),
