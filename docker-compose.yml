@@ -1,6 +1,6 @@
 # Local development stack: app Postgres, Kafka (KRaft, single node), the LangFuse
 # observability stack (its own postgres/clickhouse/redis/minio, per its official
-# docker-compose.yml), and the 3 uv-workspace services (api, agent, publisher).
+# docker-compose.yml), and the 3 uv-workspace services (api, reimbursement, publisher).
 #
 # Credentials below are dev-only placeholders (see .env.sample) — replace
 # them before this is ever used outside a local machine.
@@ -312,12 +312,12 @@ services:
       - ./src/api:/app/src/api
       - ./src/shared:/app/src/shared
 
-  agent:
+  reimbursement:
     build:
       context: .
-      dockerfile: src/agent/Dockerfile
+      dockerfile: src/reimbursement/Dockerfile
       target: dev
-    container_name: reimbursementanalyzer-flavio-agent
+    container_name: reimbursementanalyzer-flavio-reimbursement
     restart: always
     depends_on:
       kafka:
@@ -333,7 +333,7 @@ services:
       LANGFUSE_PUBLIC_KEY: *langfuse-public-key
       LANGFUSE_SECRET_KEY: ${LANGFUSE_INIT_PROJECT_SECRET_KEY}
     volumes:
-      - ./src/agent:/app/src/agent
+      - ./src/reimbursement:/app/src/reimbursement
       - ./src/shared:/app/src/shared
 
   publisher:

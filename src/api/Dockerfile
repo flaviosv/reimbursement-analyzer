@@ -18,7 +18,7 @@ COPY src/api/pyproject.toml src/api/pyproject.toml
 # uv's --locked check (below) validates against the whole workspace, so the
 # sibling manifests need to exist even though only api's source is copied —
 # their *source* never enters this image, only these tiny manifest files.
-COPY src/agent/pyproject.toml src/agent/pyproject.toml
+COPY src/reimbursement/pyproject.toml src/reimbursement/pyproject.toml
 COPY src/publisher/pyproject.toml src/publisher/pyproject.toml
 
 RUN --mount=type=cache,target=/root/.cache/uv \

@@ -16,8 +16,8 @@ from shared.db import managed_pool
 from shared.producer import managed_producer
 from shared.signals import install_shutdown_handlers
 
-from agent.config import AgentConfig, load_agent_config
-from agent.validation import Dependencies, handle_message
+from config import AgentConfig, load_agent_config
+from validation import Dependencies, handle_message
 
 logger = logging.getLogger(__name__)
 

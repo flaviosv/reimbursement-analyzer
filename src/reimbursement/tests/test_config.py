@@ -1,5 +1,5 @@
 import pytest
-from agent.config import load_agent_config
+from config import load_agent_config
 from shared.config import load_config
 
 

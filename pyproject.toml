@@ -21,9 +21,16 @@ dev = [
 api = { workspace = true }
 
 [tool.pytest.ini_options]
-# The whole workspace, not one member: naming a single package here means a
-# tests directory added to agent or publisher is silently never collected.
-testpaths = ["src"]
+# api, publisher, shared — not the whole workspace: naming each explicitly
+# means a tests directory added to either is never silently uncollected, the
+# same reasoning the old single "src" entry had. reimbursement is NOT listed
+# here on purpose: it has its own, standalone src/reimbursement/pyproject.toml
+# [tool.pytest.ini_options] instead (run as its own `pytest src/reimbursement`
+# invocation) — its flat module names (config, consumer) collide with
+# publisher's flat module names of the same names, and both packages keep
+# plain, unprefixed filenames, so the only fix is never sharing one sys.path
+# between them (AD-026 flagged the risk; AD-030 records this resolution).
+testpaths = ["src/api", "src/publisher", "src/shared"]
 python_classes = ["Describe*"]
 python_functions = ["it_*"]
 # Sibling feature slices (src/api/tests/reimbursement/<op>/) reuse filenames
@@ -36,21 +43,12 @@ python_functions = ["it_*"]
 # via a normal package install. Both sit on one sys.path and expose bare
 # module names, so publisher's {config, consumer, processing} must stay
 # clear of api's {dependencies, errors, main, migrate} — AD-026. Same for
-# src/api/tests and src/publisher/tests: publisher's {conftest, fakes,
-# test_config, test_consumer, test_integration, test_processing} vs api's
-# {conftest, helpers, test_compose_parity, test_errors, test_health,
-# test_human_review_schema, test_main, test_reimbursement_schema}.
-# src/agent/tests (but not src/agent/src) is on this list for the same
-# `from fakes import ...` reason as publisher's tests dir — agent itself
-# stays a real installable package (deliberately not flattened, to avoid
-# exactly the AD-026 collision risk above), so agent.consumer/agent.validation
-# are importable via the normal package install and need no path entry.
+# src/api/tests and src/publisher/tests.
 pythonpath = [
     "src/api/tests",
     "src/api/src",
     "src/publisher/tests",
     "src/publisher/src",
-    "src/agent/tests",
 ]
 addopts = "--import-mode=importlib"
 markers = [
