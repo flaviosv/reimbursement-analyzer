@@ -333,8 +333,8 @@ T13 → T14
 - Skill: NONE
 
 **Done when**:
-- [ ] `uv run pytest -m e2e -k auto_rejected` passes against the real stack
-- [ ] `uv run pytest -m "not integration"` gate still passes (excluded from that run)
+- [x] `uv run pytest -m e2e -k auto_rejected` passes against the real stack
+- [x] `uv run pytest -m "not integration and not e2e"` gate still passes (excluded from that run)
 
 **Tests**: e2e
 **Gate**: e2e
