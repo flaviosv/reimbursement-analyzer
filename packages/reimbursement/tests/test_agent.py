@@ -282,12 +282,16 @@ class DescribeGraphRouting:
 
 
 class DescribeBuildGraph:
-    def it_wires_the_real_groq_bound_models_into_the_expected_node_set(self) -> None:
+    def it_wires_the_real_dependencies_into_the_expected_node_set(self) -> None:
         # No monkeypatching: proves the real body (init_chat_model calls,
         # config.ai/config.models plumbing, schema binding) constructs
-        # without error and without a live network call (construction alone
-        # never calls .ainvoke()) — every other test substitutes build_graph
-        # or _wire's node set entirely.
+        # without error and without a live network call — only asserts the
+        # node-key set; it_constructs_two_independent_groq_models_one_per_node
+        # (above) is the one that inspects the constructed models themselves.
+        # Construction alone never calls .ainvoke() — confirmed empirically
+        # against langchain-groq (design.md's Risks table flagged this as
+        # unconfirmed pre-implementation); every other test substitutes
+        # build_graph or _wire's node set entirely.
         graph = agent.build_graph()
 
         assert set(graph.get_graph().nodes.keys()) == {
