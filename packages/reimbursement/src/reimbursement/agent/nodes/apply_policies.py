@@ -31,16 +31,18 @@ class ApplyPolicies:
         value = extracted["value"]
         receipts_date = extracted["receipts_date"]
 
-        submitted_at = datetime.fromisoformat(reimbursement.original_payload["submitted_at"])
-        submitted_date = submitted_at.astimezone(UTC).date()
-        days_old = (submitted_date - receipts_date).days
+        # submitted_at is client-supplied and only DB-constrained against the
+        # future (0001.create-reimbursement.sql), so it can't anchor a reject
+        # rule — a requester could backdate it to defeat the check entirely.
+        # Staleness is measured against today, not the requester's own claim.
+        today = datetime.now(UTC).date()
+        days_old = (today - receipts_date).days
 
         if days_old > REJECT_THRESHOLD_DAYS:
             status = "auto-rejected"
             decision_reason = (
                 f"reject rule: receipt dated {receipts_date.isoformat()} is {days_old} days "
-                f"before submission ({submitted_date.isoformat()}), older than the "
-                f"{REJECT_THRESHOLD_DAYS}-day limit"
+                f"old as of {today.isoformat()}, older than the {REJECT_THRESHOLD_DAYS}-day limit"
             )
         elif value <= AUTO_APPROVE_CEILING:
             status = "auto-approved"

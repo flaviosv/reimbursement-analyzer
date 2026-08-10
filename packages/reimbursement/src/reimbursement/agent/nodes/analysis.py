@@ -2,7 +2,7 @@
 never runs for the other three outcomes. Decides, doesn't persist."""
 
 import logging
-from typing import Any
+from typing import Any, Literal
 
 from langchain_core.runnables import Runnable, RunnableConfig
 from pydantic import BaseModel
@@ -15,9 +15,11 @@ logger = logging.getLogger(__name__)
 
 class GuardrailVerdict(BaseModel):
     """This node's own structured-output contract — bound onto `model` via
-    `.with_structured_output` at graph-build time (agent.py)."""
+    `.with_structured_output` at graph-build time (agent.py). Mirrors the
+    {"status": ..., "reason": ...} shape the prompt (analysis.py) already
+    instructs the model to produce, so the schema and the prompt agree."""
 
-    consistent: bool
+    status: Literal["auto-approved", "human-review"]
     reason: str
 
 
@@ -34,20 +36,31 @@ class Analysis:
         logger.info("FLOW: Executing 'analysis' node uuid=%s", uuid)
 
         extracted = state["extracted"]
-        messages = [get_analysis_prompt(extracted)]
+        found_data = {
+            "currency": extracted["currency"],
+            "receipt_date": extracted["receipts_date"],
+            "receipt_value": extracted["value"],
+        }
+
+        payload = state["reimbursement"].original_payload
+        # AGD-26: submitted_by is PII and must never reach the analysis
+        # prompt — mirrors extract_fields.py's existing pattern.
+        request_data = {key: value for key, value in payload.items() if key != "submitted_by"}
+
+        messages = [get_analysis_prompt(request_data, found_data)]
         verdict = await self._model.ainvoke(messages)
 
-        status = "auto-approved" if verdict.consistent else "human-review"
+        guardrail_verdict = verdict.status == "auto-approved"
         logger.info(
             "FLOW: analysis guardrail_verdict=%s status=%s model=%s uuid=%s",
-            verdict.consistent,
-            status,
+            guardrail_verdict,
+            verdict.status,
             self._model_name,
             uuid,
         )
 
         return {
-            "guardrail_verdict": verdict.consistent,
-            "status": status,
+            "guardrail_verdict": guardrail_verdict,
+            "status": verdict.status,
             "decision_reason": verdict.reason,
         }

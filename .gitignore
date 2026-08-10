@@ -5,6 +5,10 @@
 !docs/**
 !packages
 !packages/**
+!tests
+!tests/**
+tests/**/.env
+tests/**/.env.*
 !.gitignore
 !CLAUDE.md
 !README.md

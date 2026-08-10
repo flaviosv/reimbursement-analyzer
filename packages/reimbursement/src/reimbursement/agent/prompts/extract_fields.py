@@ -33,7 +33,9 @@ ReimbursementAnalyzer - Reimbursement Analysis - Field Extraction
 - The section <goals> is gonna be explicit about which fields you must look for
 - Here is the description of each possible field
     - Currency: It's the money representation of a nation, like BRL for Brazil, US Dollars for the US. It can be attached to the Receipt Value or found elsewhere
-    - Receipt Date: When the Receipt has been placed, like a Hotel checkout date, or the date that the requester purchased an item
+    - Receipt Date: When the Receipt has been placed, like a Hotel checkout date, or the date that the requester purchased an item. The date can be in multiple formats, like "2026-04-10T09:15:00Z" or "09/04/2026", the result must be in the format "YYYY-MM-DD".
+        - If you are uncertain how to parse the date, return empty in the Structured Output field
+        - submitted_at field is not valid as Receipt Date
     - Receipt Value: Total cost of the receipt, it can also be used to extract currency, it must be a numeric field, it can be in a raw field or inside of other string
 </possible_fields>
 

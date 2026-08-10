@@ -113,3 +113,18 @@ class DescribeExtractFields:
 
         with pytest.raises(RuntimeError, match="groq unreachable"):
             await node(_state(_PAYLOAD), {"configurable": {}})
+
+    async def it_instructs_the_iso_date_format_in_the_rendered_prompt(self) -> None:
+        # Guards commit 82e4286's fix for a real production flake: the
+        # extraction prompt must keep instructing receipts_date output as
+        # ISO ("YYYY-MM-DD"), not whatever format the source text used.
+        model = FakeStructuredModel(
+            result=ExtractedFieldsSchema(value=93.5, currency="BRL", receipts_date=date(2026, 4, 9))
+        )
+        node = ExtractFields(model=model, model_name=DEFAULT_TEST_MODEL_NAME)
+
+        await node(_state(_PAYLOAD), {"configurable": {}})
+
+        assert len(model.calls) == 1
+        rendered_content = " ".join(str(message.content) for message in model.calls[0])
+        assert "YYYY-MM-DD" in rendered_content

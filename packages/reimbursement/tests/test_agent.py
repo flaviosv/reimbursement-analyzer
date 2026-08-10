@@ -1,5 +1,5 @@
 import logging
-from datetime import date
+from datetime import UTC, date, datetime
 from uuid import uuid4
 
 import pytest
@@ -10,6 +10,7 @@ from agent_fakes import (
     FakeApplyDecision,
     FakeStructuredModel,
 )
+from reimbursement.agent.nodes import apply_policies as apply_policies_module
 from reimbursement.agent.nodes.analysis import Analysis, GuardrailVerdict
 from reimbursement.agent.nodes.apply_agent_decision import ApplyAgentDecision
 from reimbursement.agent.nodes.apply_policies import ApplyPolicies
@@ -25,6 +26,20 @@ pytestmark = pytest.mark.anyio
 # 2026-04-10 — the reference date every days_old computation below is
 # measured against, matching test_apply_policies.py's own fixed reference.
 _SUBMITTED_AT = "2026-04-10T09:15:00Z"
+
+
+class _FixedDatetime(datetime):
+    @classmethod
+    def now(cls, tz: object = None) -> datetime:
+        return datetime(2026, 4, 10, 9, 15, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def _frozen_today(monkeypatch: pytest.MonkeyPatch) -> None:
+    # apply_policies.py's reject rule measures staleness against the server
+    # clock, not the client-supplied submitted_at above — see
+    # test_apply_policies.py's own fixture for the full rationale.
+    monkeypatch.setattr(apply_policies_module, "datetime", _FixedDatetime)
 
 
 class _Fakes:
@@ -102,7 +117,7 @@ class DescribeGraphRouting:
         uuid = uuid4()
         fakes = _Fakes(
             extracted=ExtractedFieldsSchema(value=5000, currency="BRL", receipts_date=date(2026, 1, 9)),
-            guardrail=GuardrailVerdict(consistent=True, reason="unused"),
+            guardrail=GuardrailVerdict(status="auto-approved", reason="unused"),
             apply_policies_result=uuid,
             apply_agent_decision_result=uuid,
         )
@@ -135,7 +150,7 @@ class DescribeGraphRouting:
         uuid = uuid4()
         fakes = _Fakes(
             extracted=ExtractedFieldsSchema(value=200, currency="BRL", receipts_date=date(2026, 4, 1)),
-            guardrail=GuardrailVerdict(consistent=True, reason="unused"),
+            guardrail=GuardrailVerdict(status="auto-approved", reason="unused"),
             apply_policies_result=uuid,
             apply_agent_decision_result=uuid,
         )
@@ -167,7 +182,7 @@ class DescribeGraphRouting:
             extracted=ExtractedFieldsSchema(
                 value=2000.01, currency="BRL", receipts_date=date(2026, 4, 1)
             ),
-            guardrail=GuardrailVerdict(consistent=True, reason="unused"),
+            guardrail=GuardrailVerdict(status="auto-approved", reason="unused"),
             apply_policies_result=uuid,
             apply_agent_decision_result=uuid,
         )
@@ -197,7 +212,7 @@ class DescribeGraphRouting:
         uuid = uuid4()
         fakes = _Fakes(
             extracted=ExtractedFieldsSchema(value=1000, currency="BRL", receipts_date=date(2026, 4, 1)),
-            guardrail=GuardrailVerdict(consistent=True, reason="amount matches receipt text"),
+            guardrail=GuardrailVerdict(status="auto-approved", reason="amount matches receipt text"),
             apply_policies_result=uuid,
             apply_agent_decision_result=uuid,
         )
@@ -228,7 +243,7 @@ class DescribeGraphRouting:
         fakes = _Fakes(
             extracted=ExtractedFieldsSchema(value=1000, currency="BRL", receipts_date=date(2026, 4, 1)),
             guardrail=GuardrailVerdict(
-                consistent=False, reason="claimed amount contradicts the OCR total"
+                status="human-review", reason="claimed amount contradicts the OCR total"
             ),
             apply_policies_result=uuid,
             apply_agent_decision_result=uuid,
@@ -258,7 +273,7 @@ class DescribeGraphRouting:
         uuid = uuid4()
         fakes = _Fakes(
             extracted=ExtractedFieldsSchema(value=None, currency=None, receipts_date=None),
-            guardrail=GuardrailVerdict(consistent=True, reason="unused"),
+            guardrail=GuardrailVerdict(status="auto-approved", reason="unused"),
             apply_policies_result=uuid,
             apply_agent_decision_result=uuid,
         )

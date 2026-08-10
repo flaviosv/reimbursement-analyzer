@@ -1,9 +1,10 @@
 import logging
-from datetime import date
+from datetime import UTC, date, datetime
 from uuid import uuid4
 
 import pytest
 from agent_fakes import FakeAcquirePool, FakeApplyDecision
+from reimbursement.agent.nodes import apply_policies as apply_policies_module
 from reimbursement.agent.nodes.apply_policies import (
     ApplyPolicies,
     route_after_apply_policies,
@@ -12,16 +13,27 @@ from reimbursement.models import Reimbursement
 
 pytestmark = pytest.mark.anyio
 
-# 2026-04-10 — the reference date every days_old computation below is
-# measured against.
-_SUBMITTED_AT = "2026-04-10T09:15:00Z"
+
+class _FixedDatetime(datetime):
+    @classmethod
+    def now(cls, tz: object = None) -> datetime:
+        return datetime(2026, 4, 10, 9, 15, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def _frozen_today(monkeypatch: pytest.MonkeyPatch) -> None:
+    # apply_policies.py's reject rule must measure staleness against the
+    # server clock, never the client-supplied submitted_at (AD-030-adjacent:
+    # submitted_at is unauthenticated and DB-constrained only against the
+    # future, so a requester could otherwise backdate it to dodge the rule).
+    # 2026-04-10 is the reference date every days_old computation below is
+    # measured against.
+    monkeypatch.setattr(apply_policies_module, "datetime", _FixedDatetime)
 
 
 def _state(*, value: float, receipts_date: date, uuid: object = None) -> dict:
     return {
-        "reimbursement": Reimbursement(
-            uuid=uuid or uuid4(), original_payload={"submitted_at": _SUBMITTED_AT}
-        ),
+        "reimbursement": Reimbursement(uuid=uuid or uuid4(), original_payload={}),
         "extracted": {"value": value, "currency": "BRL", "receipts_date": receipts_date},
     }
 
@@ -64,13 +76,13 @@ class DescribeApplyPolicies:
         conn = object()
         fake = FakeApplyDecision(result=uuid)
         node = ApplyPolicies(apply_decision=fake)
-        state = _state(value=5000, receipts_date=date(2026, 1, 9), uuid=uuid)  # 91 days before
+        state = _state(value=5000, receipts_date=date(2026, 1, 9), uuid=uuid)  # 91 days old
 
         with caplog.at_level(logging.INFO):
             result = await node(state, _config(conn))
 
         assert "2026-01-09" in result["decision_reason"]
-        assert "2026-04-10" in result["decision_reason"]
+        assert "2026-04-10" in result["decision_reason"]  # the frozen "today"
         assert result["persisted"] is True
         assert fake.calls == [(conn, uuid, "auto-rejected", result["decision_reason"])]
         assert any("FLOW: Executing 'apply_policies' node" in r.message for r in caplog.records)
@@ -143,32 +155,26 @@ class DescribeApplyPolicies:
 
         assert result["persisted"] is False
 
-    async def it_propagates_uncaught_when_submitted_at_is_missing(self) -> None:
-        # validate() doesn't gate on submitted_at's presence before this
-        # node runs — R-011's _decide try/except is what actually catches
-        # this in production, not this node itself.
-        fake = FakeApplyDecision(result=uuid4())
-        node = ApplyPolicies(apply_decision=fake)
-        state = {
-            "reimbursement": Reimbursement(uuid=uuid4(), original_payload={}),
-            "extracted": {"value": 150, "currency": "BRL", "receipts_date": date(2026, 4, 1)},
-        }
-
-        with pytest.raises(KeyError):
-            await node(state, _config(object()))
-
-    async def it_propagates_uncaught_when_submitted_at_is_malformed(self) -> None:
+    async def it_rejects_a_stale_receipt_even_when_submitted_at_matches_the_receipt_date(
+        self,
+    ) -> None:
+        # submitted_at is client-supplied and unauthenticated: backdating it
+        # to equal receipts_date used to zero out days_old and defeat the
+        # reject rule entirely. The rule must measure against the server
+        # clock (frozen to 2026-04-10 above), not this payload field.
         fake = FakeApplyDecision(result=uuid4())
         node = ApplyPolicies(apply_decision=fake)
         state = {
             "reimbursement": Reimbursement(
-                uuid=uuid4(), original_payload={"submitted_at": "not-a-date"}
+                uuid=uuid4(),
+                original_payload={"submitted_at": "2026-01-09T00:00:00Z"},
             ),
-            "extracted": {"value": 150, "currency": "BRL", "receipts_date": date(2026, 4, 1)},
+            "extracted": {"value": 80, "currency": "BRL", "receipts_date": date(2026, 1, 9)},
         }
 
-        with pytest.raises(ValueError):
-            await node(state, _config(object()))
+        result = await node(state, _config(object()))
+
+        assert result["status"] == "auto-rejected"
 
 
 class DescribeRouteAfterApplyPolicies:

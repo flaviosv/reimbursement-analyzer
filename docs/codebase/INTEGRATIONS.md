@@ -9,7 +9,7 @@
 - Data flow: outbound from `api` (publish), inbound to `publisher` (consume — implemented) — a failed item is also republished here with `retry` incremented
 - Protocol: Kafka native protocol via `confluent_kafka` — async producer (`confluent_kafka.aio.AIOProducer`) and async consumer (`confluent_kafka.aio.AIOConsumer`)
 - Location: `packages/shared/src/shared/producer.py` (generic `publish`/`managed_producer`), `packages/api/src/api/reimbursement/create/producer.py` (envelope building), `packages/publisher/src/publisher/consumer.py` (consume lifecycle), `packages/publisher/src/publisher/processing.py` (requeue)
-- Authentication: PLAINTEXT by default (local); SASL/TLS supported via `KAFKA_SECURITY_PROTOCOL` + related env vars, read once through `shared.config.load_config().kafka`
+- Authentication: PLAINTEXT by default (local); SASL/TLS supported via `KAFKA_SECURITY_PROTOCOL` + related env vars, read once through `shared.config.load_config().kafka`. Inside a container these reach `api`/`publisher`/`reimbursement` via the `.env` file mounted read-only at runtime (`load_dotenv()`), not a `docker-compose.yml` passthrough — only `KAFKA_BOOTSTRAP_SERVERS` itself stays compose-set, since it's a Docker-network-topology address (`kafka:19092`) a shared `.env` value can't be correct for both in-container and on-host use
 
 **Kafka (`Reimbursement` topic):**
 
@@ -36,7 +36,7 @@
 - Data flow: `agent.decide()` passes a memoized `langchain.CallbackHandler` into `graph.ainvoke`'s `callbacks` config on every invocation; if the package is missing or the handler can't be constructed, a durable `failure_log` record (`reimbursement.langfuse_fallback`) is written instead — no invocation runs trace-less and unlogged
 - Protocol: LangFuse's LangChain callback integration (OTLP under the hood)
 - Location: `docker-compose.yml` (`langfuse-web`, `langfuse-worker`, and their own Postgres/ClickHouse/Redis/MinIO); client wiring in `packages/reimbursement/src/reimbursement/agent/agent.py`
-- Authentication: project public/secret key pair, auto-provisioned on first boot, passed to the `reimbursement` service as `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY`/`LANGFUSE_HOST`
+- Authentication: project public/secret key pair, auto-provisioned on first boot. `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` reach `reimbursement` via the `.env` file mounted read-only into the container (`langfuse.langchain.CallbackHandler()` reads them straight from the process environment — no compose passthrough); `LANGFUSE_HOST` stays compose-set (`http://langfuse-web:3000`, a Docker-network-topology address a shared `.env` value can't be correct for both in-container and on-host use)
 
 **Groq (LLM inference):**
 
@@ -45,12 +45,14 @@
 - Data flow: outbound HTTPS calls from `build_graph()`'s two chat models to Groq's cloud API; no inbound calls into `reimbursement`. Real data-residency shift from the prior Ollama setup: prompt payloads (including `raw_ocr_text`, which can carry incidental PII) now leave the local Docker network for a third-party cloud API — see `docs/codebase/CONCERNS.md`'s Security Considerations
 - Protocol: HTTPS (Groq's REST API)
 - Location: `packages/reimbursement/src/reimbursement/config.py` (`AgentConfig.ai: AIConfig`, `AgentConfig.models: AgentModelsConfig`), `packages/reimbursement/src/reimbursement/agent/agent.py` (`build_graph()`)
-- Authentication: `GROQ_API_KEY` — required, fails fast at config-load time if unset (unlike Ollama's no-auth local default)
+- Authentication: `GROQ_API_KEY` — required, fails fast at config-load time if unset (unlike Ollama's no-auth local default). Reaches the `reimbursement` container via the `.env` file mounted read-only at runtime, not a `docker-compose.yml` entry — `.dockerignore` keeps `.env` out of the image itself, so the key never lands in a build layer
 
 ## Background Jobs
 
 | Job | Frequency | Purpose |
 | --- | --------- | ------- |
 | `migrate` | Once per stack startup (one-shot compose service) | Applies pending SQL migrations before `api`/`reimbursement`/`publisher` start; every dependent service waits on `service_completed_successfully` |
+
+Unlike `api`/`publisher`/`reimbursement`, `migrate` does NOT receive the `.env` read-only bind mount — it only ever reads `DATABASE_URL`, already supplied directly via its own `docker-compose.yml` `environment:` block, so mounting the full `.env` secret set into a one-shot container would be unnecessary exposure (security-scoping fix).
 
 No recurring/scheduled jobs exist. `migrate` is not a queue-backed job — it is a single compose service, gated by dependency ordering, not a cron/queue system.

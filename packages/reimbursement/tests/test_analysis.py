@@ -4,21 +4,51 @@ from uuid import uuid4
 import pytest
 from agent_fakes import DEFAULT_TEST_MODEL_NAME, FakeStructuredModel
 from reimbursement.agent.nodes.analysis import Analysis, GuardrailVerdict
+from reimbursement.agent.prompts.analysis import get_analysis_prompt
 from reimbursement.models import Reimbursement
 
 pytestmark = pytest.mark.anyio
 
 
-def _state() -> dict:
+_PAYLOAD = {
+    "request_id": "REQ-0001",
+    "submitted_by": "ana.silva@company.com",
+    "submitted_at": "2026-04-10T09:15:00Z",
+    "raw_ocr_text": "BOM SABOR RESTAURANT LTD\nDATE 09/04/2026\nTOTAL R$ 93.50",
+    "claimed_category": "meals",
+    "claimed_amount_brl": 93.5,
+}
+
+
+def _state(payload: dict | None = None) -> dict:
     return {
-        "reimbursement": Reimbursement(uuid=uuid4(), original_payload={}),
+        "reimbursement": Reimbursement(
+            uuid=uuid4(), original_payload=payload if payload is not None else {}
+        ),
         "extracted": {"value": 1000, "currency": "BRL", "receipts_date": None},
     }
 
 
 class DescribeGuardrailVerdict:
-    def it_exposes_exactly_consistent_and_reason(self) -> None:
-        assert set(GuardrailVerdict.model_fields) == {"consistent", "reason"}
+    def it_exposes_exactly_status_and_reason(self) -> None:
+        assert set(GuardrailVerdict.model_fields) == {"status", "reason"}
+
+
+class DescribeGetAnalysisPrompt:
+    def it_renders_a_literal_placeholder_substring_in_a_value_without_double_substitution(
+        self,
+    ) -> None:
+        # Regression: chained .replace() calls re-scan an already-substituted
+        # value for the other placeholder — a request_data/found_data value
+        # (e.g. attacker-controlled raw_ocr_text) containing the literal
+        # substring "{found_data}" would then get corrupted by the second
+        # .replace() call. The single-pass substitution must render it as-is.
+        request_data = {"raw_ocr_text": "injected {found_data} marker"}
+        found_data = {"currency": "BRL"}
+
+        message = get_analysis_prompt(request_data, found_data)
+
+        assert "injected {found_data} marker" in str(message.content)
 
 
 class DescribeAnalysis:
@@ -26,7 +56,7 @@ class DescribeAnalysis:
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         model = FakeStructuredModel(
-            result=GuardrailVerdict(consistent=True, reason="amount matches receipt text")
+            result=GuardrailVerdict(status="auto-approved", reason="amount matches receipt text")
         )
         node = Analysis(model=model, model_name=DEFAULT_TEST_MODEL_NAME)
 
@@ -49,7 +79,7 @@ class DescribeAnalysis:
     ) -> None:
         model = FakeStructuredModel(
             result=GuardrailVerdict(
-                consistent=False, reason="claimed amount contradicts the OCR total"
+                status="human-review", reason="claimed amount contradicts the OCR total"
             )
         )
         node = Analysis(model=model, model_name=DEFAULT_TEST_MODEL_NAME)
@@ -61,7 +91,7 @@ class DescribeAnalysis:
         assert result["decision_reason"] == "claimed amount contradicts the OCR total"
 
     async def it_invokes_the_guardrail_exactly_once(self) -> None:
-        model = FakeStructuredModel(result=GuardrailVerdict(consistent=True, reason="ok"))
+        model = FakeStructuredModel(result=GuardrailVerdict(status="auto-approved", reason="ok"))
         node = Analysis(model=model, model_name=DEFAULT_TEST_MODEL_NAME)
 
         await node(_state(), {"configurable": None})
@@ -76,3 +106,44 @@ class DescribeAnalysis:
 
         with pytest.raises(RuntimeError, match="groq unreachable"):
             await node(_state(), {"configurable": None})
+
+    async def it_includes_found_datas_mapped_values_in_the_rendered_prompt(self) -> None:
+        # AGT-01: extracted's internal field names (value/receipts_date) must
+        # be translated to the prompt's documented names (receipt_value/
+        # receipt_date) before reaching the model.
+        model = FakeStructuredModel(result=GuardrailVerdict(status="auto-approved", reason="ok"))
+        node = Analysis(model=model, model_name=DEFAULT_TEST_MODEL_NAME)
+
+        await node(_state(_PAYLOAD), {"configurable": None})
+
+        assert len(model.calls) == 1
+        rendered = " ".join(str(message.content) for message in model.calls[0])
+        assert "1000" in rendered
+        assert "BRL" in rendered
+        assert "{found_data}" not in rendered
+
+    async def it_includes_request_datas_payload_values_in_the_rendered_prompt(self) -> None:
+        # AGT-01: the original (PII-stripped) payload must reach the prompt
+        # as request_data so the guardrail can compare it against found_data.
+        model = FakeStructuredModel(result=GuardrailVerdict(status="auto-approved", reason="ok"))
+        node = Analysis(model=model, model_name=DEFAULT_TEST_MODEL_NAME)
+
+        await node(_state(_PAYLOAD), {"configurable": None})
+
+        assert len(model.calls) == 1
+        rendered = " ".join(str(message.content) for message in model.calls[0])
+        # str(dict) escapes newlines, so raw_ocr_text is checked line-by-line.
+        assert _PAYLOAD["raw_ocr_text"].splitlines()[0] in rendered
+        assert str(_PAYLOAD["claimed_amount_brl"]) in rendered
+        assert "{request_data}" not in rendered
+
+    async def it_never_includes_submitted_by_in_the_rendered_prompt(self) -> None:
+        # AGD-26: submitted_by (PII) must not reach the analysis prompt.
+        model = FakeStructuredModel(result=GuardrailVerdict(status="auto-approved", reason="ok"))
+        node = Analysis(model=model, model_name=DEFAULT_TEST_MODEL_NAME)
+
+        await node(_state(_PAYLOAD), {"configurable": None})
+
+        assert len(model.calls) == 1
+        rendered = " ".join(str(message.content) for message in model.calls[0])
+        assert _PAYLOAD["submitted_by"] not in rendered
