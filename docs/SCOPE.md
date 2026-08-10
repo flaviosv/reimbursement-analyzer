@@ -121,10 +121,7 @@
     If fails, reject completely the payload
 - Publish to Kafka the entire payload
 - **Payload**
-    - Accept any payload with max size of 1mb (amended from the original
-      25mb — see AD-020 in .specs/STATE.md: sized against
-      docs/original/sample.json's ~381 byte average item and the 500-item
-      batch cap, leaving ~5.5x headroom per item)
+    - Accept any payload with max size of 1mb
     - Those are the minimum required fields in order to have an acceptable payload
     ```json
     {
@@ -159,14 +156,10 @@
         - Values: `auto-approved` | `human-approved` | `human-review` | `auto-rejected` | `human-rejected`
         - Not required
         - Default = empty
-        - Accepts more than one value, comma-separated (e.g.
-          `status=human-review,auto-rejected`), matching any of the listed
-          statuses — see AD-028 in .specs/STATE.md
+        - Accepts more than one value, comma-separated
 - Return the last `Human Review` if any
 - **Responses**
-    - 200 (a filter matching zero rows is still `200` with an empty `data`
-      array — the list endpoint never 404s; the `404` originally listed here
-      is dropped as a spec error — see AD-027 in .specs/STATE.md)
+    - 200
     - 400
     - 500
         - Response body
@@ -189,26 +182,11 @@
 
 ### PUT /api/v1/reimbursement/:uuid 
 - Only recheable for `Reimbursement` in `Human-Rejected` or `Auto-Rejected` or `Human-Review` status
-  (confirmed as literally listed — the Decisions section's "not possible to
-  Human-Approve if rejected" note below refers to the already-*approved*
-  statuses, not to `Human-Rejected` — see AD-027 in .specs/STATE.md)
 - Accept approval of rejected `Human Review`
     Do not override the existing record, create a new one
-    (means the `human_review` row — already DB-enforced append-only by the
-    `human_review_append_only` trigger. `reimbursement.status` is updated in
-    place; no second `reimbursement` row is ever created — see AD-027)
 - The final status must be propagated to the `Reimbursement Entity`
 - For an approval, all the fields from the payload are required
-  (this is also the completeness gate for `receipts_value`/`receipts_date`/
-  `receipts_currency` — those columns being NULL on a `Human Review` row is
-  expected, and this payload rule is what backfills them; no additional
-  application-level gate exists beyond it — see AD-027)
 - For rejecting, just the `reason` and `approved_by` are required
-  (the reject payload has no field for `receipts_value`/`receipts_date`/
-  `receipts_currency` — so, unlike approval, rejecting does not backfill
-  them. A reject is blocked with `400` unless all three are already
-  non-null on the `Reimbursement` entity, so a finalized record is never
-  left incomplete — see AD-027 addendum in .specs/STATE.md)
 - **Payload**
     ```json
     {
@@ -223,8 +201,7 @@
     ```
 - **Responses**
     - 200
-    - 404 (amended — added: unknown `uuid`. Not in the original list despite
-      PUT operating on a path parameter — see AD-027 in .specs/STATE.md)
+    - 404
     - 422
     - 400
     - 500
@@ -241,12 +218,6 @@
 - Iterate over each item from the message and, in a single transaction. 
     - Create to the DB the Reimbursement with `UUID` and `Original Payload` 
     - Publish to the topic `Reimbursement`
-  (amended — no longer a single transaction: the insert commits
-  immediately, and the `Reimbursement` publish is attempted only after
-  that commit, with no transaction spanning the Kafka round-trip. A
-  publish failure is compensated by an explicit delete of the
-  just-inserted row rather than a rollback — see AD-033 in
-  .specs/STATE.md)
 
 ### Error handling
 
@@ -255,13 +226,8 @@
     - Fallback to log the error in a file if fails
     - No other action below must be done
 - If the DB insert fails, no publish to the topic must happen
-- If any the publish to topic fails, it must rollback the DB transaction
-  (amended — there is no DB transaction to roll back anymore: the insert
-  already committed before the publish was attempted, so a publish
-  failure instead triggers an explicit compensating `DELETE` of the
-  just-inserted row, gated `WHERE uuid = $1 AND status = 'pending'` and
-  durably logged on every outcome (removed, no-op, or itself failed) —
-  see AD-033 in .specs/STATE.md)
+- If any the publish to topic fails, the DB row is deleted
+    - Ideally should have an outbot pattern here, but i would add a complexity that the dealine wouldn't support
 - If any error happens, it must republish incrementing the retry
 
 ## Reimbursement Agent
@@ -275,47 +241,23 @@
 ### Reject
 
 - If `Receipt Date`is older than 90 days, instantly reject
-  (this rule always wins — it is evaluated first, ahead of the `>2000`
-  mandatory human-review rule below, so an old *and* large receipt is
-  rejected, not routed to human review — see AD-030 in .specs/STATE.md)
 
 ### Auto-Approved
 
 #### Deterministic layer
-- If the payload matches the sample and the minimum required fields are there, move to the deterministic layer, if the required fields to create a minimum Reimbursement entity are not detectable, move to the Probabilistic Layer
-  (amended — this conditional branching is superseded: the Probabilistic
-  layer's extraction step below now runs unconditionally, on every
-  Reimbursement, before this deterministic check — not gated behind field
-  absence. The deterministic layer instead validates completeness and
-  applies the policy thresholds against the extraction step's output — see
-  AD-030 in .specs/STATE.md)
+- After the LLM extract all the required fields, it tries to apply the policies
 - Minimum required fields (for correct traceability and reimbursement processing)
     - Request ID
     - Submited By
     - Requested Value
     - Submited Date
     - Currency
-        - Hardcoded as BRL as the `claimed_amount_brl` would be present
-          (amended — `claimed_amount_brl` being present no longer skips
-          the extraction step below; currency is resolved through that
-          same unconditional step, still fixed to BRL — see AD-030)
 
 #### Probabilistic layer
 - an LLM / SLM must evaluate, by the sent payload, if there are enough data to create a `Reimbursement` entity, returning as json via structured output. 
-  (amended — this extraction step runs first and unconditionally on every
-  Reimbursement, not only when the deterministic layer can't detect
-  required fields. Its internal composition — whether it pre-fills a
-  minimum object from directly-readable fields like `claimed_amount_brl`
-  before calling the LLM, or resolves everything through the LLM in one
-  pass — is intentionally left open, a Design-phase decision — see AD-030)
 - To avoid mistakes by the LLM, do not rely on it to determine if it's auto-approved or rejected. If it doesn't return the enough data to create the `Reimbursement`, move to `Human Review`
 - Find out a reasonable LLM size for it, a big model might not be necessary in here, consider SLM to reduce the cost
 - One prompt per `Reimbursement`, to prevent LLM from hallucinating
-  (clarified — one prompt per extraction call: the extraction step resolves
-  value, currency, and receipt date together in a single call, not batched
-  across Reimbursements. A second, separate call — the guardrail/judge
-  below — is its own single prompt, invoked only for the ambiguous
-  `200 < value ≤ 2000` zone — see AD-030)
 - (?) Add guardrails in order to validate if the data present in the payload is not contraditory internally, i.e
     - if the `claimed_category` doesn't match the Type of the business by name in `raw_ocr_text`
     - If there are more than one reference to the fields to be found detailed below
@@ -338,10 +280,6 @@
 - `Requested Value > 2000` must go immediately to `Human Review`
     - `Receipt Date` must be newer than 90 days
 - Run a LLM check using a cheap and fast model help out the human review, adding a side note with the LLM output
-  (whether every `Human Review` outcome gets an LLM-generated note, or only
-  this `>2000` case, is deferred alongside the error-handling mechanism
-  below — cost-sensitive, evaluated in a later session — see AD-030 and
-  R-011 in .specs/STATE.md / .specs/RISKS.md)
 
 ### Error Handling
 
@@ -386,6 +324,7 @@
 - No cache has been applied, no reason for adding it
 
 ## Agent Layer
+- Initally, there would be a deterministic layer in front of the AI analysis to avoid token spent, but as the sample json didn't have any `Receipt Date`, i decided to rely on the LLM analysis to find this field in order to have a `Reject First` strategy based on this date
 
 ### Deterministic
 - It's gonna exist to either support the Agent as a tool or to simply move to the correct status if no LLM are needed at all
@@ -415,7 +354,7 @@
     - This is an edge caase not covered by this project
 
 ## General Decisions
-- This project took over 30h, definitely higher than the expectation from the document
+- This project took around 30h, higher than the expectation from the document
     - I assumed this project as a professional one as requested by the documentation, taking care of as many details as i could in the deadline i had
 - AI Usage
     - This document, and the overral architecture was defined by me
@@ -424,12 +363,13 @@
         - SDD 
         - AI Code review
         - Manual review limited due to the deadline
-    - I decided to rely heavily on agentic engineering due to world's reality
+    - I decided to rely heavily on agentic engineering due to how the teams are structuring in the bigger companies, shifting the focus to planning / testing / validation
 - Manual intervention
     - All the planning phase has been done manually, with grilling sessions at the end to refinement
     - The code has been validated manually as well, however not in a deep level, otherwise there wouldn't have enough time
     - The prompts has been done manually with AI validation
     - The architecture has strong personal decision with AI suggestions
+    - This document was completedly written by me, with a few interventions of AI to update details, but reviewed constantly
 - Tests
     - All the unit / integration tests will be generated by AI, there wouldn't have enough time to write them down carefuly
 - The document [Risks.md](RISKS.md) contains some aspects that i've identified during this test development, however I didn't have enough time to take care of them all
@@ -453,15 +393,17 @@
 - Run a detailed code review, making sure the architecture / design has better practices
     - I fully relied on agentic engineering, running code reviews, but the codebase is not small
 - I would have review the [Risks.md](RISKS.md), making sure would be ready for a launch
-- The prompts can receive better instructions and testing
 - I would have added authentication
 - Tested small / bigger models, in order to evaluate performance x cost x accuracy
+- The prompts could have received better instructions and testing layers
 - The prompts are receiving the full payload, if by any chance it receives just one payload with 1MB, the cost of tokens will not worth probably
 
 ## What i would have done better
 - Even though the [Scope.md](SCOPE.md) was made completely by me, I decided to start with no architecture pre-defined, due to that, need to run rounds of refactoring and i wasted at least 4h-6h on it
 - I would have prepared better my harness for this project, i made several adjusments to improve the performance and the cost savings in order to have better and performatic results
 - Improved the Human Review experience
+- I should have started by the Agent layer, not the API / Publishers, due to that i got out of enough time to better validate the prompts and nodes, also finding ways to save tokens and improve performance
+- Implement a validation on top of the Analysis layer, such as a LLM as judge 
 
 # Next Phases
 

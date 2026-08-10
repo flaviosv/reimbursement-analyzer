@@ -31,9 +31,18 @@ uv sync --all-packages
 cp .env.sample .env
 ```
 
-The defaults in `.env.sample` are self-contained placeholders and work as-is for local dev — no edits needed to bring the stack up. They are deliberately weak/guessable and must never be reused outside a local machine (see the warning at the top of the file).
+Fill up all variables in .env as per necessity
 
-Every service loads `.env` through [python-dotenv](https://pypi.org/project/python-dotenv/) at start-up — including inside a container: `docker-compose.yml` bind-mounts the repo-root `.env` read-only into `api`, `publisher`, `reimbursement`, and `migrate` (`./.env:/app/.env:ro`), so `load_dotenv()` resolves the real file there too, not a no-op. `docker-compose.yml`'s own `environment:` blocks carry only the handful of Docker-network-topology values a shared `.env` file cannot correctly hold either way (`KAFKA_BOOTSTRAP_SERVERS`, `DATABASE_URL`, and — for `reimbursement` — `LANGFUSE_HOST`), since a hostname like `kafka:19092` is only ever correct inside the Docker network, never on the host. `.dockerignore` still excludes `.env` from every build context, so `docker build` (no compose) never bakes it into an image; the mount is compose-only and runtime-only. Running a service directly on the host (`uv run python -m api.migrate`) picks up the same file the normal way. Real environment variables always win over the file, so a container's settings are never overridden by a stray local `.env`.
+### Groq API key
+
+Every other value in `.env.sample` is a working local-dev placeholder, but `GROQ_API_KEY` is not
+
+To get one:
+
+1. Go to [console.groq.com](https://console.groq.com) and sign up (email or Google SSO; free, no credit card required) or log in.
+2. Open [API Keys](https://console.groq.com/keys) in the console sidebar.
+3. Click **Create API Key**, give it a name (e.g. `reimbursementanalyzer-local`), and submit.
+4. Copy the key immediately — it's shown once. Paste it into `.env` as `GROQ_API_KEY=<your key>`.
 
 ## Run
 
@@ -46,10 +55,8 @@ docker compose up -d
 What isn't bind-mounted is the venv baked into the image at build time, so it only goes stale after something that changes *that*: a `pyproject.toml`, `uv.lock`, or a `Dockerfile`. Rebuild after pulling or making one of those changes:
 
 ```bash
-docker compose up -d --build
+docker compose up -d --bumake sure ild
 ```
-
-Compose only builds an image the first time it's missing, never on its own after a later change — skip `--build` following a dependency/packaging change and the stack runs against a stale image (e.g. `migrate` failing with `ModuleNotFoundError: No module named 'api'` because the image predates a package-layout change). Docker's layer cache keeps the flag cheap even when nothing changed, so pass it whenever unsure.
 
 This starts the app's Postgres, Kafka (KRaft, single node), the LangFuse observability stack, and the three services (`api`, `publisher`, `reimbursement`).
 
@@ -58,7 +65,7 @@ This starts the app's Postgres, Kafka (KRaft, single node), the LangFuse observa
 | API | http://localhost:8000 | Health check at `/health` |
 | App Postgres | `localhost:5433` | Remapped off the default `5432` so it doesn't clash with a locally-running Postgres |
 | Kafka | `localhost:9092` | Bootstrap address for a client running outside Compose |
-| LangFuse | http://localhost:3000 | Web UI; sign in with `LANGFUSE_INIT_USER_PASSWORD` |
+| LangFuse | http://localhost:3000 | Web UI; sign in with `admin@reimbursementanalyzer.local` / `LANGFUSE_INIT_USER_PASSWORD` |
 
 LangFuse's own Postgres/ClickHouse/Redis/MinIO are also exposed on their default ports (`5432`, `8123`/`9000`, `6379`, `9090`/`9091`) but are internal to its stack — not meant to be used directly.
 
