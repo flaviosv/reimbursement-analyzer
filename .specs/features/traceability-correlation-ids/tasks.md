@@ -9,7 +9,8 @@ Implement these tasks with the `tlc-spec-driven` skill: **activate it by name an
 ---
 
 **Design**: `.specs/features/traceability-correlation-ids/design.md`
-**Status**: Done — all 9 tasks (T1-T9) implemented, gated, and committed. See `validation.md` for the Verifier's independent report.
+**Status**: T1-T9 (TRC-01..11) Done, merged to `main` (PR #12). T10-T11
+(TRC-12/13, this amendment) implemented, gated, pending Verifier + PR.
 
 ---
 
@@ -65,6 +66,8 @@ pre-existing 1 failure / 4 collection errors as unrelated baseline noise.
 | `api` startup logging config (TRC-11) | Unit | **Not excluded by spec.md** — one dedicated test asserting `logging.basicConfig(level=logging.INFO)` is invoked on module import | `packages/api/tests/test_main.py` | same |
 | `reimbursement` agent nodes uuid logging (TRC-07) | None (existing suite must stay green where collectible) | Per spec.md Out of Scope; verified by code inspection — the 5 node test files are part of the pre-existing, unrelated collection failure noted above and cannot currently prove this either way | `packages/reimbursement/src/reimbursement/agent/nodes/*.py` | `uv run pytest packages/reimbursement -m "not integration" --continue-on-collection-errors` (informational only, see Pre-Execute Note) |
 | `reimbursement` agent LangFuse correlation (TRC-08, TRC-09) | None (existing suite must stay green where collectible) | Per spec.md Out of Scope; verified by code inspection — `test_agent.py::DescribeDecide` is part of the same pre-existing collection failure; change is additive-only (one new `config` dict key) and preserves the two keys (`callbacks`, `configurable`) that test already asserts | `packages/reimbursement/src/reimbursement/agent/agent.py` | same |
+| `shared`/`publisher` success-path correlation log (TRC-12) | None (existing suite must stay green) | Per spec.md Out of Scope amendment; `packages/shared/tests/reimbursement/use_cases/test_publish_pending.py` and `packages/publisher/tests/test_processing.py` continue passing unmodified — return-type widening is additive, no test inspects the old `None` return | `packages/shared/src/shared/reimbursement/use_cases/publish_pending.py`, `packages/publisher/src/publisher/processing.py` | `uv run pytest packages/publisher packages/shared -m "not integration"` |
+| `api` create route reject-path log (TRC-13) | None (existing suite must stay green) | Per spec.md Out of Scope amendment; `packages/api/tests/reimbursement/create/test_route.py` continues passing unmodified | `packages/api/src/api/reimbursement/create/route.py` | `uv run pytest packages/api packages/shared -m "not integration"` |
 
 **Coverage Expectation values** — set directly from spec.md's own explicit
 Out of Scope decision (a documented project guideline for this feature, not
@@ -104,6 +107,12 @@ T3 → T4 → T5 → T6
 
 ```
 T7 → T8 → T9
+```
+
+### Phase 4: Amendment — Publisher + Reject-Path Correlation (TRC-12/13)
+
+```
+T10 → T11
 ```
 
 ---
@@ -333,24 +342,77 @@ T7 → T8 → T9
 
 ---
 
+### T10: `publish_pending`/`process_item` — log the request_id→uuid correlation on success
+
+**What**: `publish_pending()`'s return type widens `-> None` to `-> UUID`, returning the `uuid` it already computes (line 60) instead of discarding it — no log call added inside `shared`. `_insert_and_publish()` returns what `publish_pending()` now returns. `process_item()` captures that value and calls `log_event(logger, logging.INFO, ITEM_PUBLISHED_EVENT, request_id=_request_id(item), uuid=str(uuid))` immediately before `return ItemOutcome.PUBLISHED`.
+**Where**: `packages/shared/src/shared/reimbursement/use_cases/publish_pending.py`, `packages/publisher/src/publisher/processing.py`
+**Depends on**: None (T1's `log_event` is already merged and available)
+**Reuses**: `_request_id(item)` (`processing.py:366`, already used by every failure branch), `log_event` (T1)
+**Requirement**: TRC-12
+
+**Tools**:
+- MCP: NONE
+- Skill: NONE
+
+**Done when**:
+- [x] `publish_pending()` returns `uuid` (type hint updated `-> UUID`), no new log call inside `shared`
+- [x] `_insert_and_publish()` returns the `UUID` `publish_pending()` now returns
+- [x] `process_item()` logs `ITEM_PUBLISHED_EVENT` with `request_id`+`uuid` via `log_event`, only on the success path, before returning `ItemOutcome.PUBLISHED`
+- [x] `publish_pending`'s existing failure/compensate path (`_compensate`) is untouched — the new log call is never reached when `publish_pending` raises
+- [x] Existing `packages/shared/tests/reimbursement/use_cases/test_publish_pending.py` and `packages/publisher/tests/test_processing.py` pass unmodified
+- [x] Gate check passes: `uv run pytest packages/publisher packages/shared -m "not integration"`
+- [x] Test count recorded (no silent deletions vs. pre-task count)
+
+**Tests**: none (per Test Coverage Matrix)
+**Gate**: quick (publisher/shared)
+
+**Commit**: `feat(publisher): log the request_id-to-uuid correlation on a successful publish`
+
+---
+
+### T11: `create/route.py` — log a rejected batch's request_ids
+
+**What**: Wrap `batch = validate_batch(raw)` in `try/except BatchInvalid as exc`, calling `log_event(logger, logging.INFO, BATCH_REJECTED_EVENT, request_ids=_lenient_request_ids(raw), reason=str(exc))` then re-raising. New module-local `_lenient_request_ids(raw: bytes) -> list[str | None]`: `json.loads(raw)`, returns `[item.get("request_id") if isinstance(item, dict) else None for item in parsed]` when `parsed` is a list, else `[]`.
+**Where**: `packages/api/src/api/reimbursement/create/route.py`
+**Depends on**: None (T1/T3 already merged — `logger`/`log_event` import already present in this file)
+**Reuses**: the file's existing `logger`/`log_event` import (T3); the narrow-try/except-around-one-call shape T4 established in `update/route.py`; `publisher.processing`'s lenient-extraction precedent (design.md Code Reuse Analysis)
+**Requirement**: TRC-13
+
+**Tools**:
+- MCP: NONE
+- Skill: NONE
+
+**Done when**:
+- [x] Module-level `BATCH_REJECTED_EVENT = "reimbursement.batch_rejected"` constant added
+- [x] `BatchInvalid` from `validate_batch(raw)` is caught, logged (`request_ids`+`reason`), then re-raised — response contract (400 via `_batch_invalid_handler`) unchanged
+- [x] `_lenient_request_ids()` never raises — malformed/non-list body yields `[]`, not a second exception
+- [x] Raw request body never appears in the log line
+- [x] Existing `packages/api/tests/reimbursement/create/test_route.py` and `test_integration.py` pass unmodified
+- [x] Gate check passes: `uv run pytest packages/api packages/shared -m "not integration"`
+- [x] Test count recorded (no silent deletions vs. pre-task count)
+
+**Tests**: none (per Test Coverage Matrix)
+**Gate**: quick (api/shared)
+
+**Commit**: `feat(api): log a rejected batch's request_ids before returning 400`
+
+---
+
 ## Phase Execution Map
 
 ```
-Phase 1 → Phase 2 → Phase 3
+Phase 1 → Phase 2 → Phase 3 → Phase 4
 
 Phase 1:  T1 ──→ T2
 Phase 2:  T3 ──→ T4 ──→ T5 ──→ T6
 Phase 3:  T7 ──→ T8 ──→ T9
+Phase 4:  T10 ──→ T11
 ```
 
-Execution is strictly sequential — 9 tasks total, marginally over the ~8-task
-single-batch threshold. This session runs fully autonomously (no user
-available for the offer-then-confirm sub-agent gate) — every file involved
-is already read and each task is a small, low-risk, mostly-mechanical edit
-(1-4 line additions to existing call sites), so the reasonable autonomous
-call is to execute all 9 inline in the main window rather than pay
-sub-agent-dispatch coordination overhead for work this size. Recorded as a
-judgment call, not a skipped step.
+Phases 1-3 (T1-T9): executed, gated, committed, merged (PR #12) — see
+`validation.md`. Phase 4 (T10-T11) is this amendment: 2 tasks, well under
+the ~8-task single-batch threshold — executed inline, no sub-agent
+delegation needed.
 
 ---
 
@@ -367,6 +429,8 @@ judgment call, not a skipped step.
 | T7: `errors.py` catch-all uuid | 1 file | ✅ Granular |
 | T8: 5 agent node files, uuid logging | 5 files (one cohesive concern: the identical one-line `uuid=%s` addition, no per-file logic variation) | ✅ Granular |
 | T9: `agent.py` LangFuse metadata | 1 file | ✅ Granular |
+| T10: `publish_pending`/`processing.py` success-path log | 2 files (one cohesive concern: a return-value change and the one log call it enables) | ✅ Granular |
+| T11: `create/route.py` reject-path log | 1 file | ✅ Granular |
 
 ---
 
@@ -383,8 +447,13 @@ judgment call, not a skipped step.
 | T7 | None | T6 → T7 (phase-order arrow only) | ✅ Match (task body: "Depends on: None") |
 | T8 | None | T7 → T8 (phase-order arrow only) | ✅ Match (task body: "Depends on: None") |
 | T9 | None | T8 → T9 (phase-order arrow only) | ✅ Match (task body: "Depends on: None") |
+| T10 | None | T9 → T10 (phase-order arrow only) | ✅ Match (task body: "Depends on: None") |
+| T11 | None | T10 → T11 (phase-order arrow only) | ✅ Match (task body: "Depends on: None") |
 
-**Note on phase-order-only arrows**: T2, T7, T8, T9's diagram arrows reflect execution order within their phase, not a data dependency — each touches files disjoint from its phase neighbor. This is intentional sequencing, not a cross-check violation.
+**Note on phase-order-only arrows**: T2, T7, T8, T9, T10, T11's diagram
+arrows reflect execution order within their phase, not a data dependency —
+each touches files disjoint from its phase neighbor. This is intentional
+sequencing, not a cross-check violation.
 
 ---
 
@@ -401,10 +470,12 @@ judgment call, not a skipped step.
 | T7: `errors.py` | `api` catch-all handler | none | none | ✅ OK |
 | T8: agent nodes ×5 | `reimbursement` agent nodes uuid logging | none | none | ✅ OK |
 | T9: `agent.py` | `reimbursement` agent LangFuse correlation | none | none | ✅ OK |
+| T10: `publish_pending.py`/`processing.py` | `shared`/`publisher` success-path correlation log | none | none | ✅ OK |
+| T11: `create/route.py` | `api` create route reject-path log | none | none | ✅ OK |
 
 All ✅ — no restructuring needed. Every `none` row is directly traceable to
-spec.md's own Out of Scope decision (TRC-01..10), not a gap in matrix
-generation.
+spec.md's own Out of Scope decision (TRC-01..10, TRC-12/13), not a gap in
+matrix generation.
 
 ---
 

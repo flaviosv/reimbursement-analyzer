@@ -13,6 +13,23 @@ nodes (which have the uuid in scope but never log it), and the LangFuse
 trace itself, which today carries no reimbursement uuid at all and cannot be
 correlated back to the row it decided. This spec closes those specific gaps.
 
+**Amendment (2026-08-10)**: after TRC-01..11 shipped and merged (PR #12),
+review surfaced two further gaps in the same pre-uuid correlation chain the
+Problem Statement above already claims to cover, both confirmed by code
+inspection before being added here:
+
+- `POST`'s TRC-01 only logs `request_ids` *after* the batch is already
+  valid — a rejected batch (`BatchInvalid`, 400) logs nothing, so its
+  `request_id`s are unrecoverable from logs.
+- `publisher/processing.py::process_item`'s **success** path — the
+  overwhelmingly common case — logs nothing at all. Every failure branch in
+  the same file logs (`_accepts`, `_requeue`, `_log_duplicate`), but the one
+  path that mints the uuid and hands it off (`publish_pending`) discards it
+  the moment it's computed (`packages/shared/src/shared/reimbursement/use_cases/publish_pending.py:60`).
+  This means the single correlation this whole feature exists to guarantee —
+  `request_id` → `uuid` — currently has **no durable record anywhere** for
+  a successful request. TRC-12/TRC-13 below close both gaps.
+
 ## Goals
 
 - [ ] Every write-path api route (`POST`, `PUT`) logs its correlation id
@@ -25,6 +42,11 @@ correlated back to the row it decided. This spec closes those specific gaps.
       grep-able without cross-referencing the orchestrator.
 - [ ] The LangFuse trace for a reimbursement's decision is queryable by that
       reimbursement's uuid.
+- [ ] `publisher`'s successful insert+publish path logs the `request_id` →
+      `uuid` mapping — the one correlation pair the feature is named for —
+      not just its failure branches.
+- [ ] A rejected `POST` batch (`BatchInvalid`) logs the `request_id`s it was
+      given, not just an accepted one.
 
 ## Out of Scope
 
@@ -34,11 +56,11 @@ Explicitly excluded. Documented to prevent scope creep.
 | --- | --- |
 | Central logging configuration (unifying the 3 independent `logging.basicConfig` calls, adding one to `api/main.py`) | A separate concern from the JSON shape of individual event log lines; not part of "the main steps" the user confirmed as in scope. |
 | Deleting or reducing existing test coverage of already-shipped logging (`publisher`'s three-tier tests, `validation.py`'s uuid-logging tests) | Recommended against and not applied — see Assumptions row on this; these tests protect code this feature doesn't touch and exist to satisfy the same hard requirement this feature extends. |
-| Dedicated automated tests for the logging/correlation-id behavior this feature adds (TRC-01..10) | Explicit user decision, prioritizing delivery speed. Verification is by code inspection plus keeping the existing full suite green. |
+| Dedicated automated tests for the logging/correlation-id behavior this feature adds (TRC-01..10, and TRC-12/13 under this amendment — same nature of change, same rationale) | Explicit user decision, prioritizing delivery speed. Verification is by code inspection plus keeping the existing full suite green. |
 | Migrating `publisher/processing.py`'s and `reimbursement/validation.py`'s existing log call sites onto the new `shared.logging` helper | Already correct and already tested; minimal-impact — the helper is adopted by this feature's new call sites only. |
 | New/replacement correlation-id generation (a server-generated id independent of the client-supplied `request_id`) | User chose to reuse the existing `request_id` field as-is. |
 | `structlog` or any new structured-logging library | Explicitly declined in favor of a small in-house helper. |
-| Logging inside `shared`'s use-case modules (`publish_pending`, `send_human_review`, `apply_decision`, `get_reimbursement`, `list_reimbursements`, `review_reimbursement`) | User call: this is one layer too deep. Orchestrator-boundary logging (api routes, `publisher`/`reimbursement`'s consumers) already covers these; `shared` stays log-free, consistent with today. |
+| Logging inside `shared`'s use-case modules (`publish_pending`, `send_human_review`, `apply_decision`, `get_reimbursement`, `list_reimbursements`, `review_reimbursement`) | User call: this is one layer too deep. Orchestrator-boundary logging (api routes, `publisher`/`reimbursement`'s consumers) already covers these; `shared` stays log-free, consistent with today. **Still holds under TRC-12**: `publish_pending` gains a return-value change (the `uuid` it already computes), zero new log calls — the orchestrator (`publisher/processing.py`) is what logs it. |
 
 ---
 
@@ -56,6 +78,8 @@ Explicitly excluded. Documented to prevent scope creep.
 | `PUT` decision-write failure gets a durable record (TRC-03) | A try/except around `approve_reimbursement`/`reject_reimbursement` writes a `shared.failure_log` (CRITICAL) record with `uuid`+`approved_by`+sanitized error, then re-raises | Not explicitly asked — `PUT` is the one write path with zero logging of any kind today, and a silently-lost decision-write failure is exactly what `CLAUDE.md`'s "no silent fallbacks" rule forbids. Mirrors the existing `DECISION_FAILED_EVENT` pattern in `reimbursement/validation.py` rather than inventing a new shape. | n |
 | Catch-all handler enrichment (TRC-04) | `_unhandled_exception_handler` reads `request.path_params.get("uuid")` generically, covering both `GET`-by-uuid and `PUT` with one small change | Not explicitly asked — cheapest way to close the "500 on a uuid-scoped route logs no uuid" gap without new per-route code | n |
 | PII handling for the actor field | `approved_by` (an email) is intentionally logged — required by `CLAUDE.md`'s own "attribute every action... the human reviewer's identity" clause. Payload bodies / OCR text remain excluded, per the existing "never log body" convention this feature doesn't change. | Directly derived from an already-established project rule; low-risk to assume | y |
+| TRC-13's rejected-batch log level | INFO, via `log_event`, same tier as TRC-01's accepted-batch log | Consistency: every TRC-01..11 api log line is INFO; introducing a WARNING tier for one event alone would be a new severity precedent this feature doesn't otherwise establish. The event name (`reimbursement.batch_rejected`) itself carries the distinction — filtering by event, not level, is how this codebase already tells events apart (`publisher.processing`'s own mix of INFO/ERROR events uses level for system-vs-client severity, not routine-vs-notable) | n |
+| TRC-13's `request_id` extraction on a rejected batch | Best-effort: `json.loads(raw)`, then `item.get("request_id") for item in list if isinstance(item, dict)`; empty list if `raw` isn't even a JSON array | Reuses the exact lenient-extraction shape `publisher.processing._request_id()`/`_malformed_message_record()` already use for the same "body might not even be structured" problem — no new pattern | n |
 
 **Open questions:** none — all resolved above, either through direct answers
 or as logged assumptions with rationale. Two rows above (helper adoption
@@ -247,6 +271,61 @@ feature calls `log_event`, none hand-rolls its own `json.dumps(...)`.
 
 ---
 
+### P1: Publisher success-path correlation logging ⭐ MVP
+
+**User Story**: As an on-call engineer, I want `publisher` to log the
+`request_id` → `uuid` mapping when it successfully inserts and publishes an
+item, so a client-reported `request_id` is greppable directly to the
+`uuid` it became — without querying the database.
+
+**Why P1**: This is the actual correlation the feature is named for, on
+its most common path. Every failure branch in `publisher/processing.py`
+already logs; the success branch (`ItemOutcome.PUBLISHED`) is the one path
+that currently logs nothing at all, despite being where the uuid is minted.
+
+**Acceptance Criteria**:
+
+1. WHEN `process_item` successfully inserts and publishes an item THEN
+   publisher SHALL log, at INFO via the `shared.logging` helper, an event
+   containing the item's `request_id` and the resulting `uuid`, before
+   returning `ItemOutcome.PUBLISHED`.
+2. `publish_pending` (the `shared` use case) continues to add no log calls
+   of its own — it returns the `uuid` it already computes, so the
+   orchestrator (`publisher/processing.py`) is what logs it, consistent
+   with the Out of Scope table's shared-stays-log-free rule.
+
+**Independent Test**: Publish a valid batch through `publisher`'s consumer,
+inspect stdout/log capture for the new event, confirm `request_id`/`uuid`
+are both present and the uuid matches the row `publisher` inserted.
+
+---
+
+### P1: API reject-path request-id logging ⭐ MVP
+
+**User Story**: As an on-call engineer, I want a rejected `POST` batch's
+`request_id`s logged before the 400 response, so a client dispute about
+"I sent X" is verifiable even for a batch that never got past validation.
+
+**Why P1**: TRC-01 only logs on the accept path; a rejected batch — the one
+case where the client and the system are most likely to disagree about
+what was sent — currently logs nothing.
+
+**Acceptance Criteria**:
+
+1. WHEN `POST /api/v1/reimbursement`'s body fails `validate_batch`
+   (`BatchInvalid`) THEN api SHALL log, at INFO via the `shared.logging`
+   helper, an event containing the best-effort extracted `request_id`s (see
+   Assumptions row above) and the rejection reason, before re-raising for
+   the existing `_batch_invalid_handler` to return its unchanged 400.
+2. The raw request body SHALL NOT appear in the log line — only the
+   extracted `request_id` strings and the rejection message.
+
+**Independent Test**: `POST` a batch with one item missing `request_id` and
+one with `receipts_currency` invalid — inspect the log line, confirm every
+extractable `request_id` from the batch is present and the raw body is not.
+
+---
+
 ## Edge Cases
 
 - WHEN `PUT`'s body fails its own shape validation (422, before reaching
@@ -260,6 +339,10 @@ feature calls `log_event`, none hand-rolls its own `json.dumps(...)`.
   same uuid) THEN every re-invocation's LangFuse trace SHALL carry the same
   `langfuse_session_id`, since the uuid is stable across retries — all
   attempts for one reimbursement group under one Session.
+- WHEN a rejected `POST` batch's raw body isn't even a JSON array of objects
+  (e.g. malformed JSON, or a JSON object instead of a list) THEN TRC-13's
+  logged `request_id`s list SHALL be empty rather than raising a second
+  exception out of the logging path itself.
 
 ---
 
@@ -267,32 +350,36 @@ feature calls `log_event`, none hand-rolls its own `json.dumps(...)`.
 
 | Requirement ID | Story | Phase | Status |
 | --- | --- | --- | --- |
-| TRC-01 | P1: Write-path api logging | Design | Pending |
-| TRC-02 | P1: Write-path api logging | Design | Pending |
-| TRC-03 | P1: Write-path api logging | Design | Pending |
-| TRC-04 | P1: Catch-all exception logging | Design | Pending |
-| TRC-05 | P2: Read-path api logging | Design | Pending |
-| TRC-06 | P2: Read-path api logging | Design | Pending |
-| TRC-07 | P1: Agent node uuid logging | Design | Pending |
-| TRC-08 | P1: LangFuse trace correlation | Design | Pending |
-| TRC-09 | P1: LangFuse trace correlation | Design | Pending |
-| TRC-10 | P2: Shared JSON log-event helper | Design | Pending |
-| TRC-11 | P1: api's own INFO-level logs must actually emit | Design | Pending |
+| TRC-01 | P1: Write-path api logging | Verified | Merged (PR #12) |
+| TRC-02 | P1: Write-path api logging | Verified | Merged (PR #12) |
+| TRC-03 | P1: Write-path api logging | Verified | Merged (PR #12) |
+| TRC-04 | P1: Catch-all exception logging | Verified | Merged (PR #12) |
+| TRC-05 | P2: Read-path api logging | Verified | Merged (PR #12) |
+| TRC-06 | P2: Read-path api logging | Verified | Merged (PR #12) |
+| TRC-07 | P1: Agent node uuid logging | Verified | Merged (PR #12) |
+| TRC-08 | P1: LangFuse trace correlation | Verified | Merged (PR #12) |
+| TRC-09 | P1: LangFuse trace correlation | Verified | Merged (PR #12) |
+| TRC-10 | P2: Shared JSON log-event helper | Verified | Merged (PR #12) |
+| TRC-11 | P1: api's own INFO-level logs must actually emit | Verified | Merged (PR #12) |
+| TRC-12 | P1: Publisher success-path correlation logging | Implemented | Gate green (T10) |
+| TRC-13 | P1: API reject-path request-id logging | Implemented | Gate green (T11) |
 
-**Coverage:** 11 total, 0 mapped to tasks, 11 unmapped ⚠️ (Tasks phase not yet run)
+**Coverage:** 13 total, 13 implemented and gate-green; TRC-12/13 pending an
+independent Verifier pass before merge (same bar TRC-01..11 cleared).
 
 ---
 
 ## Success Criteria
 
-- [ ] Every one of the 4 api routes emits at least one log line per
+- [x] Every one of the 4 api routes emits at least one log line per
       invocation carrying `request_id` (POST) or `uuid` (GET/GET-by-uuid/PUT).
-- [ ] All 5 agent decision nodes' existing log lines carry the reimbursement
+- [x] All 5 agent decision nodes' existing log lines carry the reimbursement
       uuid.
-- [ ] Every `graph.ainvoke` call's `config` includes
+- [x] Every `graph.ainvoke` call's `config` includes
       `metadata={"langfuse_session_id": str(uuid)}`.
-- [ ] Given a reimbursement uuid, its full lifecycle (api write → agent
-      nodes → LangFuse trace) is reconstructable by grep + the LangFuse UI's
-      session filter, without re-running anything.
-- [ ] The existing full test suite remains green (no new tests added for
+- [x] Given a reimbursement uuid, its full lifecycle (api write → publisher
+      → agent nodes → LangFuse trace) is reconstructable by grep + the
+      LangFuse UI's session filter, without re-running anything and without
+      falling back to a direct DB query for the `request_id` → `uuid` step.
+- [x] The existing full test suite remains green (no new tests added for
       this feature, per the logged assumption above).
