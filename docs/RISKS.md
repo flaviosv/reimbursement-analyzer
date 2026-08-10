@@ -16,7 +16,7 @@ have deliberately chosen to live with for now.
 **Raised:** 2026-08-07
 **Status:** Partially closed by AD-033 (2026-08-09) — the ghost-message and duplicate-via-commit-failure consequences below no longer occur; a narrower residual risk is accepted in their place (see the AD-033 amendment below) — owner: Flavio
 **Affects:** `publisher-consume-request`, `publisher-compensating-delete`, and the future Agent feature
-**Severity:** Low likelihood, moderate blast radius (as originally raised — see the AD-033 amendment for the current, narrower severity)
+**Severity:** As originally raised — low likelihood, moderate blast radius — for the two now-closed consequences below (kept for historical accuracy). **Current, post-AD-033 severity of the residual risk**: very low likelihood (requires a process crash inside the narrow window between a publish failure and the compensating delete completing — a compound of two independently low-probability events, narrower than the original window), low blast radius (one orphaned row, durably logged and discoverable via `failure_log`, not silent) — see the AD-033 amendment below for the full distinction.
 
 ### What breaks
 

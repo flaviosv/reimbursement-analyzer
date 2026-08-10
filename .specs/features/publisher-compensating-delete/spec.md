@@ -94,8 +94,10 @@ demoable slice.
    the `Reimbursement` message — no `conn.transaction()` spans the publish
    call.
 2. WHEN the publish succeeds THEN the system SHALL leave the inserted row as
-   the sole durable record and return `ItemOutcome.PUBLISHED`, unchanged
-   from today's observable behavior.
+   the sole durable record and return `ItemOutcome.PUBLISHED` — the success
+   path's *end state* is unchanged from today's observable behavior (a new,
+   narrower transient read-visibility window on the *failure* path is a
+   separate, explicitly accepted consequence — see Edge Cases).
 3. WHEN the publish raises `PublishFailed` THEN the system SHALL delete the
    just-inserted row (`WHERE uuid = $1 AND status = 'pending'`) before the
    existing requeue path runs.
@@ -162,6 +164,18 @@ and requeue still happens.
   no other writer can reach a `uuid` the Agent has never received) THEN the
   `AND status = 'pending'` guard makes the delete a no-op instead of an
   incorrect removal, and AC5's anomaly log fires.
+- WHEN a concurrent reader (`GET /api/v1/reimbursement`,
+  `GET /api/v1/reimbursement/{uuid}`, or a future poller) reads the row in
+  the window between the insert's commit and a subsequent publish failure's
+  compensating delete THEN it SHALL observe a transient `status='pending'`
+  row that a moment later is gone (404 on the next read) — a state
+  transition that was structurally impossible under the old design (insert
+  and publish shared one transaction, so no other connection could observe
+  the row until both had committed). Accepted as an explicit, low-severity
+  consequence of AD-033's read-visibility tradeoff, not a regression: this
+  feature's AC2 ("publish succeeds → row stands, unchanged from today")
+  describes the success path's *end state* only, not this narrower,
+  intentionally-introduced transient window on the failure path.
 
 ---
 
