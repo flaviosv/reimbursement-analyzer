@@ -7,6 +7,7 @@ import asyncpg
 import pytest
 from shared.reimbursement.repository import (
     approve,
+    delete_pending,
     fetch_reimbursement_by_uuid,
     fetch_reimbursement_page,
     find_reimbursement_state,
@@ -600,3 +601,34 @@ class DescribeUpdateDecision:
         assert row["receipts_value"] == Decimal("64.80")
         assert row["receipts_date"] == date(2026, 4, 11)
         assert row["currency"] == "BRL"
+
+
+class DescribeDeletePending:
+    async def it_returns_true_and_removes_the_pending_row(self, db: asyncpg.Connection) -> None:
+        uuid = await insert_pending(db, valid_reimbursement_item("REQ-COMPENSATE"))
+
+        result = await delete_pending(db, uuid)
+
+        assert result is True
+        assert await _rows_for(db, "REQ-COMPENSATE") == []
+
+    async def it_returns_false_for_a_uuid_matching_no_row(self, db: asyncpg.Connection) -> None:
+        result = await delete_pending(db, uuid4())
+
+        assert result is False
+
+    async def it_returns_false_and_leaves_the_row_when_status_is_not_pending(
+        self, db: asyncpg.Connection
+    ) -> None:
+        # The AND status='pending' guard (spec's Edge Cases): a row that has
+        # already moved on must never be silently removed by a stale
+        # compensating delete.
+        uuid = await insert_pending(db, valid_reimbursement_item("REQ-NOT-PENDING"))
+        await update_decision(db, uuid, "human-review", "escalated")
+
+        result = await delete_pending(db, uuid)
+
+        assert result is False
+        row = await db.fetchrow("SELECT * FROM reimbursement WHERE uuid = $1", uuid)
+        assert row is not None
+        assert row["status"] == "human-review"

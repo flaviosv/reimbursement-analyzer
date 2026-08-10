@@ -94,8 +94,10 @@ demoable slice.
    the `Reimbursement` message — no `conn.transaction()` spans the publish
    call.
 2. WHEN the publish succeeds THEN the system SHALL leave the inserted row as
-   the sole durable record and return `ItemOutcome.PUBLISHED`, unchanged
-   from today's observable behavior.
+   the sole durable record and return `ItemOutcome.PUBLISHED` — the success
+   path's *end state* is unchanged from today's observable behavior (a new,
+   narrower transient read-visibility window on the *failure* path is a
+   separate, explicitly accepted consequence — see Edge Cases).
 3. WHEN the publish raises `PublishFailed` THEN the system SHALL delete the
    just-inserted row (`WHERE uuid = $1 AND status = 'pending'`) before the
    existing requeue path runs.
@@ -162,6 +164,18 @@ and requeue still happens.
   no other writer can reach a `uuid` the Agent has never received) THEN the
   `AND status = 'pending'` guard makes the delete a no-op instead of an
   incorrect removal, and AC5's anomaly log fires.
+- WHEN a concurrent reader (`GET /api/v1/reimbursement`,
+  `GET /api/v1/reimbursement/{uuid}`, or a future poller) reads the row in
+  the window between the insert's commit and a subsequent publish failure's
+  compensating delete THEN it SHALL observe a transient `status='pending'`
+  row that a moment later is gone (404 on the next read) — a state
+  transition that was structurally impossible under the old design (insert
+  and publish shared one transaction, so no other connection could observe
+  the row until both had committed). Accepted as an explicit, low-severity
+  consequence of AD-033's read-visibility tradeoff, not a regression: this
+  feature's AC2 ("publish succeeds → row stands, unchanged from today")
+  describes the success path's *end state* only, not this narrower,
+  intentionally-introduced transient window on the failure path.
 
 ---
 
@@ -171,22 +185,22 @@ Each requirement gets a unique ID for tracking across design, tasks, and validat
 
 | Requirement ID | Story | Phase | Status |
 | --- | --- | --- | --- |
-| PCD-01 | P1: Insert commits before publish is attempted | Design | Pending |
-| PCD-02 | P1: Publish success unchanged | Design | Pending |
-| PCD-03 | P1: Publish failure triggers compensating delete | Design | Pending |
-| PCD-04 | P1: Delete-succeeded traceability | Design | Pending |
-| PCD-05 | P1: Delete-no-op traceability | Design | Pending |
-| PCD-06 | P1: Delete-failed traceability (failure_log) | Design | Pending |
-| PCD-07 | P1: Requeue path unchanged | Design | Pending |
-| PCD-08 | P1: DB-insert-failure path unchanged | Design | Pending |
-| PCD-09 | P1: docs/SCOPE.md amendment | Design | Pending |
-| PCD-10 | P1: R-001 amendment | Design | Pending |
+| PCD-01 | P1: Insert commits before publish is attempted | T2, T3 | Verified |
+| PCD-02 | P1: Publish success unchanged | T2, T3 | Verified |
+| PCD-03 | P1: Publish failure triggers compensating delete | T1, T2 | Verified |
+| PCD-04 | P1: Delete-succeeded traceability | T2 | Verified |
+| PCD-05 | P1: Delete-no-op traceability | T2 | Verified |
+| PCD-06 | P1: Delete-failed traceability (failure_log) | T2 | Verified |
+| PCD-07 | P1: Requeue path unchanged | T3 | Verified |
+| PCD-08 | P1: DB-insert-failure path unchanged | T3 | Verified |
+| PCD-09 | P1: docs/SCOPE.md amendment | T4 | Verified |
+| PCD-10 | P1: R-001 amendment | T5 | Verified |
 
 **ID format:** `PCD-[NUMBER]` (Publisher Compensating Delete)
 
 **Status values:** Pending → In Design → In Tasks → Implementing → Verified
 
-**Coverage:** 10 total, 0 mapped to tasks, 10 unmapped ⚠️ (expected — Tasks phase not yet run)
+**Coverage:** 10 total, 10 mapped to tasks, 0 unmapped — all independently verified (Verifier PASS, 10/10 spec-anchored, sensor 3/3 killed — see `.specs/features/publisher-compensating-delete/validation.md`)
 
 ---
 

@@ -42,9 +42,23 @@ test asserts against, not just "is traceable."
 ## Architecture Overview
 
 The unit of work moves from one DB transaction wrapping insert+publish, to
-two independent, auto-committing statements (insert, and — only on publish
-failure — delete) with the publish call sitting *between* them, uninstrumented
-by any transaction.
+two independent statements (insert, and — only on publish failure — delete),
+each closed before the publish call is even attempted, with the publish call
+sitting *between* them uninstrumented by any transaction.
+
+**Amended (AD-037):** neither statement is a bare autocommitting call — each
+gets its own narrow `conn.transaction()`, a savepoint boundary rather than an
+atomicity guard. `insert_pending`'s call is wrapped for the reason AD-036
+already gives (an uncaught `UniqueViolationError` would otherwise poison the
+connection's enclosing transaction state). `delete_pending`'s call is wrapped
+for the identical reason: `human_review.reimbursement_uuid` is
+`ON DELETE RESTRICT`, so a `DELETE FROM reimbursement` can raise a
+`ForeignKeyViolationError` in general — the `status = 'pending'` gate this
+repository depends on means it cannot yet in practice, but the savepoint
+costs nothing and closes the same class of defect defensively. Both
+transactions open and fully close before the publish call in the diagram
+below begins or resumes — the binding guarantee ("no transaction spans the
+publish call") is unaffected.
 
 ```mermaid
 sequenceDiagram
@@ -54,15 +68,15 @@ sequenceDiagram
     participant K as Kafka
 
     P->>PP: publish_pending(conn, item, errors, retry, ...)
-    PP->>DB: INSERT reimbursement (autocommits)
+    PP->>DB: BEGIN; INSERT reimbursement; COMMIT (savepoint, AD-037)
     DB-->>PP: uuid
     PP->>K: publish(Reimbursement, uuid)
     alt publish succeeds
         K-->>PP: ack
         PP-->>P: return (row stands, PUBLISHED)
-    else publish raises PublishFailed
-        K-->>PP: PublishFailed
-        PP->>DB: DELETE reimbursement WHERE uuid=$1 AND status='pending'
+    else publish (or envelope construction) raises
+        K-->>PP: PublishFailed (or another exception)
+        PP->>DB: BEGIN; DELETE reimbursement WHERE uuid=$1 AND status='pending'; COMMIT (savepoint, AD-037)
         alt delete removes 1 row
             DB-->>PP: DELETE 1
             PP->>PP: log reimbursement.compensating_delete
@@ -70,16 +84,18 @@ sequenceDiagram
             DB-->>PP: DELETE 0
             PP->>PP: log reimbursement.compensating_delete_noop
         else delete itself raises
-            DB-->>PP: exception
+            DB-->>PP: exception (savepoint rolls back, connection stays usable)
             PP->>PP: failure_log.write(compensating_delete_failed)
         end
-        PP-->>P: re-raise PublishFailed (unchanged)
+        PP-->>P: re-raise the original exception (unchanged)
         P->>P: existing _requeue path (unchanged)
     end
 ```
 
 No transaction spans the publish call anywhere in this diagram — `insert`
-and `delete` are each a single autocommitting statement.
+and `delete` each run inside their own narrow transaction, both of which
+close (commit or roll back to the savepoint) before the publish call begins
+or resumes.
 
 ---
 

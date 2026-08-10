@@ -1197,6 +1197,112 @@ own unique-constraint path is untouched by this change).
 
 ---
 
+### AD-036 — `publish_pending`'s insert still gets its own `conn.transaction()`, closed before the publish is attempted — a savepoint boundary, not a re-introduced dual-write window
+
+**Date:** 2026-08-09
+**Status:** Amended by AD-037 (corrects this entry's "no constraint to violate" rationale and extends the same savepoint treatment to `delete_pending`; the core decision — insert keeps its own narrow transaction — is unaffected)
+**Amends:** AD-033 (implementation-level refinement, discovered during that feature's Execute phase — not a reversal: AC1's actual requirement, "no transaction spans the publish call," still holds exactly)
+
+`design.md`'s Architecture Overview describes the insert and the compensating
+delete as "auto-committing statements... uninstrumented by any transaction."
+Implementing that literally (a bare `insert_pending(conn, item)` call with no
+`conn.transaction()` at all) surfaced a real defect during Execute: a real
+Postgres `UniqueViolationError` raised by the insert, when not caught inside
+its own transaction/savepoint, poisons whatever transaction context already
+encloses the connection — any subsequent statement on that same connection
+then fails with `InFailedSQLTransactionError` until the enclosing transaction
+ends. This is not hypothetical: `packages/publisher/tests/test_processing.py`'s
+`DescribeADuplicateItem::it_drops_the_item_without_storing_a_second_row`
+reproduced it directly (`RealPool` shares one connection wrapped in the `db`
+fixture's own outer transaction). `escalate_item.send_human_review` already
+documents and defends against this identical class of failure for its own
+INSERT (`processing.py:218-221`): "without it, a caught UniqueViolationError
+below poisons the connection's enclosing transaction state... It acts as a
+savepoint boundary, not an atomicity guard."
+
+**Resolution:** `publish_pending` wraps only `insert_pending`'s call in
+`async with conn.transaction():`, committing (or rolling back to the
+savepoint, when nested inside an already-open transaction) before `publish()`
+is ever called. `delete_pending` is deliberately NOT given the same
+wrapper — a `DELETE` has no constraint to violate, so the realistic AC6
+failure mode (a broken connection) leaves nothing for a savepoint to
+protect, and adding one would be unjustified complexity for a risk that
+doesn't exist.
+
+**Why:** AD-033's actual, binding guarantee is "no transaction spans the
+Kafka publish call" (spec.md AC1) — a transaction that opens and fully closes
+around one single INSERT statement, strictly before the publish is attempted,
+does not reopen that window; it is observably identical, at the wire level,
+to a bare autocommitted statement in production (where no outer transaction
+exists to nest inside). The only place the distinction is visible is when a
+connection is already inside a transaction — production's `pool.acquire()`
+connections never are, but the test suite's shared-connection fixtures
+sometimes are, and a future caller might be too. Matching `escalate_item`'s
+already-established precedent is the smaller, more consistent fix than either
+leaving a real defect in place or inventing a different pattern for the same
+problem.
+
+**Implication:** `shared.reimbursement.use_cases.publish_pending`'s docstring
+records this explicitly so a future reader doesn't "simplify" it back to a
+bare insert call and reintroduce the poisoned-transaction defect. No spec.md
+or design.md text needed correction — AC1's literal requirement was never
+violated, only the Architecture Overview's more casual "uninstrumented by any
+transaction" phrasing was more literal than the implementation ended up
+being.
+
+---
+
+### AD-037 — `delete_pending`'s call also gets its own savepoint transaction; AD-036's "no constraint to violate" rationale corrected
+
+**Date:** 2026-08-10
+**Status:** Active
+**Amends:** AD-036 (corrects its stated rationale for not wrapping `delete_pending`, and extends the savepoint treatment AD-036 already gives `insert_pending` to `delete_pending` too)
+
+AD-036 justified skipping a `conn.transaction()` around `delete_pending`'s
+call by stating "a `DELETE` has no constraint to violate." That claim is
+factually wrong for this schema:
+`packages/api/src/api/migrations/0002.create-human-review.sql:6` declares
+`human_review.reimbursement_uuid REFERENCES reimbursement (uuid)
+ON DELETE RESTRICT` — a `DELETE FROM reimbursement` can raise a
+`ForeignKeyViolationError` in general. The real reason this is safe *today*
+is a business invariant, not a schema fact: a row `delete_pending` can reach
+is still at `status = 'pending'`, and nothing writes a `human_review` row
+against a `uuid` the Agent has never received (the same reasoning
+`spec.md`'s Edge Cases table already gives for why the `AND status='pending'`
+gate is "unreachable-as-false in practice" today). That invariant is real but
+unenforced by any constraint or test — a future change that allows a
+`human_review` row to exist earlier in the lifecycle would silently
+reintroduce, for `delete_pending`, the exact poisoned-enclosing-transaction
+defect AD-034 fixed for `insert_pending`.
+
+**Resolution:** `_compensate`'s call to `delete_pending` is now wrapped in
+its own `async with conn.transaction():`, identical in shape and rationale to
+`insert_pending`'s existing treatment — a savepoint boundary that commits (or
+rolls back to the savepoint) before `_compensate` returns, so a real
+`ForeignKeyViolationError` (or any other exception the DELETE could raise)
+never poisons the connection's enclosing transaction state. This costs one
+extra `BEGIN`/`COMMIT` pair on a path that only runs after a publish already
+failed — negligible next to the Kafka round-trip that just failed.
+
+**Why:** identified during PR review (`code-review` finding, PR #14) as a
+real, if not-yet-triggerable, defect class left open by AD-036's own reasoning
+being applied inconsistently between the two statements it covers. Confirmed
+by direct inspection of the migration file, not assumed.
+
+**Implication:** `design.md`'s Architecture Overview (prose + mermaid
+diagram) is corrected to show both `insert_pending` and `delete_pending`
+running inside their own narrow transaction, closed before the publish call
+begins or resumes — AD-036's claim that "no spec.md or design.md text needed
+correction" is itself corrected by this entry. `publish_pending.py`'s
+docstring is updated accordingly. No test previously existed pinning the
+`status='pending'` invariant this decision (and AD-036's) safety depends on;
+none is added here either — `delete_pending`'s existing
+`AND status = 'pending'` gate already defends the data itself, and the
+savepoint wrapper defends the connection, independent of whether that
+invariant ever changes.
+
+---
+
 ### AD-034 — `traceability-correlation-ids` executed autonomously: sibling-feature test breakage left untouched, TRC-11 gets one dedicated test, 9 tasks run inline without a sub-agent offer
 
 **Date:** 2026-08-09

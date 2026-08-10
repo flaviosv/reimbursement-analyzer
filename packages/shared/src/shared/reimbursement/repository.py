@@ -117,6 +117,8 @@ _RECORD_HUMAN_REVIEW_DECISION = """
     RETURNING uuid
 """
 
+_DELETE_PENDING = "DELETE FROM reimbursement WHERE uuid = $1 AND status = 'pending'"
+
 
 def _columns(item: dict[str, Any]) -> tuple[Any, ...]:
     # The three identity columns come from the *validated* model, not the
@@ -246,6 +248,17 @@ async def record_human_review_decision(
     return await conn.fetchval(
         _RECORD_HUMAN_REVIEW_DECISION, reimbursement_uuid, status, reviewed_by, reason
     )
+
+
+async def delete_pending(conn: asyncpg.Connection, uuid: UUID) -> bool:
+    """Compensating delete for a publish failure (AD-033): removes the row
+    `publish_pending` just inserted, gated to `status = 'pending'` so this
+    can never touch a row some other writer has already moved on. Returns
+    whether exactly one row was affected, parsed from asyncpg's `DELETE n`
+    status string — the same pattern update_decision() already uses for
+    `UPDATE n`."""
+    result = await conn.execute(_DELETE_PENDING, uuid)
+    return result == "DELETE 1"
 
 
 def is_duplicate(exc: BaseException) -> bool:

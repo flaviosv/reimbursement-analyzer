@@ -76,7 +76,7 @@
 │               ├── repository.py           # insert_pending, insert_human_review, get_by_uuid, update_human_review, fetch_reimbursement_page, approve, reject, find_reimbursement_state, record_human_review_decision, is_duplicate
 │               └── use_cases/
 │                   ├── send_human_review.py    # render_history(), send_human_review(), escalate_existing()
-│                   ├── publish_pending.py      # publish_pending() — insert_pending + Kafka publish as one unit (publisher's own transaction)
+│                   ├── publish_pending.py      # publish_pending() — insert commits immediately, compensating delete on publish failure (AD-033)
 │                   ├── list_reimbursements.py  # list_reimbursements() — status whitelist + limit/offset gates
 │                   └── review_reimbursement.py # approve_reimbursement(), reject_reimbursement() — the approve/reject transaction
 │           ├── signals.py         # install_shutdown_handlers() — SIGINT/SIGTERM → asyncio.Event (used by reimbursement only so far)
@@ -122,7 +122,7 @@
 
 - **Purpose:** code genuinely reusable across `api`, `reimbursement`, and `publisher` — cross-service pydantic models, exception classes, Kafka config/publish primitives, the Postgres pool lifecycle, and the `reimbursement` domain's persistence + use-case layer (the largest slice: list/filter, the approve/reject review transaction, the insert+publish unit, and the original escalation path).
 - **Location:** `packages/shared/src/shared/`.
-- **Key files:** `config.py` (`load_config()` — single cached env-config entrypoint), `db.py` (`managed_pool` — Postgres pool lifecycle), `producer.py` (`managed_producer`, `publish` — technology-specific but domain-agnostic), `models.py` (`ReimbursementRequest`, `RequestEnvelope`, `ReimbursementEnvelope`, `Reimbursement`, `AttemptError`, `SampleMessage`, `HealthStatus`), `errors.py` (`PayloadTooLarge`, `BatchInvalid`, `PublishFailed`, `ReimbursementFilterInvalid`, `ReviewInvalid`, `ReimbursementNotFound`, `ReimbursementNotEligible`, `ReimbursementUuidMismatch`, `sanitize()`), `failure_log.py` (`write()` — last-resort structured log), `reimbursement/repository.py` (every SQL statement — insert, fetch, approve, reject, record decision) + `reimbursement/use_cases/{send_human_review,publish_pending,list_reimbursements,review_reimbursement}.py` (the escalation action, the insert+publish unit, the list/filter gates, and the approve/reject transaction).
+- **Key files:** `config.py` (`load_config()` — single cached env-config entrypoint), `db.py` (`managed_pool` — Postgres pool lifecycle), `producer.py` (`managed_producer`, `publish` — technology-specific but domain-agnostic), `models.py` (`ReimbursementRequest`, `RequestEnvelope`, `ReimbursementEnvelope`, `Reimbursement`, `AttemptError`, `SampleMessage`, `HealthStatus`), `errors.py` (`PayloadTooLarge`, `BatchInvalid`, `PublishFailed`, `ReimbursementFilterInvalid`, `ReviewInvalid`, `ReimbursementNotFound`, `ReimbursementNotEligible`, `ReimbursementUuidMismatch`, `sanitize()`), `failure_log.py` (`write()` — last-resort structured log), `reimbursement/repository.py` (every SQL statement — insert, delete, fetch, approve, reject, record decision) + `reimbursement/use_cases/{send_human_review,publish_pending,list_reimbursements,review_reimbursement}.py` (the escalation action, the insert+publish unit, the list/filter gates, and the approve/reject transaction).
 
 ### `publisher`
 
