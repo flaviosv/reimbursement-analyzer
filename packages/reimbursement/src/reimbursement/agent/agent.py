@@ -1,12 +1,12 @@
 """Graph construction and the singleton entry point.
 
 `build_graph()` is the only place any node's dependencies — most importantly
-the Ollama client(s) — get constructed. `get_graph()` wraps it in the same
+the two Groq client(s) — get constructed. `get_graph()` wraps it in the same
 `@lru_cache(maxsize=1)` singleton shape as `shared.config.load_config`
 (AD-023), so those dependencies are built once per process, not once per
 message (L-003's "compiled once" proxy). `_wire` is split out from
 `build_graph` so tests can wire the same graph shape with fakes at every
-LLM/DB boundary, without constructing a real Ollama client."""
+LLM/DB boundary, without constructing a real Groq client."""
 
 import logging
 from functools import lru_cache
@@ -72,21 +72,25 @@ def build_graph() -> CompiledStateGraph:
     config = load_agent_config()
 
     extract_model = init_chat_model(
-        f"ollama:{config.ollama_model}",
-        base_url=config.ollama_base_url,
-        timeout=config.ollama_timeout_seconds,
+        f"groq:{config.models.extract_fields.model_name}",
+        api_key=config.ai.api_key,
+        temperature=config.models.extract_fields.temperature,
+        timeout=config.ai.timeout_seconds,
     ).with_structured_output(ExtractedFieldsSchema)
     analysis_model = init_chat_model(
-        f"ollama:{config.ollama_model}",
-        base_url=config.ollama_base_url,
-        timeout=config.ollama_timeout_seconds,
+        f"groq:{config.models.analysis.model_name}",
+        api_key=config.ai.api_key,
+        temperature=config.models.analysis.temperature,
+        timeout=config.ai.timeout_seconds,
     ).with_structured_output(GuardrailVerdict)
 
     nodes: dict[str, Node] = {
-        "extract_fields": ExtractFields(model=extract_model),
+        "extract_fields": ExtractFields(
+            model=extract_model, model_name=config.models.extract_fields.model_name
+        ),
         "validate": Validate(),
         "apply_policies": ApplyPolicies(apply_decision=apply_decision),
-        "analysis": Analysis(model=analysis_model, model_name=config.ollama_model),
+        "analysis": Analysis(model=analysis_model, model_name=config.models.analysis.model_name),
         "apply_agent_decision": ApplyAgentDecision(apply_decision=apply_decision),
     }
     return _wire(nodes)

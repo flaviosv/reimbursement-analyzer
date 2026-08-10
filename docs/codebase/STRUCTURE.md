@@ -40,13 +40,13 @@
 │   │   ├── src/reimbursement/    # reimbursement's own modules, matching shared's nested src-layout shape
 │   │   │   ├── consumer.py         # Composition root: pool/producer/consumer lifecycle, offset commit
 │   │   │   ├── validation.py       # Decision tree: resolve, staleness guard, requeue, retry-ceiling escalation
-│   │   │   ├── config.py           # AgentConfig (consumer_group_id, consume_timeout_seconds), load_agent_config()
+│   │   │   ├── config.py           # AgentConfig (consumer_group_id, ai: AIConfig, models: AgentModelsConfig), load_agent_config()
 │   │   │   ├── schema.py           # State TypedDict — reimbursement: shared.models.Reimbursement
 │   │   │   └── agent/                # LangGraph decision graph — implemented, invoked from validation.py
 │   │   │       ├── agent.py            # StateGraph builder — 5 nodes wired with edges, compiled, LangFuse-traced
 │   │   │       ├── nodes/               # extract_fields, validate, apply_policies, analysis, apply_agent_decision
 │   │   │       │                        # — deterministic rules + LLM-as-judge guardrail, each with its own test file
-│   │   │       └── prompts/             # extract_fields.py, analysis.py — mid-refactor, currently broken (see CONCERNS.md)
+│   │   │       └── prompts/             # extract_fields.py, analysis.py — get_*_prompt() factories, render system prompts
 │   │   └── tests/                 # consumer/validation/config plus one test file per agent/ node + full-graph wiring
 │   │       ├── conftest.py         # Kafka container fixture, local to this package
 │   │       ├── agent_fakes.py      # FakePool/FakeConnection; re-exports shared.testing.FakeProducer
@@ -134,7 +134,7 @@
 
 - **Purpose:** consumes `Reimbursement`, resolves the row by `uuid`, and settles it into one of resolved / stale / ghost / requeued / escalated / logged / invalid — then, on resolve, hands the row to its own decision graph, which classifies it auto-approved / auto-rejected / human-review. Named `reimbursement`, not `agent` — renamed and flattened this branch (`ce80603`) to match `publisher`/`api`'s layout; "the agent" now refers to the LangGraph decision graph nested inside it, not the package itself.
 - **Location:** `packages/reimbursement/src/reimbursement/{consumer,validation,config,schema}.py` plus the `agent/` decision-graph subpackage — a real installed package via `uv_build`'s nested src-layout (AD-031, amended), like `api`/`publisher`/`shared`.
-- **Key files:** `consumer.py` (Kafka consumer lifecycle, offset commit), `validation.py` (the decision tree — `handle_message`, resolve-by-uuid, staleness guard, ghost tolerance (R-001), transient-failure requeue, `retry > 3` escalation reusing `shared.reimbursement.use_cases.send_human_review.escalate_existing`, then `agent.decide()` on resolve), `config.py` (`AgentConfig`), `schema.py` (`State` — the decision graph's `TypedDict`, `reimbursement: shared.models.Reimbursement`). Both the consume/resolve layer and the decision graph are implemented and tested — see `TESTING.md`. **`agent/` (the decision graph):** `agent.py` builds and compiles a `langgraph.StateGraph` wiring its five nodes with real edges/conditional routing, and traces every LLM call via LangFuse; `nodes/{extract_fields,validate,apply_policies,analysis,apply_agent_decision}.py` each hold real logic (deterministic thresholds in `apply_policies`, an LLM-as-judge guardrail in `analysis`). **Currently broken in the uncommitted working tree** — `prompts/{extract_fields,analysis}.py` are mid a prompt-authoring refactor that drops an export `agent.py` (and the whole test suite) still imports; see `docs/codebase/CONCERNS.md`'s Known Bugs.
+- **Key files:** `consumer.py` (Kafka consumer lifecycle, offset commit), `validation.py` (the decision tree — `handle_message`, resolve-by-uuid, staleness guard, ghost tolerance (R-001), transient-failure requeue, `retry > 3` escalation reusing `shared.reimbursement.use_cases.send_human_review.escalate_existing`, then `agent.decide()` on resolve), `config.py` (`AgentConfig` — `ai: AIConfig`/`models: AgentModelsConfig`, AD-032), `schema.py` (`State` — the decision graph's `TypedDict`, `reimbursement: shared.models.Reimbursement`). Both the consume/resolve layer and the decision graph are implemented and tested — see `TESTING.md`. **`agent/` (the decision graph):** `agent.py` builds and compiles a `langgraph.StateGraph` wiring its five nodes with real edges/conditional routing, constructs two independent Groq-backed chat models (one per node, AD-032), and traces every LLM call via LangFuse; `nodes/{extract_fields,validate,apply_policies,analysis,apply_agent_decision}.py` each hold real logic (deterministic thresholds in `apply_policies`, an LLM-as-judge guardrail in `analysis`).
 
 ## Where Things Live
 

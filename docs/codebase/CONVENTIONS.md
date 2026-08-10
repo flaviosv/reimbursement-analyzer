@@ -44,7 +44,7 @@ A second, `api`-scoped pattern exists alongside this one: `shared.logging.log_ev
 
 ## LLM Prompt Construction
 
-`reimbursement/agent/prompts/{analysis,extract_fields}.py` build each system prompt as a private, module-level string constant (`_ANALYSIS_PROMPT`, `_EXTRACT_FIELDS_PROMPT`) using XML-style tagged sections (`<identity>`, `<brand_guardrails>`, `<guardrails>`, `<processing_guardrails>`, `<goals>`, `<request_data>`, `<uncertainty>`, `<examples>`), rendered by a `get_<name>_prompt(request_data) -> SystemMessage` factory — replacing an earlier `ChatPromptTemplate.from_messages([...])` pattern. **In progress, not yet consistent between the two files**: `extract_fields.py`'s template still carries unresolved placeholder comments in its `<goals>`/`<request_data>` sections, and both files currently have prompt-interpolation bugs — see `CONCERNS.md`'s Known Bugs.
+`reimbursement/agent/prompts/{analysis,extract_fields}.py` build each system prompt as a private, module-level string constant (`_ANALYSIS_PROMPT`, `_EXTRACT_FIELDS_PROMPT`) using XML-style tagged sections (`<identity>`, `<brand_guardrails>`, `<guardrails>`, `<processing_guardrails>`, `<goals>`, `<request_data>`, `<uncertainty>`, `<examples>`), rendered by a `get_<name>_prompt(request_data) -> SystemMessage` factory — replacing an earlier `ChatPromptTemplate.from_messages([...])` pattern. Interpolation is a plain `.replace("{request_data}", str(request_data))`, not `str.format()` — deliberately, since both templates embed literal JSON as prose examples that would otherwise collide with `str.format()`'s brace-parsing.
 
 ## Comments
 

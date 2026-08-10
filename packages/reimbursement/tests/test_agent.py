@@ -4,7 +4,12 @@ from uuid import uuid4
 
 import pytest
 import reimbursement.agent.agent as agent
-from agent_fakes import FakeAcquirePool, FakeApplyDecision, FakeStructuredModel
+from agent_fakes import (
+    DEFAULT_TEST_MODEL_NAME,
+    FakeAcquirePool,
+    FakeApplyDecision,
+    FakeStructuredModel,
+)
 from reimbursement.agent.nodes.analysis import Analysis, GuardrailVerdict
 from reimbursement.agent.nodes.apply_agent_decision import ApplyAgentDecision
 from reimbursement.agent.nodes.apply_policies import ApplyPolicies
@@ -13,10 +18,6 @@ from reimbursement.agent.nodes.extract_fields import (
     ExtractFields,
 )
 from reimbursement.agent.nodes.validate import Validate
-from reimbursement.agent.prompts.analysis import PLACEHOLDER_PROMPT as ANALYSIS_PROMPT
-from reimbursement.agent.prompts.extract_fields import (
-    PLACEHOLDER_PROMPT as EXTRACT_FIELDS_PROMPT,
-)
 from reimbursement.models import Reimbursement
 
 pytestmark = pytest.mark.anyio
@@ -42,10 +43,12 @@ class _Fakes:
 
     def wire(self) -> object:
         nodes = {
-            "extract_fields": ExtractFields(model=self.extract_model, prompt=EXTRACT_FIELDS_PROMPT),
+            "extract_fields": ExtractFields(
+                model=self.extract_model, model_name=DEFAULT_TEST_MODEL_NAME
+            ),
             "validate": Validate(),
             "apply_policies": ApplyPolicies(apply_decision=self.apply_policies_decision),
-            "analysis": Analysis(model=self.analysis_model, prompt=ANALYSIS_PROMPT, model_name="llama3.2"),
+            "analysis": Analysis(model=self.analysis_model, model_name=DEFAULT_TEST_MODEL_NAME),
             "apply_agent_decision": ApplyAgentDecision(
                 apply_decision=self.apply_agent_decision_decision
             ),
@@ -99,7 +102,7 @@ class DescribeGraphRouting:
         uuid = uuid4()
         fakes = _Fakes(
             extracted=ExtractedFieldsSchema(value=5000, currency="BRL", receipts_date=date(2026, 1, 9)),
-            guardrail=GuardrailVerdict(consistent=True, reasoning="unused"),
+            guardrail=GuardrailVerdict(consistent=True, reason="unused"),
             apply_policies_result=uuid,
             apply_agent_decision_result=uuid,
         )
@@ -132,7 +135,7 @@ class DescribeGraphRouting:
         uuid = uuid4()
         fakes = _Fakes(
             extracted=ExtractedFieldsSchema(value=200, currency="BRL", receipts_date=date(2026, 4, 1)),
-            guardrail=GuardrailVerdict(consistent=True, reasoning="unused"),
+            guardrail=GuardrailVerdict(consistent=True, reason="unused"),
             apply_policies_result=uuid,
             apply_agent_decision_result=uuid,
         )
@@ -164,7 +167,7 @@ class DescribeGraphRouting:
             extracted=ExtractedFieldsSchema(
                 value=2000.01, currency="BRL", receipts_date=date(2026, 4, 1)
             ),
-            guardrail=GuardrailVerdict(consistent=True, reasoning="unused"),
+            guardrail=GuardrailVerdict(consistent=True, reason="unused"),
             apply_policies_result=uuid,
             apply_agent_decision_result=uuid,
         )
@@ -194,7 +197,7 @@ class DescribeGraphRouting:
         uuid = uuid4()
         fakes = _Fakes(
             extracted=ExtractedFieldsSchema(value=1000, currency="BRL", receipts_date=date(2026, 4, 1)),
-            guardrail=GuardrailVerdict(consistent=True, reasoning="amount matches receipt text"),
+            guardrail=GuardrailVerdict(consistent=True, reason="amount matches receipt text"),
             apply_policies_result=uuid,
             apply_agent_decision_result=uuid,
         )
@@ -225,7 +228,7 @@ class DescribeGraphRouting:
         fakes = _Fakes(
             extracted=ExtractedFieldsSchema(value=1000, currency="BRL", receipts_date=date(2026, 4, 1)),
             guardrail=GuardrailVerdict(
-                consistent=False, reasoning="claimed amount contradicts the OCR total"
+                consistent=False, reason="claimed amount contradicts the OCR total"
             ),
             apply_policies_result=uuid,
             apply_agent_decision_result=uuid,
@@ -255,7 +258,7 @@ class DescribeGraphRouting:
         uuid = uuid4()
         fakes = _Fakes(
             extracted=ExtractedFieldsSchema(value=None, currency=None, receipts_date=None),
-            guardrail=GuardrailVerdict(consistent=True, reasoning="unused"),
+            guardrail=GuardrailVerdict(consistent=True, reason="unused"),
             apply_policies_result=uuid,
             apply_agent_decision_result=uuid,
         )
@@ -284,11 +287,16 @@ class DescribeGraphRouting:
 
 
 class DescribeBuildGraph:
-    def it_wires_the_real_ollama_bound_models_into_the_expected_node_set(self) -> None:
+    def it_wires_the_real_dependencies_into_the_expected_node_set(self) -> None:
         # No monkeypatching: proves the real body (init_chat_model calls,
-        # config.ollama_model/ollama_base_url plumbing, schema binding)
-        # constructs without error — every other test substitutes build_graph
-        # or _wire's node set entirely.
+        # config.ai/config.models plumbing, schema binding) constructs
+        # without error and without a live network call — only asserts the
+        # node-key set; it_constructs_two_independent_groq_models_one_per_node
+        # (above) is the one that inspects the constructed models themselves.
+        # Construction alone never calls .ainvoke() — confirmed empirically
+        # against langchain-groq (design.md's Risks table flagged this as
+        # unconfirmed pre-implementation); every other test substitutes
+        # build_graph or _wire's node set entirely.
         graph = agent.build_graph()
 
         assert set(graph.get_graph().nodes.keys()) == {
@@ -300,6 +308,55 @@ class DescribeBuildGraph:
             "analysis",
             "apply_agent_decision",
         }
+
+    def it_constructs_two_independent_groq_models_one_per_node(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("GROQ_API_KEY", "gsk_shared_key")
+        monkeypatch.setenv("EXTRACT_FIELDS_MODEL_NAME", "model-a")
+        monkeypatch.setenv("EXTRACT_FIELDS_TEMPERATURE", "0.1")
+        monkeypatch.setenv("ANALYSIS_MODEL_NAME", "model-b")
+        monkeypatch.setenv("ANALYSIS_TEMPERATURE", "0.9")
+        monkeypatch.setenv("AI_TIMEOUT_SECONDS", "12")
+
+        calls: list[dict] = []
+        instances: list["_StubChatModel"] = []
+
+        class _StubChatModel:
+            def with_structured_output(self, schema: object) -> "_StubChatModel":
+                self.schema = schema
+                return self
+
+        def _spy_init_chat_model(model: str, **kwargs: object) -> _StubChatModel:
+            calls.append({"model": model, **kwargs})
+            instance = _StubChatModel()
+            instances.append(instance)
+            return instance
+
+        monkeypatch.setattr(agent, "init_chat_model", _spy_init_chat_model)
+
+        agent.build_graph()
+
+        assert len(calls) == 2
+        extract_call, analysis_call = calls
+        extract_instance, analysis_instance = instances
+        assert extract_call["model"] == "groq:model-a"
+        assert extract_call["temperature"] == 0.1
+        assert analysis_call["model"] == "groq:model-b"
+        assert analysis_call["temperature"] == 0.9
+        # AMC-13/14: both nodes' models are sourced from the one AIConfig
+        # read, not a per-node credential/timeout.
+        assert extract_call["api_key"] == analysis_call["api_key"] == "gsk_shared_key"
+        assert extract_call["timeout"] == analysis_call["timeout"] == 12.0
+        # AMC-03: two independently-configured model_names really reach two
+        # distinct constructed model instances, not one shared instance
+        # whose value happens to be read twice.
+        assert extract_call["model"] != analysis_call["model"]
+        # Proves the two structured-output schemas are bound to the right
+        # node, not swapped — a schema swap between extract_fields/analysis
+        # would silently pass every other assertion here.
+        assert extract_instance.schema is ExtractedFieldsSchema
+        assert analysis_instance.schema is GuardrailVerdict
 
 
 class DescribeDecide:

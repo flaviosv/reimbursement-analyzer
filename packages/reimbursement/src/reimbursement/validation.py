@@ -159,7 +159,7 @@ async def _decide(
     deps: Dependencies, envelope: ReimbursementEnvelope, row: asyncpg.Record
 ) -> MessageOutcome:
     """R-011's interim floor: a decision-stage failure (a malformed
-    original_payload, Ollama unreachable, malformed structured output, a
+    original_payload, Groq unreachable, malformed structured output, a
     genuine `apply_decision` write failure) is caught here, never
     propagated — no retry, no auto-escalation, just a durable failure_log
     record. The row stays exactly as it was; an operator uses the log to
