@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 import yaml
 from dotenv import dotenv_values
 
@@ -10,7 +11,8 @@ ENV_SAMPLE_PATH = REPO_ROOT / ".env.sample"
 # Read and parsed once at import time, mirroring test_compose_parity.py's
 # own precedent — neither file changes mid-session.
 _SERVICES = yaml.safe_load(COMPOSE_PATH.read_text())["services"]
-_ENV_SAMPLE_VARS = set(dotenv_values(ENV_SAMPLE_PATH))
+_ENV_SAMPLE_DOTENV = dotenv_values(ENV_SAMPLE_PATH)
+_ENV_SAMPLE_VARS = set(_ENV_SAMPLE_DOTENV)
 
 # Maintained allowlist: the only vars each service's environment: block may
 # carry — Docker-network-topology values no shared .env file can correctly
@@ -33,6 +35,7 @@ _REQUIRED_DOTENV_VARS = {
     "AI_TIMEOUT_SECONDS",
     "EXTRACT_FIELDS_TEMPERATURE",
     "ANALYSIS_TEMPERATURE",
+    "LANGFUSE_PUBLIC_KEY",
     "LANGFUSE_SECRET_KEY",
     "KAFKA_SECURITY_PROTOCOL",
     "KAFKA_SASL_MECHANISM",
@@ -43,25 +46,21 @@ _REQUIRED_DOTENV_VARS = {
 
 
 class DescribeDotenvConfigParity:
-    def it_keeps_apis_environment_block_to_only_its_topology_allowlist(self) -> None:
-        actual = set(_SERVICES["api"]["environment"])
-        unexpected = actual - _TOPOLOGY_ALLOWLIST["api"]
-        assert not unexpected, f"api's environment: block carries unexpected non-topology var(s): {unexpected}"
-
-    def it_keeps_publishers_environment_block_to_only_its_topology_allowlist(self) -> None:
-        actual = set(_SERVICES["publisher"]["environment"])
-        unexpected = actual - _TOPOLOGY_ALLOWLIST["publisher"]
+    @pytest.mark.parametrize("service", ["api", "publisher", "reimbursement"])
+    def it_keeps_service_environment_block_to_only_its_topology_allowlist(self, service: str) -> None:
+        actual = set(_SERVICES[service]["environment"])
+        unexpected = actual - _TOPOLOGY_ALLOWLIST[service]
         assert not unexpected, (
-            f"publisher's environment: block carries unexpected non-topology var(s): {unexpected}"
-        )
-
-    def it_keeps_reimbursements_environment_block_to_only_its_topology_allowlist(self) -> None:
-        actual = set(_SERVICES["reimbursement"]["environment"])
-        unexpected = actual - _TOPOLOGY_ALLOWLIST["reimbursement"]
-        assert not unexpected, (
-            f"reimbursement's environment: block carries unexpected non-topology var(s): {unexpected}"
+            f"{service}'s environment: block carries unexpected non-topology var(s): {unexpected}"
         )
 
     def it_defines_every_required_dotenv_var_in_env_sample(self) -> None:
         missing = _REQUIRED_DOTENV_VARS - _ENV_SAMPLE_VARS
         assert not missing, f".env.sample is missing var(s) the code reads: {missing}"
+
+    def it_keeps_langfuse_public_key_in_sync_with_the_compose_anchor(self) -> None:
+        compose_value = _SERVICES["langfuse-web"]["environment"]["LANGFUSE_INIT_PROJECT_PUBLIC_KEY"]
+        assert _ENV_SAMPLE_DOTENV["LANGFUSE_PUBLIC_KEY"] == compose_value, (
+            ".env.sample's LANGFUSE_PUBLIC_KEY is out of sync with docker-compose.yml's "
+            f"x-langfuse-public-key anchor ({compose_value!r})"
+        )
