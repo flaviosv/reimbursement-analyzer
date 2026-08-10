@@ -136,6 +136,18 @@ class DescribeSendHumanReview:
         assert reason is not None
         assert "ceiling" in reason.lower()
 
+    async def it_stores_a_custom_header_instead_of_the_retry_ceiling_wording(
+        self, db: asyncpg.Connection
+    ) -> None:
+        uuid = await send_human_review(
+            db, valid_reimbursement_item("REQ-CUSTOM-HEADER"), _three_distinct(), _LIMIT,
+            header="Decision-stage failure",
+        )
+
+        reason = await db.fetchval("SELECT decision_reason FROM reimbursement WHERE uuid = $1", uuid)
+        assert "Decision-stage failure after" in reason
+        assert "Retry ceiling" not in reason
+
 
 class DescribeEscalateExisting:
     """The UPDATE-based sibling to send_human_review's INSERT-based
@@ -180,3 +192,16 @@ class DescribeEscalateExisting:
         result = await escalate_existing(db, uuid4(), _three_distinct(), _LIMIT)
 
         assert result is None
+
+    async def it_stores_a_custom_header_instead_of_the_retry_ceiling_wording(
+        self, db: asyncpg.Connection
+    ) -> None:
+        # agent-decision-error-escalation's own caller: a decision-stage
+        # failure escalated immediately, never involving a retry ceiling.
+        uuid = await insert_pending(db, valid_reimbursement_item("REQ-AGENT-CUSTOM-HEADER"))
+
+        await escalate_existing(db, uuid, _three_distinct(), _LIMIT, header="Decision-stage failure")
+
+        reason = await db.fetchval("SELECT decision_reason FROM reimbursement WHERE uuid = $1", uuid)
+        assert "Decision-stage failure after" in reason
+        assert "Retry ceiling" not in reason
