@@ -20,6 +20,12 @@ async def _stub_decide(
     return {"status": "auto-approved", "decision_reason": "stub", "persisted": True}
 
 
+async def _failing_decide(
+    reimbursement: Reimbursement, pool: object, *, acquire_timeout_seconds: float
+) -> dict[str, object]:
+    raise RuntimeError("groq unreachable")
+
+
 @pytest.fixture(autouse=True)
 def _fake_agent_decide(monkeypatch: pytest.MonkeyPatch) -> None:
     # A default stub so every test that reaches the RESOLVED path's
@@ -389,11 +395,6 @@ class DescribeDecideIntegration:
         deps = _deps(pool=pool)
         envelope = _envelope(uuid=uuid, retry=0, published_at=row_updated_at)
 
-        async def _failing_decide(
-            reimbursement: Reimbursement, pool: object, *, acquire_timeout_seconds: float
-        ) -> dict[str, object]:
-            raise RuntimeError("groq unreachable")
-
         monkeypatch.setattr(agent, "decide", _failing_decide)
 
         with caplog.at_level(logging.ERROR):
@@ -419,20 +420,19 @@ class DescribeDecideIntegration:
         deps = _deps(pool=pool)
         envelope = _envelope(uuid=uuid, retry=0, published_at=row_updated_at)
 
-        async def _failing_decide(
-            reimbursement: Reimbursement, pool: object, *, acquire_timeout_seconds: float
-        ) -> dict[str, object]:
-            raise RuntimeError("groq unreachable")
-
         monkeypatch.setattr(agent, "decide", _failing_decide)
 
         with caplog.at_level(logging.CRITICAL, logger="reimbursementanalyzer.failures"):
             outcome = await handle_message(deps, envelope.model_dump_json().encode())
 
         # Both records exist independently -- escalation succeeding does not
-        # suppress the ops-alerting failure_log write.
+        # suppress the ops-alerting failure_log write, and that record still
+        # carries the raw error text (only stdout gets sanitized).
         assert outcome == MessageOutcome.ESCALATED
-        assert any("reimbursement.decision_failed" in r.message for r in caplog.records)
+        failure_record = next(
+            r.message for r in caplog.records if "reimbursement.decision_failed" in r.message
+        )
+        assert "groq unreachable" in failure_record
 
     async def it_combines_prior_resolve_stage_errors_with_the_new_decide_failure_in_the_reason(
         self, monkeypatch: pytest.MonkeyPatch
@@ -444,11 +444,6 @@ class DescribeDecideIntegration:
         envelope = _envelope(
             uuid=uuid, retry=1, published_at=row_updated_at, errors=[_error(1)]
         )
-
-        async def _failing_decide(
-            reimbursement: Reimbursement, pool: object, *, acquire_timeout_seconds: float
-        ) -> dict[str, object]:
-            raise RuntimeError("groq unreachable")
 
         monkeypatch.setattr(agent, "decide", _failing_decide)
 
@@ -500,11 +495,6 @@ class DescribeDecideIntegration:
         deps = _deps(pool=pool)
         envelope = _envelope(uuid=uuid, retry=0, published_at=row_updated_at)
 
-        async def _failing_decide(
-            reimbursement: Reimbursement, pool: object, *, acquire_timeout_seconds: float
-        ) -> dict[str, object]:
-            raise RuntimeError("groq unreachable")
-
         monkeypatch.setattr(agent, "decide", _failing_decide)
 
         with caplog.at_level(logging.CRITICAL, logger="reimbursementanalyzer.failures"):
@@ -554,11 +544,6 @@ class DescribeDecideIntegration:
         pool = FakePool(rows={uuid: _row(uuid=uuid, updated_at=row_updated_at)})
         deps = _deps(pool=pool)
         envelope = _envelope(uuid=uuid, retry=0, published_at=row_updated_at)
-
-        async def _failing_decide(
-            reimbursement: Reimbursement, pool: object, *, acquire_timeout_seconds: float
-        ) -> dict[str, object]:
-            raise RuntimeError("groq unreachable")
 
         monkeypatch.setattr(agent, "decide", _failing_decide)
 
