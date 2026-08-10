@@ -14,7 +14,7 @@ from pydantic import (
 
 from shared.config import MAX_BATCH_ITEMS
 
-Stage = Literal["db-insert", "publish", "resolve"]
+Stage = Literal["db-insert", "publish", "resolve", "decide"]
 
 # The three outcomes the decision graph (and its human-review escalation
 # fallback) ever write via repository.update_decision — distinct from
