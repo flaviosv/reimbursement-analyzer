@@ -424,9 +424,9 @@ T13 → T14
 - Skill: NONE
 
 **Done when**:
-- [ ] `TESTING.md`'s tables include the new `e2e` marker/gate row and the `test_dotenv_config_parity.py` coverage row
-- [ ] `INTEGRATIONS.md` reflects the `.env`-mount mechanism, not the old compose-passthrough description
-- [ ] Read through once for accuracy
+- [x] `TESTING.md`'s tables include the new `e2e` marker/gate row and the `test_dotenv_config_parity.py` coverage row
+- [x] `INTEGRATIONS.md` reflects the `.env`-mount mechanism, not the old compose-passthrough description
+- [x] Read through once for accuracy
 
 **Tests**: none (docs)
 **Gate**: build (read-through only)
