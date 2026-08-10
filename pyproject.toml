@@ -37,7 +37,7 @@ reimbursement = { workspace = true }
 # services are real, dotted-namespaced packages now (uv_build, nested
 # src-layout), so publisher.config/reimbursement.config etc. no longer
 # collide on a shared bare module name the way flat config.py/consumer.py did.
-testpaths = ["packages/api", "packages/publisher", "packages/reimbursement", "packages/shared"]
+testpaths = ["packages/api", "packages/publisher", "packages/reimbursement", "packages/shared", "tests/e2e"]
 python_classes = ["Describe*"]
 python_functions = ["it_*"]
 # Sibling feature slices (packages/api/tests/reimbursement/<op>/) reuse
@@ -53,7 +53,8 @@ pythonpath = [
     "packages/publisher/tests",
     "packages/reimbursement/tests",
 ]
-addopts = "--import-mode=importlib"
+addopts = "--import-mode=importlib -m \"not e2e\""
 markers = [
     "integration: requires a container beyond the suite's own Postgres default",
+    "e2e: requires a live docker-compose stack and a real GROQ_API_KEY",
 ]
