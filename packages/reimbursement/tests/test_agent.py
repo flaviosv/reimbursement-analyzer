@@ -4,7 +4,12 @@ from uuid import uuid4
 
 import pytest
 import reimbursement.agent.agent as agent
-from agent_fakes import FakeAcquirePool, FakeApplyDecision, FakeStructuredModel
+from agent_fakes import (
+    DEFAULT_TEST_MODEL_NAME,
+    FakeAcquirePool,
+    FakeApplyDecision,
+    FakeStructuredModel,
+)
 from reimbursement.agent.nodes.analysis import Analysis, GuardrailVerdict
 from reimbursement.agent.nodes.apply_agent_decision import ApplyAgentDecision
 from reimbursement.agent.nodes.apply_policies import ApplyPolicies
@@ -39,11 +44,11 @@ class _Fakes:
     def wire(self) -> object:
         nodes = {
             "extract_fields": ExtractFields(
-                model=self.extract_model, model_name="llama-3.3-70b-versatile"
+                model=self.extract_model, model_name=DEFAULT_TEST_MODEL_NAME
             ),
             "validate": Validate(),
             "apply_policies": ApplyPolicies(apply_decision=self.apply_policies_decision),
-            "analysis": Analysis(model=self.analysis_model, model_name="llama-3.3-70b-versatile"),
+            "analysis": Analysis(model=self.analysis_model, model_name=DEFAULT_TEST_MODEL_NAME),
             "apply_agent_decision": ApplyAgentDecision(
                 apply_decision=self.apply_agent_decision_decision
             ),

@@ -1,6 +1,7 @@
 from collections.abc import Iterator
 
 import pytest
+from agent_fakes import DEFAULT_TEST_MODEL_NAME
 from shared.config import KAFKA_MAX_MESSAGE_BYTES, load_config
 from testcontainers.community.kafka import KafkaContainer
 
@@ -17,8 +18,8 @@ def _default_agent_ai_env(monkeypatch: pytest.MonkeyPatch) -> None:
     # all six vars to deterministic placeholders; a fail-fast test overrides
     # via monkeypatch.delenv on the one var it cares about.
     monkeypatch.setenv("GROQ_API_KEY", "gsk_test_placeholder")
-    monkeypatch.setenv("EXTRACT_FIELDS_MODEL_NAME", "llama-3.3-70b-versatile")
-    monkeypatch.setenv("ANALYSIS_MODEL_NAME", "llama-3.3-70b-versatile")
+    monkeypatch.setenv("EXTRACT_FIELDS_MODEL_NAME", DEFAULT_TEST_MODEL_NAME)
+    monkeypatch.setenv("ANALYSIS_MODEL_NAME", DEFAULT_TEST_MODEL_NAME)
     monkeypatch.setenv("AI_TIMEOUT_SECONDS", "30.0")
     monkeypatch.setenv("EXTRACT_FIELDS_TEMPERATURE", "0.0")
     monkeypatch.setenv("ANALYSIS_TEMPERATURE", "0.0")

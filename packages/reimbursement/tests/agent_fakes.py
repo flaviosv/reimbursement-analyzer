@@ -36,7 +36,14 @@ __all__ = [
     "FakeAcquirePool",
     "FakeStructuredModel",
     "FakeApplyDecision",
+    "DEFAULT_TEST_MODEL_NAME",
 ]
+
+# The one placeholder model_name value every non-distinctness test
+# constructs ExtractFields/Analysis with — single source of truth so a
+# future placeholder rename (or a typo in one occurrence) can't drift
+# silently across the ~20 call sites that used to spell it out by hand.
+DEFAULT_TEST_MODEL_NAME = "llama-3.3-70b-versatile"
 
 
 class _FakeAcquisition:

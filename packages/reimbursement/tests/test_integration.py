@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 import asyncpg
 import pytest
 import reimbursement.agent.agent as agent_module
-from agent_fakes import FakeStructuredModel
+from agent_fakes import DEFAULT_TEST_MODEL_NAME, FakeStructuredModel
 from confluent_kafka import KafkaException, TopicPartition
 from reimbursement.agent.nodes.analysis import Analysis, GuardrailVerdict
 from reimbursement.agent.nodes.apply_agent_decision import ApplyAgentDecision
@@ -255,11 +255,11 @@ class DescribeTheDecisionGraph:
         def _fake_build_graph() -> object:
             nodes = {
                 "extract_fields": ExtractFields(
-                    model=extract_model, model_name="llama-3.3-70b-versatile"
+                    model=extract_model, model_name=DEFAULT_TEST_MODEL_NAME
                 ),
                 "validate": Validate(),
                 "apply_policies": ApplyPolicies(apply_decision=apply_decision),
-                "analysis": Analysis(model=analysis_model, model_name="llama-3.3-70b-versatile"),
+                "analysis": Analysis(model=analysis_model, model_name=DEFAULT_TEST_MODEL_NAME),
                 "apply_agent_decision": ApplyAgentDecision(apply_decision=apply_decision),
             }
             return agent_module._wire(nodes)
@@ -317,11 +317,11 @@ class DescribeTheDecisionGraph:
         def _fake_build_graph() -> object:
             nodes = {
                 "extract_fields": ExtractFields(
-                    model=extract_model, model_name="llama-3.3-70b-versatile"
+                    model=extract_model, model_name=DEFAULT_TEST_MODEL_NAME
                 ),
                 "validate": Validate(),
                 "apply_policies": ApplyPolicies(apply_decision=apply_decision),
-                "analysis": Analysis(model=analysis_model, model_name="llama-3.3-70b-versatile"),
+                "analysis": Analysis(model=analysis_model, model_name=DEFAULT_TEST_MODEL_NAME),
                 "apply_agent_decision": ApplyAgentDecision(apply_decision=apply_decision),
             }
             return agent_module._wire(nodes)

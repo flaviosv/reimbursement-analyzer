@@ -1,7 +1,7 @@
 import logging
 
 import pytest
-from agent_fakes import FakeStructuredModel
+from agent_fakes import DEFAULT_TEST_MODEL_NAME, FakeStructuredModel
 from reimbursement.agent.nodes.analysis import Analysis, GuardrailVerdict
 
 pytestmark = pytest.mark.anyio
@@ -23,7 +23,7 @@ class DescribeAnalysis:
         model = FakeStructuredModel(
             result=GuardrailVerdict(consistent=True, reason="amount matches receipt text")
         )
-        node = Analysis(model=model, model_name="llama-3.3-70b-versatile")
+        node = Analysis(model=model, model_name=DEFAULT_TEST_MODEL_NAME)
 
         # A None "configurable" proves this node never reaches for a
         # conn/apply_decision dependency — it would raise on a subscript of
@@ -37,7 +37,7 @@ class DescribeAnalysis:
         assert any("FLOW: Executing 'analysis' node" in r.message for r in caplog.records)
         assert any("guardrail_verdict=True" in r.message for r in caplog.records)
         # AGD-23/24: attributes which model authored this decision_reason.
-        assert any("model=llama-3.3-70b-versatile" in r.message for r in caplog.records)
+        assert any(f"model={DEFAULT_TEST_MODEL_NAME}" in r.message for r in caplog.records)
 
     async def it_routes_to_human_review_on_a_contradictory_verdict_with_the_guardrails_own_reasoning(
         self,
@@ -47,7 +47,7 @@ class DescribeAnalysis:
                 consistent=False, reason="claimed amount contradicts the OCR total"
             )
         )
-        node = Analysis(model=model, model_name="llama-3.3-70b-versatile")
+        node = Analysis(model=model, model_name=DEFAULT_TEST_MODEL_NAME)
 
         result = await node(_state(), {"configurable": None})
 
@@ -57,7 +57,7 @@ class DescribeAnalysis:
 
     async def it_invokes_the_guardrail_exactly_once(self) -> None:
         model = FakeStructuredModel(result=GuardrailVerdict(consistent=True, reason="ok"))
-        node = Analysis(model=model, model_name="llama-3.3-70b-versatile")
+        node = Analysis(model=model, model_name=DEFAULT_TEST_MODEL_NAME)
 
         await node(_state(), {"configurable": None})
 
@@ -67,7 +67,7 @@ class DescribeAnalysis:
         # R-011's interim floor (validation.py's _decide) is the layer that
         # catches this — the node itself must not swallow it.
         model = FakeStructuredModel(error=RuntimeError("groq unreachable"))
-        node = Analysis(model=model, model_name="llama-3.3-70b-versatile")
+        node = Analysis(model=model, model_name=DEFAULT_TEST_MODEL_NAME)
 
         with pytest.raises(RuntimeError, match="groq unreachable"):
             await node(_state(), {"configurable": None})
