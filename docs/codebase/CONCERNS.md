@@ -1,31 +1,18 @@
 # Codebase Concerns
 
-**Analysis Date:** 2026-08-09 (refreshed)
+**Analysis Date:** 2026-08-09 (refreshed — agent-model-config)
 
 ## Tech Debt
 
-**Resolved since the last scan — `reimbursement`'s decision policy is now implemented and wired end to end:** the entry previously here described the LangGraph scaffold (`packages/reimbursement/src/reimbursement/agent/`) as five stub nodes with empty prompts, never invoked from `validation.py`. That is no longer accurate: `agent.py` compiles a real `StateGraph` (`extract_fields` → `validate` → `apply_policies`, conditionally → `analysis` → `apply_agent_decision`), each node holds real logic (deterministic thresholds in `apply_policies`, an LLM-as-judge guardrail in `analysis`), every LLM call is LangFuse-traced, and `validation.py`'s resolve path calls `agent.decide()` for every resolved row. One test file per node plus a full-graph wiring test (`test_agent.py`) exist. Left here as a record, not deleted outright — see the Known Bugs entries below for what's currently broken in the uncommitted working tree.
+**Resolved since the last scan — `reimbursement`'s decision policy is now implemented and wired end to end:** the entry previously here described the LangGraph scaffold (`packages/reimbursement/src/reimbursement/agent/`) as five stub nodes with empty prompts, never invoked from `validation.py`. That is no longer accurate: `agent.py` compiles a real `StateGraph` (`extract_fields` → `validate` → `apply_policies`, conditionally → `analysis` → `apply_agent_decision`), each node holds real logic (deterministic thresholds in `apply_policies`, an LLM-as-judge guardrail in `analysis`), every LLM call is LangFuse-traced, and `validation.py`'s resolve path calls `agent.decide()` for every resolved row. One test file per node plus a full-graph wiring test (`test_agent.py`) exist. Left here as a record, not deleted outright.
 
-**Dead constructor parameters on the two LLM-calling nodes:**
-- Issue: `Analysis.__init__` and `ExtractFields.__init__` both still accept a `prompt: ChatPromptTemplate` parameter and store it as `self._prompt`, but neither `__call__` reads it anymore — message-building moved into `get_analysis_prompt()`/`get_extract_fields_prompt()` in the sibling `prompts/` modules.
-- Files: `packages/reimbursement/src/reimbursement/agent/nodes/{analysis,extract_fields}.py`, `packages/reimbursement/src/reimbursement/agent/agent.py` (still constructs both nodes with a `prompt=` kwarg)
-- Why: an in-progress prompt-authoring refactor (moving from `ChatPromptTemplate.from_messages([...])` to a `get_*_prompt()` factory) changed how messages are built without removing the now-unused constructor parameter.
-- Impact: cosmetic today (the parameter is silently ignored), but it's dead weight riding along a call site that is itself currently broken — see Known Bugs.
-- Fix approach: drop the `prompt` parameter from both `__init__`s and the corresponding `agent.py` construction call once the prompt refactor lands.
+**Resolved since the last scan — dead constructor parameters removed from the two LLM-calling nodes:** the entry previously here described `Analysis.__init__`/`ExtractFields.__init__` as still accepting an unused `prompt: ChatPromptTemplate` parameter, stored as `self._prompt` but never read. Both constructors now take only `model`/`model_name` — the dead parameter, the `self._prompt` assignment, and the corresponding `agent.py`/test `prompt=` kwargs were all removed as part of the agent-model-config feature (AD-032). Left here as a record, not deleted outright.
 
 ## Known Bugs
 
-**`reimbursement.agent.agent` fails to import — breaks the whole decision graph and its test suite:**
-- Symptoms / Trigger: importing `reimbursement.agent.agent` (including via `reimbursement.validation`'s own import chain, and every test in `packages/reimbursement/tests/` via `conftest.py`) raises `ImportError: cannot import name 'PLACEHOLDER_PROMPT' from 'reimbursement.agent.prompts.analysis'`. Confirmed with `uv run pytest packages/reimbursement/tests/`.
-- Files: `packages/reimbursement/src/reimbursement/agent/agent.py` (still imports `PLACEHOLDER_PROMPT as ANALYSIS_PROMPT`/`... as EXTRACT_FIELDS_PROMPT`), `packages/reimbursement/src/reimbursement/agent/prompts/{analysis,extract_fields}.py` (an uncommitted refactor renamed the module-level constant to `_ANALYSIS_PROMPT`/`_EXTRACT_FIELDS_PROMPT` — now private — and replaced the public surface with `get_analysis_prompt()`/`get_extract_fields_prompt()` factory functions)
-- Workaround: none — this is uncommitted, in-progress work; reverting the three modified files restores a working state.
-- Root cause: `agent.py`'s two import lines were not updated when the prompt modules were refactored.
+**Resolved since the last scan — `reimbursement.agent.agent` no longer fails to import:** the entry previously here described a `PLACEHOLDER_PROMPT` `ImportError` breaking the whole decision graph and its test suite (`agent.py` importing a name the prompt-refactor renamed to `get_analysis_prompt()`/`get_extract_fields_prompt()`). `agent.py` no longer imports `PLACEHOLDER_PROMPT`; every test file that still did (`test_agent.py`, `test_analysis.py`, `test_extract_fields.py`, `test_integration.py`) was updated in the same pass. Left here as a record, not deleted outright.
 
-**`prompts/analysis.py` and `prompts/extract_fields.py`'s templates crash `.format()` on their own embedded JSON:**
-- Symptoms / Trigger: once the import above is fixed, calling either `get_analysis_prompt(...)` or `get_extract_fields_prompt(...)` raises `KeyError` — confirmed by direct invocation (`KeyError: '"status"'` for `analysis.py`, `KeyError: '\n    "request_id"'` for `extract_fields.py`). Both templates embed literal JSON as prose examples (a `{"status": ..., "reason": ...}` response-shape example in `analysis.py`'s `<goals>`; three full example payloads in `extract_fields.py`'s `<examples>`) without escaping the braces as `{{`/`}}`, and both are rendered via plain `str.format()` — every literal `{`/`}` is parsed as a format field, not literal text.
-- Files: `packages/reimbursement/src/reimbursement/agent/prompts/{analysis,extract_fields}.py` — **actively being edited in the working tree as of this scan**; re-run `uv run pytest packages/reimbursement/tests/` to confirm current status before acting on this entry.
-- Workaround: none currently — this is uncommitted, in-progress work.
-- Root cause: `str.format()`'s single-brace templating is a poor fit for a template body that also needs to contain literal JSON. Escaping every literal brace as `{{`/`}}` fixes it, but is fragile against the next added example; a delimiter that doesn't collide with JSON (`string.Template`, an f-string assembled from parts, or a small templating helper) would remove the failure mode structurally instead of patching around it.
+**Resolved since the last scan — `prompts/analysis.py`/`prompts/extract_fields.py` no longer crash on their own embedded JSON:** the entry previously here described a `str.format()`/`KeyError` crash on literal JSON embedded in both prompt templates. Both `get_analysis_prompt()`/`get_extract_fields_prompt()` now interpolate via `.replace("{request_data}", str(request_data))`, not `str.format()` — confirmed by direct invocation with no `KeyError`, and covered by the full `packages/reimbursement` test suite (115 passing). Left here as a record, not deleted outright.
 
 **Resolved since the last scan — `publisher` and `reimbursement`'s consume/resolve layers are now both fully implemented:** `packages/publisher/src/publisher/{consumer,processing}.py` consume `Request`, insert a `reimbursement` row, publish to `Reimbursement`, and handle retry/duplicate/escalation; `packages/reimbursement/src/reimbursement/{consumer,validation}.py` consume `Reimbursement` and resolve/requeue/escalate — both per `SCOPE.md`. Covered by `packages/publisher/tests/{test_consumer,test_processing,test_integration}.py`, `packages/reimbursement/tests/{test_consumer,test_validation,test_integration}.py`, plus `packages/shared/tests/reimbursement/`. Left here as a record that this entry's scope narrowed twice, not deleted outright.
 
@@ -43,6 +30,12 @@
 - Current mitigation: `.env.sample`'s own header states these are local-dev-only placeholders; `.gitignore` does not track a real `.env`.
 - Recommendations: acceptable for local development as-is; no evidence of a secrets-manager integration path exists for a non-local deployment — worth defining before this ever runs outside a developer's machine.
 
+**Reimbursement prompt payloads now leave the local network for Groq's cloud API:**
+- Risk: Groq is a third-party hosted inference provider, not a self-hosted, host-machine, local-network-only service like Ollama was (AD-032). Prompt payloads — `raw_ocr_text` in particular, which can carry incidental PII embedded in receipt text — now transit to Groq's cloud API for both LLM nodes' calls. This is a real data-residency/compliance-posture change, not just a hostname swap.
+- Files: `packages/reimbursement/src/reimbursement/agent/agent.py` (the two `init_chat_model("groq:...")` call sites), `packages/reimbursement/src/reimbursement/agent/nodes/extract_fields.py` (the payload sent to `extract_fields`'s prompt)
+- Current mitigation: `submitted_by` is filtered out of the payload before the extraction prompt is built (`extract_fields.py`'s `ExtractFields.__call__`); no redaction/scrubbing exists for `raw_ocr_text` today.
+- Recommendations: this was flagged as a real compliance-posture question during design; the project owner (AD-032, `.specs/STATE.md`) chose to proceed without adding scrubbing/redaction as part of this change — worth a data-residency/compliance review before Groq is used with real, non-synthetic receipt data.
+
 **No authentication on the public API:**
 - Risk: no route has auth middleware or dependency — this now covers the full HTTP surface, not just intake: `POST /api/v1/reimbursement`, `/health`, `GET /api/v1/reimbursement` (lists every reimbursement, including PII in `original_payload`, to any caller), and `PUT /api/v1/reimbursement/{uuid}` (anyone can approve or reject any reimbursement — the highest-stakes of the four, since it's the endpoint that actually finalizes a financial decision).
 - Files: `packages/api/src/api/main.py`, `packages/api/src/api/reimbursement/create/route.py`, `packages/api/src/api/reimbursement/list/route.py`, `packages/api/src/api/reimbursement/update/route.py`
@@ -59,12 +52,6 @@
 - Test coverage: covered (`test_main.py`), but only for construction/teardown — not for a broker-unreachable-at-startup scenario.
 
 ## Test Coverage Gaps
-
-**Decision logic test suite is currently uncollectable:**
-- What's not tested: nothing right now — every test for `reimbursement/agent/` (one file per node, `test_agent.py`'s full-graph wiring, `test_langfuse.py`) fails at collection because of the `PLACEHOLDER_PROMPT` import bug (see Known Bugs above). The tests themselves are comprehensive once the import is fixed; this is a currently-broken state, not a coverage gap in existing, working code.
-- Risk: the entire decision layer — the service's core stated purpose — has no verifiable behavior until the import is fixed.
-- Priority: highest — blocks running any test in `packages/reimbursement/tests/`.
-- Difficulty to test: n/a — this is a bug fix, not a test-writing task.
 
 **Kafka-container-shared-fixture concurrency:**
 - What's not tested: whether `reimbursement/create/`'s session-scoped `KafkaContainer` fixture holds up under `pytest-xdist` parallel workers (the README's parallel-safety claim is documented only for the Postgres fixtures).
