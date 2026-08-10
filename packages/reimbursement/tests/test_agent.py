@@ -102,7 +102,7 @@ class DescribeGraphRouting:
         uuid = uuid4()
         fakes = _Fakes(
             extracted=ExtractedFieldsSchema(value=5000, currency="BRL", receipts_date=date(2026, 1, 9)),
-            guardrail=GuardrailVerdict(consistent=True, reason="unused"),
+            guardrail=GuardrailVerdict(status="auto-approved", reason="unused"),
             apply_policies_result=uuid,
             apply_agent_decision_result=uuid,
         )
@@ -135,7 +135,7 @@ class DescribeGraphRouting:
         uuid = uuid4()
         fakes = _Fakes(
             extracted=ExtractedFieldsSchema(value=200, currency="BRL", receipts_date=date(2026, 4, 1)),
-            guardrail=GuardrailVerdict(consistent=True, reason="unused"),
+            guardrail=GuardrailVerdict(status="auto-approved", reason="unused"),
             apply_policies_result=uuid,
             apply_agent_decision_result=uuid,
         )
@@ -167,7 +167,7 @@ class DescribeGraphRouting:
             extracted=ExtractedFieldsSchema(
                 value=2000.01, currency="BRL", receipts_date=date(2026, 4, 1)
             ),
-            guardrail=GuardrailVerdict(consistent=True, reason="unused"),
+            guardrail=GuardrailVerdict(status="auto-approved", reason="unused"),
             apply_policies_result=uuid,
             apply_agent_decision_result=uuid,
         )
@@ -197,7 +197,7 @@ class DescribeGraphRouting:
         uuid = uuid4()
         fakes = _Fakes(
             extracted=ExtractedFieldsSchema(value=1000, currency="BRL", receipts_date=date(2026, 4, 1)),
-            guardrail=GuardrailVerdict(consistent=True, reason="amount matches receipt text"),
+            guardrail=GuardrailVerdict(status="auto-approved", reason="amount matches receipt text"),
             apply_policies_result=uuid,
             apply_agent_decision_result=uuid,
         )
@@ -228,7 +228,7 @@ class DescribeGraphRouting:
         fakes = _Fakes(
             extracted=ExtractedFieldsSchema(value=1000, currency="BRL", receipts_date=date(2026, 4, 1)),
             guardrail=GuardrailVerdict(
-                consistent=False, reason="claimed amount contradicts the OCR total"
+                status="human-review", reason="claimed amount contradicts the OCR total"
             ),
             apply_policies_result=uuid,
             apply_agent_decision_result=uuid,
@@ -258,7 +258,7 @@ class DescribeGraphRouting:
         uuid = uuid4()
         fakes = _Fakes(
             extracted=ExtractedFieldsSchema(value=None, currency=None, receipts_date=None),
-            guardrail=GuardrailVerdict(consistent=True, reason="unused"),
+            guardrail=GuardrailVerdict(status="auto-approved", reason="unused"),
             apply_policies_result=uuid,
             apply_agent_decision_result=uuid,
         )

@@ -311,7 +311,7 @@ class DescribeTheDecisionGraph:
             result=ExtractedFieldsSchema(value=1000.0, currency="BRL", receipts_date=date(2026, 1, 1))
         )
         analysis_model = FakeStructuredModel(
-            result=GuardrailVerdict(consistent=False, reason="claimed amount contradicts OCR total")
+            result=GuardrailVerdict(status="human-review", reason="claimed amount contradicts OCR total")
         )
 
         def _fake_build_graph() -> object:

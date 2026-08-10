@@ -29,8 +29,8 @@ def _state(payload: dict | None = None) -> dict:
 
 
 class DescribeGuardrailVerdict:
-    def it_exposes_exactly_consistent_and_reason(self) -> None:
-        assert set(GuardrailVerdict.model_fields) == {"consistent", "reason"}
+    def it_exposes_exactly_status_and_reason(self) -> None:
+        assert set(GuardrailVerdict.model_fields) == {"status", "reason"}
 
 
 class DescribeAnalysis:
@@ -38,7 +38,7 @@ class DescribeAnalysis:
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         model = FakeStructuredModel(
-            result=GuardrailVerdict(consistent=True, reason="amount matches receipt text")
+            result=GuardrailVerdict(status="auto-approved", reason="amount matches receipt text")
         )
         node = Analysis(model=model, model_name=DEFAULT_TEST_MODEL_NAME)
 
@@ -61,7 +61,7 @@ class DescribeAnalysis:
     ) -> None:
         model = FakeStructuredModel(
             result=GuardrailVerdict(
-                consistent=False, reason="claimed amount contradicts the OCR total"
+                status="human-review", reason="claimed amount contradicts the OCR total"
             )
         )
         node = Analysis(model=model, model_name=DEFAULT_TEST_MODEL_NAME)
@@ -73,7 +73,7 @@ class DescribeAnalysis:
         assert result["decision_reason"] == "claimed amount contradicts the OCR total"
 
     async def it_invokes_the_guardrail_exactly_once(self) -> None:
-        model = FakeStructuredModel(result=GuardrailVerdict(consistent=True, reason="ok"))
+        model = FakeStructuredModel(result=GuardrailVerdict(status="auto-approved", reason="ok"))
         node = Analysis(model=model, model_name=DEFAULT_TEST_MODEL_NAME)
 
         await node(_state(), {"configurable": None})
@@ -93,7 +93,7 @@ class DescribeAnalysis:
         # AGT-01: extracted's internal field names (value/receipts_date) must
         # be translated to the prompt's documented names (receipt_value/
         # receipt_date) before reaching the model.
-        model = FakeStructuredModel(result=GuardrailVerdict(consistent=True, reason="ok"))
+        model = FakeStructuredModel(result=GuardrailVerdict(status="auto-approved", reason="ok"))
         node = Analysis(model=model, model_name=DEFAULT_TEST_MODEL_NAME)
 
         await node(_state(_PAYLOAD), {"configurable": None})
@@ -107,7 +107,7 @@ class DescribeAnalysis:
     async def it_includes_request_datas_payload_values_in_the_rendered_prompt(self) -> None:
         # AGT-01: the original (PII-stripped) payload must reach the prompt
         # as request_data so the guardrail can compare it against found_data.
-        model = FakeStructuredModel(result=GuardrailVerdict(consistent=True, reason="ok"))
+        model = FakeStructuredModel(result=GuardrailVerdict(status="auto-approved", reason="ok"))
         node = Analysis(model=model, model_name=DEFAULT_TEST_MODEL_NAME)
 
         await node(_state(_PAYLOAD), {"configurable": None})
@@ -121,7 +121,7 @@ class DescribeAnalysis:
 
     async def it_never_includes_submitted_by_in_the_rendered_prompt(self) -> None:
         # AGD-26: submitted_by (PII) must not reach the analysis prompt.
-        model = FakeStructuredModel(result=GuardrailVerdict(consistent=True, reason="ok"))
+        model = FakeStructuredModel(result=GuardrailVerdict(status="auto-approved", reason="ok"))
         node = Analysis(model=model, model_name=DEFAULT_TEST_MODEL_NAME)
 
         await node(_state(_PAYLOAD), {"configurable": None})
