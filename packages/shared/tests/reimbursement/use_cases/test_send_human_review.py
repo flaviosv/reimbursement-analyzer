@@ -81,6 +81,16 @@ class DescribeRenderHistory:
         assert "x" * _LIMIT in rendered
         assert "x" * (_LIMIT + 1) not in rendered
 
+    def it_renders_a_custom_header_instead_of_the_retry_ceiling_wording(self) -> None:
+        # A decision-stage escalation (agent-decision-error-escalation)
+        # typically has no retry ceiling involved at all — reusing the
+        # retry-ceiling wording verbatim would write a factually wrong
+        # decision_reason.
+        rendered = render_history(_three_distinct(), _LIMIT, header="Decision-stage failure")
+
+        assert "Decision-stage failure after" in rendered
+        assert "Retry ceiling" not in rendered
+
     def it_collapses_embedded_newlines_in_a_driver_supplied_message(self) -> None:
         # error_type/message originate from str(exc) — a Postgres or driver
         # error can echo back a fragment of the offending input. Left as-is,
