@@ -52,6 +52,7 @@ pythonpath = [
     "packages/api/tests",
     "packages/publisher/tests",
     "packages/reimbursement/tests",
+    "tests/e2e",
 ]
 addopts = "--import-mode=importlib -m \"not e2e\""
 markers = [

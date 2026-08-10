@@ -30,7 +30,7 @@ Implement these tasks with the `tlc-spec-driven` skill: **activate it by name an
 
 | Gate Level | When to Use | Command |
 | ---------- | ----------- | ------- |
-| Quick | After Phase 1 (ENV-group) tasks and any task touching only file-parsing tests | `uv run pytest -m "not integration"` |
+| Quick | After Phase 1 (ENV-group) tasks and any task touching only file-parsing tests | `uv run pytest -m "not integration and not e2e"` (a bare `-m "not integration"` also collects `e2e`-marked tests once any exist — pytest's CLI `-m` replaces, not adds to, `addopts`' own `-m "not e2e"` default; SPEC_DEVIATION discovered while implementing T9, see validation notes) |
 | Full | Before considering any task in this feature done | `uv run pytest` |
 | E2E | After any task adding/modifying `tests/e2e/*` — requires `docker compose up -d` and a real `GROQ_API_KEY` in `.env` | `uv run pytest -m e2e` |
 | Lint (ad hoc) | Optional sanity check, not gated | `uv run ruff check <path>` |
@@ -260,6 +260,42 @@ T13 → T14
 
 ---
 
+### T8b: Fix the `analysis` node's `found_data`/`request_data` prompt wiring
+
+> Added after T1-T8 landed, discovered by the batch-1 worker and confirmed
+> by the user: `prompts/analysis.py`'s prompt was already updated (by the
+> user) to document a `<found_data>` section and reference `{found_data}`,
+> but `get_analysis_prompt`/`Analysis.__call__` never substituted that
+> placeholder and never passed the original payload — only the resolved
+> `extracted` dict, mislabeled as `request_data`. Blocks T11's real-Groq
+> human-review validation (the guardrail can't compare found data against
+> the original payload without this). See `spec.md`'s `AGT-01` and
+> `design.md`'s new component note for the full rationale.
+
+**What**: In `nodes/analysis.py`, build a `found_data` dict translating `extracted`'s internal field names into the prompt's documented names (`currency`, `receipt_date` ← `extracted["receipts_date"]`, `receipt_value` ← `extracted["value"]`) — boundary-only, no rename of `ExtractedFields` itself. Pass `state["reimbursement"].original_payload` (with `submitted_by` stripped, mirroring `extract_fields.py`'s existing AGD-26 pattern) as `request_data`. In `prompts/analysis.py`, change `get_analysis_prompt(request_data, found_data)` to `.replace()` both `{found_data}` and `{request_data}` placeholders (keep `.replace()`, not `.format()` — the prompt's `<examples>` section has literal JSON braces).
+**Where**: `packages/reimbursement/src/reimbursement/agent/nodes/analysis.py`, `packages/reimbursement/src/reimbursement/agent/prompts/analysis.py`
+**Depends on**: None (independent of the E2E infra tasks); must land before T11
+**Reuses**: `extract_fields.py`'s AGD-26 PII-stripping pattern and `.replace()`-based rendering
+**Requirement**: AGT-01
+
+**Tools**:
+- MCP: NONE
+- Skill: NONE
+
+**Done when**:
+- [ ] `Analysis.__call__` builds and passes both `found_data` (mapped field names) and `request_data` (PII-stripped original payload) to `get_analysis_prompt`
+- [ ] `get_analysis_prompt` substitutes both `{found_data}` and `{request_data}` placeholders — no literal `{found_data}`/`{request_data}` text can remain in the rendered prompt
+- [ ] `ExtractedFields`' internal field names (`value`, `receipts_date`) are unchanged everywhere else (`validate.py`, `apply_policies.py`, persistence) — this task touches only the analysis prompt-building boundary
+- [ ] `test_analysis.py` covers: found_data's mapped values present in the rendered prompt; request_data's payload values (e.g. `raw_ocr_text`, `claimed_amount_brl`) present; `submitted_by`'s value absent (mirroring `test_extract_fields.py`'s `it_never_includes_submitted_by_in_the_rendered_prompt`)
+- [ ] `uv run pytest -m "not integration"` gate passes
+
+**Tests**: unit (mirrors `test_extract_fields.py`'s existing PII/prompt-content coverage pattern for the same package)
+**Gate**: quick
+
+**Commit**: `fix(agent): wire found_data and request_data into the analysis guardrail prompt`
+
+---
+
 ### T9: `tests/e2e/test_happy_path.py` — auto-approve + traceability
 
 **What**: Implement the happy-path e2e test: POST via `approve_bucket_payload`, `wait_for_status` for `auto-approved`, assert `decision_reason` non-null, then assert `trace_exists_for_session` for the returned `uuid`. Marked `@pytest.mark.e2e`.
@@ -273,12 +309,14 @@ T13 → T14
 - Skill: NONE
 
 **Done when**:
-- [ ] `uv run pytest -m e2e -k auto_approved` passes against the real stack with a real `GROQ_API_KEY`
-- [ ] Unsetting `GROQ_API_KEY` and rerunning shows the fail-fast behavior from `e2e_env` (per T5), not a hang
-- [ ] `uv run pytest -m "not integration"` gate still passes (this file is excluded from that run)
+- [x] `uv run pytest -m e2e -k auto_approved` passes against the real stack with a real `GROQ_API_KEY`
+- [x] Unsetting `GROQ_API_KEY` and rerunning shows the fail-fast behavior from `e2e_env` (per T5), not a hang
+- [x] `uv run pytest -m "not integration and not e2e"` gate still passes (this file is excluded from that run) — SPEC_DEVIATION: the literal `-m "not integration"` also collects `e2e`-marked tests once any exist (CLI `-m` replaces `addopts`' own `-m "not e2e"` rather than adding to it); Gate Check Commands' Quick row corrected above
 
 **Tests**: e2e (per Test Coverage Matrix)
 **Gate**: e2e
+
+**Also required** (discovered mid-implementation, blocking E2E-02): `reimbursement`'s LangFuse `CallbackHandler()` reads `LANGFUSE_PUBLIC_KEY` from the process environment directly (no compose passthrough — `agent.py`), but T2's environment-block pruning removed it from `reimbursement`'s compose block with no `.env`-sourced replacement (unlike `LANGFUSE_SECRET_KEY`, ENV-03) — every trace was silently dropped (an SDK-internal auth warning, not an exception `_langfuse_handlers` catches, so no durable-fallback log fires either). Fixed by adding `LANGFUSE_PUBLIC_KEY=pk-lf-local-dev` to `.env.sample` (mirroring `docker-compose.yml`'s `x-langfuse-public-key` anchor value) and the running `.env`, then restarting `reimbursement`.
 
 ---
 
@@ -307,7 +345,7 @@ T13 → T14
 
 **What**: Implement three e2e tests: (1) POST via `human_review_bucket_payload`, `wait_for_status` for `human-review`; (2) on a fresh item driven the same way, `PUT` an approval payload and assert the row becomes `human-approved`; (3) on a second fresh item, `PUT` a rejection payload and assert `human-rejected`. Marked `@pytest.mark.e2e`.
 **Where**: `tests/e2e/test_human_review.py`
-**Depends on**: T5, T6, T7
+**Depends on**: T5, T6, T7, T8b
 **Reuses**: `tests/e2e/{conftest,polling,payload_builders}.py`
 **Requirement**: E2E-04, E2E-05, E2E-06
 
