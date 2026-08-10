@@ -46,9 +46,9 @@ two independent statements (insert, and — only on publish failure — delete),
 each closed before the publish call is even attempted, with the publish call
 sitting *between* them uninstrumented by any transaction.
 
-**Amended (AD-035):** neither statement is a bare autocommitting call — each
+**Amended (AD-037):** neither statement is a bare autocommitting call — each
 gets its own narrow `conn.transaction()`, a savepoint boundary rather than an
-atomicity guard. `insert_pending`'s call is wrapped for the reason AD-034
+atomicity guard. `insert_pending`'s call is wrapped for the reason AD-036
 already gives (an uncaught `UniqueViolationError` would otherwise poison the
 connection's enclosing transaction state). `delete_pending`'s call is wrapped
 for the identical reason: `human_review.reimbursement_uuid` is
@@ -68,7 +68,7 @@ sequenceDiagram
     participant K as Kafka
 
     P->>PP: publish_pending(conn, item, errors, retry, ...)
-    PP->>DB: BEGIN; INSERT reimbursement; COMMIT (savepoint, AD-035)
+    PP->>DB: BEGIN; INSERT reimbursement; COMMIT (savepoint, AD-037)
     DB-->>PP: uuid
     PP->>K: publish(Reimbursement, uuid)
     alt publish succeeds
@@ -76,7 +76,7 @@ sequenceDiagram
         PP-->>P: return (row stands, PUBLISHED)
     else publish (or envelope construction) raises
         K-->>PP: PublishFailed (or another exception)
-        PP->>DB: BEGIN; DELETE reimbursement WHERE uuid=$1 AND status='pending'; COMMIT (savepoint, AD-035)
+        PP->>DB: BEGIN; DELETE reimbursement WHERE uuid=$1 AND status='pending'; COMMIT (savepoint, AD-037)
         alt delete removes 1 row
             DB-->>PP: DELETE 1
             PP->>PP: log reimbursement.compensating_delete

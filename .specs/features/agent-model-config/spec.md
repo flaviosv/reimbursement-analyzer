@@ -230,29 +230,29 @@ behavior.
 
 | Requirement ID | Story                                             | Phase  | Status  |
 | --------------- | -------------------------------------------------- | ------ | ------- |
-| AMC-01          | P1: Groq-backed LLM nodes                          | Design | Pending |
-| AMC-02          | P1: Groq-backed LLM nodes                          | Design | Pending |
-| AMC-03          | P1: Groq-backed LLM nodes                          | Design | Pending |
-| AMC-04          | P1: Groq-backed LLM nodes                          | Design | Pending |
-| AMC-05          | P1: Groq-backed LLM nodes                          | Design | Pending |
-| AMC-06          | P1: Fail-fast configuration                        | Design | Pending |
-| AMC-07          | P1: Fail-fast configuration                        | Design | Pending |
-| AMC-08          | P1: Fail-fast configuration                        | Design | Pending |
-| AMC-09          | P1: Fail-fast configuration                        | Design | Pending |
-| AMC-10          | P1: Fail-fast configuration                        | Design | Pending |
-| AMC-11          | P1: Fail-fast configuration (`.env.sample`)        | Design | Pending |
-| AMC-12          | P1: Fail-fast configuration (`.env`)               | Design | Pending |
-| AMC-13          | P2: Centralized Groq credential                    | Design | Pending |
-| AMC-14          | P2: Centralized Groq credential                    | Design | Pending |
-| AMC-15          | P2: `extract_fields` attribution logging           | Design | Pending |
-| AMC-16          | P3: `GuardrailVerdict` field rename                | Design | Pending |
-| AMC-17          | P3: `GuardrailVerdict` field rename                | Design | Pending |
+| AMC-01          | P1: Groq-backed LLM nodes                          | Implementing | Verified |
+| AMC-02          | P1: Groq-backed LLM nodes                          | Implementing | Verified |
+| AMC-03          | P1: Groq-backed LLM nodes                          | Implementing | Verified |
+| AMC-04          | P1: Groq-backed LLM nodes                          | Implementing | Verified |
+| AMC-05          | P1: Groq-backed LLM nodes                          | Implementing | Verified |
+| AMC-06          | P1: Fail-fast configuration                        | Implementing | Verified |
+| AMC-07          | P1: Fail-fast configuration                        | Implementing | Verified |
+| AMC-08          | P1: Fail-fast configuration                        | Implementing | Verified |
+| AMC-09          | P1: Fail-fast configuration                        | Implementing | Verified |
+| AMC-10          | P1: Fail-fast configuration                        | Implementing | Verified |
+| AMC-11          | P1: Fail-fast configuration (`.env.sample`)        | Implementing | Verified |
+| AMC-12          | P1: Fail-fast configuration (`.env`)               | Implementing | Verified |
+| AMC-13          | P2: Centralized Groq credential                    | Implementing | Verified |
+| AMC-14          | P2: Centralized Groq credential                    | Implementing | Verified |
+| AMC-15          | P2: `extract_fields` attribution logging           | Implementing | Verified |
+| AMC-16          | P3: `GuardrailVerdict` field rename                | Implementing | Verified |
+| AMC-17          | P3: `GuardrailVerdict` field rename                | Implementing | Verified |
 
 **ID format:** `AMC-[NUMBER]` (Agent Model Config)
 
 **Status values:** Pending → In Design → In Tasks → Implementing → Verified
 
-**Coverage:** 17 total, 0 mapped to tasks, 17 unmapped ⚠️ (Tasks not yet run)
+**Coverage:** 17 total, 17 mapped to tasks, 0 unmapped — all Verified (`.specs/features/agent-model-config/validation.md`)
 
 ---
 

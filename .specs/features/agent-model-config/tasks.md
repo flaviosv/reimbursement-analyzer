@@ -9,7 +9,7 @@ Implement these tasks with the `tlc-spec-driven` skill: **activate it by name an
 ---
 
 **Design**: `.specs/features/agent-model-config/design.md`
-**Status**: Draft
+**Status**: Done — all 8 tasks complete, Verifier PASS (see `validation.md`)
 
 ---
 
@@ -107,14 +107,14 @@ T7 → T8
 - Skill: NONE
 
 **Done when**:
-- [ ] `ModelConfig(model_name, temperature=0.0)`, `AIConfig(api_key, timeout_seconds=30.0)`, `AgentModelsConfig(extract_fields, analysis)` defined
-- [ ] `AgentConfig.ai: AIConfig` and `.models: AgentModelsConfig` replace the three `ollama_*` fields
-- [ ] `GROQ_API_KEY`/`EXTRACT_FIELDS_MODEL_NAME`/`ANALYSIS_MODEL_NAME` unset each independently raise a `ValueError` naming that variable
-- [ ] `AI_TIMEOUT_SECONDS`/`EXTRACT_FIELDS_TEMPERATURE`/`ANALYSIS_TEMPERATURE` unset each independently default to `30.0`/`0.0`/`0.0`
-- [ ] Both nodes' `ModelConfig`s read from the same `AgentConfig.ai.api_key` (single-source test)
-- [ ] `test_config.py`'s Ollama-specific tests (`it_defaults_the_ollama_settings_when_unset`, `it_reads_the_ollama_settings_from_the_environment`) replaced with equivalents for the new fields
-- [ ] Gate check passes: `uv run pytest packages/reimbursement -m "not integration"`
-- [ ] Test count recorded (no silent deletions vs. pre-task count)
+- [x] `ModelConfig(model_name, temperature=0.0)`, `AIConfig(api_key, timeout_seconds=30.0)`, `AgentModelsConfig(extract_fields, analysis)` defined
+- [x] `AgentConfig.ai: AIConfig` and `.models: AgentModelsConfig` replace the three `ollama_*` fields
+- [x] `GROQ_API_KEY`/`EXTRACT_FIELDS_MODEL_NAME`/`ANALYSIS_MODEL_NAME` unset each independently raise a `ValueError` naming that variable
+- [x] `AI_TIMEOUT_SECONDS`/`EXTRACT_FIELDS_TEMPERATURE`/`ANALYSIS_TEMPERATURE` unset each independently default to `30.0`/`0.0`/`0.0`
+- [x] Both nodes' `ModelConfig`s read from the same `AgentConfig.ai.api_key` (single-source test)
+- [x] `test_config.py`'s Ollama-specific tests (`it_defaults_the_ollama_settings_when_unset`, `it_reads_the_ollama_settings_from_the_environment`) replaced with equivalents for the new fields
+- [x] Gate check passes: `uv run pytest packages/reimbursement -m "not integration"`
+- [x] Test count recorded (no silent deletions vs. pre-task count)
 
 **Tests**: unit
 **Gate**: quick
@@ -133,10 +133,10 @@ T7 → T8
 - Skill: NONE
 
 **Done when**:
-- [ ] New autouse fixture sets all six vars to non-empty placeholder values
-- [ ] Fail-fast tests in `test_config.py` (T1) still pass by explicitly `monkeypatch.delenv`-ing the var under test
-- [ ] Gate check passes: `uv run pytest packages/reimbursement -m "not integration"`
-- [ ] Test count recorded (no silent deletions vs. pre-task count)
+- [x] New autouse fixture sets all six vars to non-empty placeholder values
+- [x] Fail-fast tests in `test_config.py` (T1) still pass by explicitly `monkeypatch.delenv`-ing the var under test
+- [x] Gate check passes: `uv run pytest packages/reimbursement -m "not integration"`
+- [x] Test count recorded (no silent deletions vs. pre-task count)
 
 **Tests**: none (fixture infra — proven transitively by every dependent test passing)
 **Gate**: quick
@@ -156,9 +156,9 @@ T7 → T8
 - Skill: NONE
 
 **Done when**:
-- [ ] `langchain-ollama` no longer listed in `dependencies`
-- [ ] `langchain-groq` listed (version per whatever `uv add` resolves — no manual pin unless `uv` requires one)
-- [ ] Build gate passes: `uv sync --all-packages`
+- [x] `langchain-ollama` no longer listed in `dependencies`
+- [x] `langchain-groq` listed (version per whatever `uv add` resolves — no manual pin unless `uv` requires one)
+- [x] Build gate passes: `uv sync --all-packages`
 
 **Tests**: none (dependency manifest)
 **Gate**: build
@@ -178,12 +178,12 @@ T7 → T8
 - Skill: NONE
 
 **Done when**:
-- [ ] `GuardrailVerdict` has exactly two fields: `consistent: bool`, `reason: str`
-- [ ] `status` derivation (`"auto-approved"`/`"human-review"` from `consistent`) unchanged
-- [ ] `self._prompt`/`prompt` param and unused imports removed from `Analysis.__init__`
-- [ ] `test_analysis.py` updated: drops its `PLACEHOLDER_PROMPT` import, asserts `reason` not `reasoning`, "ollama unreachable" test strings renamed to be provider-neutral
-- [ ] Gate check passes: `uv run pytest packages/reimbursement -m "not integration"`
-- [ ] Test count recorded (no silent deletions vs. pre-task count)
+- [x] `GuardrailVerdict` has exactly two fields: `consistent: bool`, `reason: str`
+- [x] `status` derivation (`"auto-approved"`/`"human-review"` from `consistent`) unchanged
+- [x] `self._prompt`/`prompt` param and unused imports removed from `Analysis.__init__`
+- [x] `test_analysis.py` updated: drops its `PLACEHOLDER_PROMPT` import, asserts `reason` not `reasoning`, "ollama unreachable" test strings renamed to be provider-neutral
+- [x] Gate check passes: `uv run pytest packages/reimbursement -m "not integration"`
+- [x] Test count recorded (no silent deletions vs. pre-task count)
 
 **Tests**: unit
 **Gate**: quick
@@ -203,12 +203,12 @@ T7 → T8
 - Skill: NONE
 
 **Done when**:
-- [ ] `ExtractFields.__init__(model, model_name)` stores `model_name`
-- [ ] Completion log line includes `model=%s` with the configured `model_name`
-- [ ] `self._prompt`/`prompt` param and unused imports removed
-- [ ] `test_extract_fields.py` updated: drops its `PLACEHOLDER_PROMPT` import, constructs `ExtractFields` with a `model_name`, asserts the log line includes it, "ollama unreachable" test strings renamed
-- [ ] Gate check passes: `uv run pytest packages/reimbursement -m "not integration"`
-- [ ] Test count recorded (no silent deletions vs. pre-task count)
+- [x] `ExtractFields.__init__(model, model_name)` stores `model_name`
+- [x] Completion log line includes `model=%s` with the configured `model_name`
+- [x] `self._prompt`/`prompt` param and unused imports removed
+- [x] `test_extract_fields.py` updated: drops its `PLACEHOLDER_PROMPT` import, constructs `ExtractFields` with a `model_name`, asserts the log line includes it, "ollama unreachable" test strings renamed
+- [x] Gate check passes: `uv run pytest packages/reimbursement -m "not integration"`
+- [x] Test count recorded (no silent deletions vs. pre-task count)
 
 **Tests**: unit
 **Gate**: quick
@@ -228,13 +228,13 @@ T7 → T8
 - Skill: NONE
 
 **Done when**:
-- [ ] `extract_fields`'s model built from `config.models.extract_fields.model_name`/`.temperature`, `analysis`'s from `config.models.analysis.model_name`/`.temperature`, both sharing `config.ai.api_key`/`.timeout_seconds`
-- [ ] Two differently-configured `model_name`s produce two distinct model instances (explicit distinctness test)
-- [ ] `PLACEHOLDER_PROMPT` imports removed from `agent.py`
-- [ ] `test_agent.py` updated: drops its `PLACEHOLDER_PROMPT` import, its `it_wires_the_real_ollama_bound_models_...` test renamed and updated to construct via Groq (relying on T2's conftest defaults, no live network/credentials), new distinctness assertion added
-- [ ] Zero `ollama`/`Ollama`/`OLLAMA` matches remain in `agent.py`, `config.py`, `pyproject.toml`, `analysis.py`, `extract_fields.py` (running total — full zero-match sweep completes at T8)
-- [ ] Gate check passes: `uv run pytest packages/reimbursement -m "not integration"`
-- [ ] Test count recorded (no silent deletions vs. pre-task count)
+- [x] `extract_fields`'s model built from `config.models.extract_fields.model_name`/`.temperature`, `analysis`'s from `config.models.analysis.model_name`/`.temperature`, both sharing `config.ai.api_key`/`.timeout_seconds`
+- [x] Two differently-configured `model_name`s produce two distinct model instances (explicit distinctness test)
+- [x] `PLACEHOLDER_PROMPT` imports removed from `agent.py`
+- [x] `test_agent.py` updated: drops its `PLACEHOLDER_PROMPT` import, its `it_wires_the_real_ollama_bound_models_...` test renamed and updated to construct via Groq (relying on T2's conftest defaults, no live network/credentials), new distinctness assertion added
+- [x] Zero `ollama`/`Ollama`/`OLLAMA` matches remain in `agent.py`, `config.py`, `pyproject.toml`, `analysis.py`, `extract_fields.py` (running total — full zero-match sweep completes at T8)
+- [x] Gate check passes: `uv run pytest packages/reimbursement -m "not integration"`
+- [x] Test count recorded (no silent deletions vs. pre-task count)
 
 **Tests**: unit
 **Gate**: quick
@@ -256,11 +256,11 @@ T7 → T8
 - Skill: NONE
 
 **Done when**:
-- [ ] Both files carry all six keys with non-blank values
-- [ ] A parity test (in `test_config.py`) asserts `.env.sample` contains all six keys
-- [ ] `cp .env.sample .env` on a clean checkout would start the agent without editing model-name/temperature/timeout values (manually verified once, per Success Criteria)
-- [ ] Gate check passes: `uv run pytest packages/reimbursement -m "not integration"`
-- [ ] Test count recorded (no silent deletions vs. pre-task count)
+- [x] Both files carry all six keys with non-blank values
+- [x] A parity test (in `test_config.py`) asserts `.env.sample` contains all six keys
+- [x] `cp .env.sample .env` on a clean checkout would start the agent without editing model-name/temperature/timeout values (manually verified once, per Success Criteria)
+- [x] Gate check passes: `uv run pytest packages/reimbursement -m "not integration"`
+- [x] Test count recorded (no silent deletions vs. pre-task count)
 
 **Tests**: unit
 **Gate**: quick
@@ -280,11 +280,11 @@ T7 → T8
 - Skill: NONE
 
 **Done when**:
-- [ ] `agent_fakes.py`'s `FakeStructuredModel` docstring no longer says "Ollama"
-- [ ] `test_integration.py`/`test_validation.py`'s comments and "ollama unreachable" strings renamed (behavior/assertions unchanged, wording only)
-- [ ] `grep -ril "ollama" packages/reimbursement` returns zero matches
-- [ ] Full gate passes: `uv run pytest packages/reimbursement`
-- [ ] Test count recorded (no silent deletions vs. pre-task count)
+- [x] `agent_fakes.py`'s `FakeStructuredModel` docstring no longer says "Ollama"
+- [x] `test_integration.py`/`test_validation.py`'s comments and "ollama unreachable" strings renamed (behavior/assertions unchanged, wording only)
+- [x] `grep -ril "ollama" packages/reimbursement` returns zero matches
+- [x] Full gate passes: `uv run pytest packages/reimbursement`
+- [x] Test count recorded (no silent deletions vs. pre-task count)
 
 **Tests**: unit + integration (existing scenarios, wording-only changes)
 **Gate**: full

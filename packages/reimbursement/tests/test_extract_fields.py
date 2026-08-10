@@ -3,12 +3,11 @@ from datetime import date
 from uuid import uuid4
 
 import pytest
-from agent_fakes import FakeStructuredModel
+from agent_fakes import DEFAULT_TEST_MODEL_NAME, FakeStructuredModel
 from reimbursement.agent.nodes.extract_fields import (
     ExtractedFieldsSchema,
     ExtractFields,
 )
-from reimbursement.agent.prompts.extract_fields import PLACEHOLDER_PROMPT
 from reimbursement.models import Reimbursement
 
 pytestmark = pytest.mark.anyio
@@ -36,7 +35,7 @@ class DescribeExtractFields:
         model = FakeStructuredModel(
             result=ExtractedFieldsSchema(value=93.5, currency="BRL", receipts_date=date(2026, 4, 9))
         )
-        node = ExtractFields(model=model, prompt=PLACEHOLDER_PROMPT)
+        node = ExtractFields(model=model, model_name=DEFAULT_TEST_MODEL_NAME)
 
         with caplog.at_level(logging.INFO):
             result = await node(_state(_PAYLOAD), {"configurable": {}})
@@ -50,6 +49,22 @@ class DescribeExtractFields:
         assert len(model.calls) == 1
         assert any("FLOW: Executing 'extract_fields' node" in r.message for r in caplog.records)
 
+    async def it_logs_the_configured_model_name_on_completion(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        model = FakeStructuredModel(
+            result=ExtractedFieldsSchema(value=93.5, currency="BRL", receipts_date=date(2026, 4, 9))
+        )
+        node = ExtractFields(model=model, model_name=DEFAULT_TEST_MODEL_NAME)
+
+        with caplog.at_level(logging.INFO):
+            await node(_state(_PAYLOAD), {"configurable": {}})
+
+        completion_lines = [
+            r.message for r in caplog.records if r.message.startswith("FLOW: extract_fields resolved")
+        ]
+        assert any(f"model={DEFAULT_TEST_MODEL_NAME}" in line for line in completion_lines)
+
     async def it_invokes_the_model_unconditionally_even_when_claimed_amount_brl_is_present(
         self,
     ) -> None:
@@ -60,7 +75,7 @@ class DescribeExtractFields:
         model = FakeStructuredModel(
             result=ExtractedFieldsSchema(value=None, currency=None, receipts_date=None)
         )
-        node = ExtractFields(model=model, prompt=PLACEHOLDER_PROMPT)
+        node = ExtractFields(model=model, model_name=DEFAULT_TEST_MODEL_NAME)
 
         result = await node(_state(_PAYLOAD), {"configurable": {}})
 
@@ -71,7 +86,7 @@ class DescribeExtractFields:
         model = FakeStructuredModel(
             result=ExtractedFieldsSchema(value=64.8, currency="BRL", receipts_date=date(2026, 4, 11))
         )
-        node = ExtractFields(model=model, prompt=PLACEHOLDER_PROMPT)
+        node = ExtractFields(model=model, model_name=DEFAULT_TEST_MODEL_NAME)
 
         result = await node(_state(_PAYLOAD), {"configurable": {}})
 
@@ -82,7 +97,7 @@ class DescribeExtractFields:
         model = FakeStructuredModel(
             result=ExtractedFieldsSchema(value=93.5, currency="BRL", receipts_date=date(2026, 4, 9))
         )
-        node = ExtractFields(model=model, prompt=PLACEHOLDER_PROMPT)
+        node = ExtractFields(model=model, model_name=DEFAULT_TEST_MODEL_NAME)
 
         await node(_state(_PAYLOAD), {"configurable": {}})
 
@@ -93,8 +108,8 @@ class DescribeExtractFields:
     async def it_propagates_an_llm_failure_uncaught(self) -> None:
         # R-011's interim floor (validation.py's _decide) is the layer that
         # catches this — the node itself must not swallow it.
-        model = FakeStructuredModel(error=RuntimeError("ollama unreachable"))
-        node = ExtractFields(model=model, prompt=PLACEHOLDER_PROMPT)
+        model = FakeStructuredModel(error=RuntimeError("groq unreachable"))
+        node = ExtractFields(model=model, model_name=DEFAULT_TEST_MODEL_NAME)
 
-        with pytest.raises(RuntimeError, match="ollama unreachable"):
+        with pytest.raises(RuntimeError, match="groq unreachable"):
             await node(_state(_PAYLOAD), {"configurable": {}})

@@ -36,7 +36,14 @@ __all__ = [
     "FakeAcquirePool",
     "FakeStructuredModel",
     "FakeApplyDecision",
+    "DEFAULT_TEST_MODEL_NAME",
 ]
+
+# The one placeholder model_name value every non-distinctness test
+# constructs ExtractFields/Analysis with — single source of truth so a
+# future placeholder rename (or a typo in one occurrence) can't drift
+# silently across the ~20 call sites that used to spell it out by hand.
+DEFAULT_TEST_MODEL_NAME = "llama-3.3-70b-versatile"
 
 
 class _FakeAcquisition:
@@ -136,11 +143,11 @@ class FakeAcquirePool:
 
 
 class FakeStructuredModel:
-    """Stands in for an Ollama chat model bound via `.with_structured_output`
+    """Stands in for a Groq chat model bound via `.with_structured_output`
     (T8/T11's `ExtractFields`/`Analysis` constructor dependency) — returns a
     fixed structured result (or raises) from `ainvoke`, and records every
     call it received, so a test can assert exactly-one-invocation without a
-    real Ollama call."""
+    real Groq call."""
 
     def __init__(self, result: Any = None, *, error: Exception | None = None) -> None:
         self.result = result

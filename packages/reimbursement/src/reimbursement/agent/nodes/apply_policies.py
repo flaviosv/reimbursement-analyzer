@@ -23,9 +23,10 @@ class ApplyPolicies:
         self._apply_decision = apply_decision
 
     async def __call__(self, state: State, config: RunnableConfig) -> dict[str, Any]:
-        logger.info("FLOW: Executing 'apply_policies' node")
-
         reimbursement = state["reimbursement"]
+        uuid = reimbursement.uuid
+        logger.info("FLOW: Executing 'apply_policies' node uuid=%s", uuid)
+
         extracted = state["extracted"]
         value = extracted["value"]
         receipts_date = extracted["receipts_date"]
@@ -54,10 +55,13 @@ class ApplyPolicies:
                 f"{HUMAN_REVIEW_FLOOR} floor"
             )
         else:
-            logger.info("FLOW: apply_policies fired no deterministic rule; requires_llm_judgment=True")
+            logger.info(
+                "FLOW: apply_policies fired no deterministic rule; requires_llm_judgment=True uuid=%s",
+                uuid,
+            )
             return {"requires_llm_judgment": True}
 
-        logger.info("FLOW: apply_policies rule fired: status=%s", status)
+        logger.info("FLOW: apply_policies rule fired: status=%s uuid=%s", status, uuid)
         # receipts_value's own DB column has a >=0 CHECK constraint; spec.md
         # deliberately lets a zero/negative extracted value clear the <=200
         # ceiling unmodified (no floor on the threshold rule itself), so a
@@ -80,7 +84,7 @@ class ApplyPolicies:
                 currency=extracted["currency"],
             )
         persisted = result is not None
-        logger.info("FLOW: apply_policies apply_decision outcome: persisted=%s", persisted)
+        logger.info("FLOW: apply_policies apply_decision outcome: persisted=%s uuid=%s", persisted, uuid)
 
         return {
             "status": status,

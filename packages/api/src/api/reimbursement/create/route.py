@@ -1,6 +1,9 @@
+import logging
+
 from confluent_kafka.aio import AIOProducer
 from fastapi import APIRouter, Depends, Request
 from shared.config import MAX_BODY_BYTES, load_config
+from shared.logging import log_event
 
 from api.dependencies import get_producer
 from api.errors import MessageResponse
@@ -8,7 +11,10 @@ from api.reimbursement.create.payload import read_capped
 from api.reimbursement.create.producer import publish
 from api.reimbursement.create.validation import BATCH_ADAPTER, validate_batch
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
+
+BATCH_ACCEPTED_EVENT = "reimbursement.batch_accepted"
 
 
 @router.post(
@@ -47,4 +53,11 @@ async def create_reimbursement(
     # call, which is where peak memory actually matters.
     del batch
     await publish(producer, raw, request_ids, load_config().kafka)
+    log_event(
+        logger,
+        logging.INFO,
+        BATCH_ACCEPTED_EVENT,
+        request_ids=request_ids,
+        accepted_count=accepted_count,
+    )
     return MessageResponse(msg=f"{accepted_count} request(s) accepted")

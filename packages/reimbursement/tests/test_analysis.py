@@ -1,15 +1,24 @@
 import logging
+from uuid import uuid4
 
 import pytest
-from agent_fakes import FakeStructuredModel
+from agent_fakes import DEFAULT_TEST_MODEL_NAME, FakeStructuredModel
 from reimbursement.agent.nodes.analysis import Analysis, GuardrailVerdict
-from reimbursement.agent.prompts.analysis import PLACEHOLDER_PROMPT
+from reimbursement.models import Reimbursement
 
 pytestmark = pytest.mark.anyio
 
 
 def _state() -> dict:
-    return {"extracted": {"value": 1000, "currency": "BRL", "receipts_date": None}}
+    return {
+        "reimbursement": Reimbursement(uuid=uuid4(), original_payload={}),
+        "extracted": {"value": 1000, "currency": "BRL", "receipts_date": None},
+    }
+
+
+class DescribeGuardrailVerdict:
+    def it_exposes_exactly_consistent_and_reason(self) -> None:
+        assert set(GuardrailVerdict.model_fields) == {"consistent", "reason"}
 
 
 class DescribeAnalysis:
@@ -17,9 +26,9 @@ class DescribeAnalysis:
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         model = FakeStructuredModel(
-            result=GuardrailVerdict(consistent=True, reasoning="amount matches receipt text")
+            result=GuardrailVerdict(consistent=True, reason="amount matches receipt text")
         )
-        node = Analysis(model=model, prompt=PLACEHOLDER_PROMPT, model_name="llama3.2")
+        node = Analysis(model=model, model_name=DEFAULT_TEST_MODEL_NAME)
 
         # A None "configurable" proves this node never reaches for a
         # conn/apply_decision dependency — it would raise on a subscript of
@@ -33,17 +42,17 @@ class DescribeAnalysis:
         assert any("FLOW: Executing 'analysis' node" in r.message for r in caplog.records)
         assert any("guardrail_verdict=True" in r.message for r in caplog.records)
         # AGD-23/24: attributes which model authored this decision_reason.
-        assert any("model=llama3.2" in r.message for r in caplog.records)
+        assert any(f"model={DEFAULT_TEST_MODEL_NAME}" in r.message for r in caplog.records)
 
     async def it_routes_to_human_review_on_a_contradictory_verdict_with_the_guardrails_own_reasoning(
         self,
     ) -> None:
         model = FakeStructuredModel(
             result=GuardrailVerdict(
-                consistent=False, reasoning="claimed amount contradicts the OCR total"
+                consistent=False, reason="claimed amount contradicts the OCR total"
             )
         )
-        node = Analysis(model=model, prompt=PLACEHOLDER_PROMPT, model_name="llama3.2")
+        node = Analysis(model=model, model_name=DEFAULT_TEST_MODEL_NAME)
 
         result = await node(_state(), {"configurable": None})
 
@@ -52,8 +61,8 @@ class DescribeAnalysis:
         assert result["decision_reason"] == "claimed amount contradicts the OCR total"
 
     async def it_invokes_the_guardrail_exactly_once(self) -> None:
-        model = FakeStructuredModel(result=GuardrailVerdict(consistent=True, reasoning="ok"))
-        node = Analysis(model=model, prompt=PLACEHOLDER_PROMPT, model_name="llama3.2")
+        model = FakeStructuredModel(result=GuardrailVerdict(consistent=True, reason="ok"))
+        node = Analysis(model=model, model_name=DEFAULT_TEST_MODEL_NAME)
 
         await node(_state(), {"configurable": None})
 
@@ -62,8 +71,8 @@ class DescribeAnalysis:
     async def it_propagates_an_llm_failure_uncaught(self) -> None:
         # R-011's interim floor (validation.py's _decide) is the layer that
         # catches this — the node itself must not swallow it.
-        model = FakeStructuredModel(error=RuntimeError("ollama unreachable"))
-        node = Analysis(model=model, prompt=PLACEHOLDER_PROMPT, model_name="llama3.2")
+        model = FakeStructuredModel(error=RuntimeError("groq unreachable"))
+        node = Analysis(model=model, model_name=DEFAULT_TEST_MODEL_NAME)
 
-        with pytest.raises(RuntimeError, match="ollama unreachable"):
+        with pytest.raises(RuntimeError, match="groq unreachable"):
             await node(_state(), {"configurable": None})

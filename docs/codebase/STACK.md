@@ -17,8 +17,9 @@
 | `confluent-kafka` | >=2.15.0 | Kafka producer/consumer client (`confluent_kafka.aio.AIOProducer` for the async producer) | `api`, `shared`, `reimbursement`, `publisher` |
 | `asyncpg` | >=0.31.0 | Postgres async driver — pool + statements in `shared.reimbursement.repository` | `publisher`, `reimbursement` (both real use, via `shared`) |
 | `python-dotenv` | >=1.2.2 | Loads `.env` at process start (`load_dotenv()`) | `api`, `reimbursement`, `publisher` |
-| `langchain` | >=1.3.14 | LLM orchestration — declared; the `agent/` decision-graph subpackage imports it but every node is still a stub | `reimbursement` |
-| `langgraph` | >=1.2.10 | Agentic graph orchestration — `agent/agent.py` builds a `StateGraph` and registers nodes, but adds no edges and never compiles/invokes it | `reimbursement` |
+| `langchain` | >=1.3.14 | LLM orchestration — `init_chat_model` constructs the two Groq-backed chat models (`extract_fields`/`analysis`, one per node) inside `build_graph()` | `reimbursement` |
+| `langchain-groq` | >=1.1.3 | Groq chat-model client, resolved via `init_chat_model("groq:<model>", ...)` — replaces `langchain-ollama` (AD-032) | `reimbursement` |
+| `langgraph` | >=1.2.10 | Agentic graph orchestration — `agent/agent.py` builds, wires, and compiles a real `StateGraph` (5 nodes, conditional edges), invoked from `validation.py`'s resolve path | `reimbursement` |
 | `watchfiles` | >=1.2.0 | Dev-mode hot reload | `reimbursement`, `publisher` |
 | `yoyo-migrations` | >=9.0.0 | Plain-SQL schema migrations | `api` (`migrations` extra only) |
 | `psycopg[binary]` | >=3.3.4 | Sync Postgres driver, used by the migration runner and the advisory lock | `api` (`migrations` extra only) |
@@ -45,7 +46,7 @@
 
 - Kafka — message backbone between `api`, `publisher`, and `reimbursement` (detail: `INTEGRATIONS.md`).
 - LangFuse (self-hosted, v4) — tracing backend for `reimbursement`'s LangGraph decision graph, wired via `langchain.CallbackHandler`; falls back to durable `failure_log` records when unreachable.
-- Ollama — LLM inference for `reimbursement`'s agent decision graph; runs on the host machine (default `http://localhost:11434`), not containerized — configured via `OLLAMA_MODEL`/`OLLAMA_BASE_URL`.
+- Groq — hosted LLM inference for `reimbursement`'s two decision-graph LLM nodes (`extract_fields`, `analysis`), each its own independently-configured chat model; configured via `GROQ_API_KEY`/`AI_TIMEOUT_SECONDS` (shared) and `EXTRACT_FIELDS_MODEL_NAME`/`EXTRACT_FIELDS_TEMPERATURE`/`ANALYSIS_MODEL_NAME`/`ANALYSIS_TEMPERATURE` (per node) — replaces the self-hosted Ollama host-machine setup (AD-032).
 
 ## Commands
 
@@ -77,8 +78,12 @@
 | `KAFKA_BOOTSTRAP_SERVERS` | Kafka bootstrap address (`kafka:19092` inside compose, `localhost:9092` default outside it) |
 | `KAFKA_SECURITY_PROTOCOL`, `KAFKA_SASL_MECHANISM`, `KAFKA_SASL_USERNAME`, `KAFKA_SASL_PASSWORD`, `KAFKA_SSL_CA_LOCATION` | Optional Kafka SASL/TLS — unset means PLAINTEXT |
 | `AGENT_CONSUMER_GROUP_ID` | `reimbursement`'s Kafka consumer group id (var name and default `"agent"` unchanged by the package rename) |
-| `OLLAMA_MODEL` | LLM model for `reimbursement`'s agent decision graph (default `llama3.2`) |
-| `OLLAMA_BASE_URL` | Ollama service endpoint (default `http://localhost:11434`) |
+| `GROQ_API_KEY` | Groq credential shared by both LLM nodes' models — required, fails fast if unset (AD-032) |
+| `AI_TIMEOUT_SECONDS` | Shared HTTP call timeout for both nodes' Groq clients — optional, defaults to `30.0` |
+| `EXTRACT_FIELDS_MODEL_NAME` | Groq model name for the `extract_fields` node — required, fails fast if unset |
+| `EXTRACT_FIELDS_TEMPERATURE` | `extract_fields`'s model temperature — optional, defaults to `0.0` |
+| `ANALYSIS_MODEL_NAME` | Groq model name for the `analysis` node — required, fails fast if unset |
+| `ANALYSIS_TEMPERATURE` | `analysis`'s model temperature — optional, defaults to `0.0` |
 | `DATABASE_POOL_MAX_SIZE` | Shared Postgres pool's max size (default `20`) — raise this in step with `PUBLISHER_ITEM_CONCURRENCY` to avoid connection starvation under load (R-005) |
 | `LANGFUSE_POSTGRES_PASSWORD`, `SALT`, `ENCRYPTION_KEY`, `NEXTAUTH_SECRET`, `CLICKHOUSE_PASSWORD`, `REDIS_AUTH`, `MINIO_ROOT_PASSWORD`, `LANGFUSE_S3_*_SECRET_ACCESS_KEY` | LangFuse stack's own infra credentials |
 | `LANGFUSE_INIT_PROJECT_SECRET_KEY`, `LANGFUSE_INIT_USER_PASSWORD` | LangFuse first-boot bootstrap credentials; `reimbursement`'s decision graph authenticates with the same project key pair (`LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY`/`LANGFUSE_HOST`, passed to the `reimbursement` service in `docker-compose.yml`) |

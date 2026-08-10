@@ -1,3 +1,4 @@
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import replace
@@ -16,6 +17,12 @@ from api.reimbursement.list.route import router as list_reimbursement_router
 from api.reimbursement.update.route import router as update_reimbursement_router
 
 load_dotenv()
+# Mirrors publisher/consumer.py's and reimbursement/consumer.py's own
+# entrypoints (both call this on their own startup) — uvicorn's default
+# logging setup only configures its own uvicorn/uvicorn.error/uvicorn.access
+# loggers, never the root logger, so without this every new .info() call
+# this feature adds would silently never emit.
+logging.basicConfig(level=logging.INFO)
 
 
 @asynccontextmanager

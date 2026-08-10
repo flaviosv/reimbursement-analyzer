@@ -19,7 +19,7 @@ every thread still gets its own fix and its own GraphQL reply/resolve.
 | # | Thread | Severity | File | Fix |
 | - | ------ | -------- | ---- | --- |
 | 1 | 1 | High | `publish_pending.py` | Widen the compensation try-block to cover `ReimbursementEnvelope` construction, not just `publish()` |
-| 2 | 2, 6 | Medium | `publish_pending.py`, `.specs/STATE.md` (AD-035), `design.md` | Wrap `delete_pending`'s call in its own `conn.transaction()` too (matching insert's treatment); correct AD-034's rationale via a new AD-035 (append-only log); fix design.md's Architecture Overview + mermaid diagram to show both narrow transactions |
+| 2 | 2, 6 | Medium | `publish_pending.py`, `.specs/STATE.md` (AD-037), `design.md` | Wrap `delete_pending`'s call in its own `conn.transaction()` too (matching insert's treatment); correct AD-036's rationale via a new AD-037 (append-only log); fix design.md's Architecture Overview + mermaid diagram to show both narrow transactions |
 | 3 | 3 | Low | `publish_pending.py` | Fix the dotted-name docstring reference |
 | 4 | 4 | Low | `publish_pending.py` | Avoid eager `json.dumps` via an `isEnabledFor` guard |
 | 5 | 5 | Low | `docs/RISKS.md` | State R-001's updated severity directly instead of a dangling cross-reference |

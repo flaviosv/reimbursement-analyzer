@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 import asyncpg
 import pytest
 import reimbursement.agent.agent as agent_module
-from agent_fakes import FakeStructuredModel
+from agent_fakes import DEFAULT_TEST_MODEL_NAME, FakeStructuredModel
 from confluent_kafka import KafkaException, TopicPartition
 from reimbursement.agent.nodes.analysis import Analysis, GuardrailVerdict
 from reimbursement.agent.nodes.apply_agent_decision import ApplyAgentDecision
@@ -18,10 +18,6 @@ from reimbursement.agent.nodes.extract_fields import (
     ExtractFields,
 )
 from reimbursement.agent.nodes.validate import Validate
-from reimbursement.agent.prompts.analysis import PLACEHOLDER_PROMPT as ANALYSIS_PROMPT
-from reimbursement.agent.prompts.extract_fields import (
-    PLACEHOLDER_PROMPT as EXTRACT_FIELDS_PROMPT,
-)
 from reimbursement.config import AgentConfig, load_agent_config
 from reimbursement.consumer import managed_consumer, run
 from reimbursement.validation import (
@@ -228,9 +224,9 @@ class DescribeTheEndToEndRoundTrip:
 
 class DescribeTheDecisionGraph:
     """T15: the real decision graph, exercised end to end against real
-    Postgres and Kafka -- only the two Ollama-bound models are faked (via
+    Postgres and Kafka -- only the two Groq-bound models are faked (via
     build_graph's own dependency points), so no real network call to
-    Ollama ever happens. `apply_policies`/`apply_agent_decision` call the
+    Groq ever happens. `apply_policies`/`apply_agent_decision` call the
     real `apply_decision` use case, which is what proves the row's
     `status`/`decision_reason` actually landed."""
 
@@ -253,15 +249,17 @@ class DescribeTheDecisionGraph:
             result=ExtractedFieldsSchema(value=150.0, currency="BRL", receipts_date=date(2026, 1, 1))
         )
         analysis_model = FakeStructuredModel(
-            error=AssertionError("analysis/Ollama must not be invoked for a <=200 item")
+            error=AssertionError("analysis/Groq must not be invoked for a <=200 item")
         )
 
         def _fake_build_graph() -> object:
             nodes = {
-                "extract_fields": ExtractFields(model=extract_model, prompt=EXTRACT_FIELDS_PROMPT),
+                "extract_fields": ExtractFields(
+                    model=extract_model, model_name=DEFAULT_TEST_MODEL_NAME
+                ),
                 "validate": Validate(),
                 "apply_policies": ApplyPolicies(apply_decision=apply_decision),
-                "analysis": Analysis(model=analysis_model, prompt=ANALYSIS_PROMPT, model_name="llama3.2"),
+                "analysis": Analysis(model=analysis_model, model_name=DEFAULT_TEST_MODEL_NAME),
                 "apply_agent_decision": ApplyAgentDecision(apply_decision=apply_decision),
             }
             return agent_module._wire(nodes)
@@ -277,7 +275,7 @@ class DescribeTheDecisionGraph:
         row = await _row(migrated_db, uuid)
         assert row["status"] == "auto-approved"
         assert row["decision_reason"] is not None
-        # No real Ollama call: the fake extraction model was invoked
+        # No real Groq call: the fake extraction model was invoked
         # exactly once (in-process, no network), and the analysis model
         # (which would raise if ever invoked) was never called at all.
         assert len(extract_model.calls) == 1
@@ -313,15 +311,17 @@ class DescribeTheDecisionGraph:
             result=ExtractedFieldsSchema(value=1000.0, currency="BRL", receipts_date=date(2026, 1, 1))
         )
         analysis_model = FakeStructuredModel(
-            result=GuardrailVerdict(consistent=False, reasoning="claimed amount contradicts OCR total")
+            result=GuardrailVerdict(consistent=False, reason="claimed amount contradicts OCR total")
         )
 
         def _fake_build_graph() -> object:
             nodes = {
-                "extract_fields": ExtractFields(model=extract_model, prompt=EXTRACT_FIELDS_PROMPT),
+                "extract_fields": ExtractFields(
+                    model=extract_model, model_name=DEFAULT_TEST_MODEL_NAME
+                ),
                 "validate": Validate(),
                 "apply_policies": ApplyPolicies(apply_decision=apply_decision),
-                "analysis": Analysis(model=analysis_model, prompt=ANALYSIS_PROMPT, model_name="llama3.2"),
+                "analysis": Analysis(model=analysis_model, model_name=DEFAULT_TEST_MODEL_NAME),
                 "apply_agent_decision": ApplyAgentDecision(apply_decision=apply_decision),
             }
             return agent_module._wire(nodes)
