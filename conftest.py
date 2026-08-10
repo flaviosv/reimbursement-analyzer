@@ -29,6 +29,24 @@ from shared.testing import (
 from testcontainers.community.postgres import PostgresContainer
 
 
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Defense-in-depth backstop: a bare `-m` expression that forgets `and not
+    e2e` (e.g. `-m "not integration"`) must not accidentally run the e2e
+    suite against a real stack and a real GROQ_API_KEY. The documented gate
+    commands already exclude e2e correctly — this only catches the case
+    where a developer types a custom expression by hand.
+    """
+    markexpr = config.getoption("-m") or ""
+    explicit_e2e = "e2e" in markexpr and "not e2e" not in markexpr
+    if explicit_e2e:
+        return
+
+    skip_e2e = pytest.mark.skip(reason="e2e requires an explicit -m e2e (real stack + real GROQ_API_KEY)")
+    for item in items:
+        if "e2e" in item.keywords:
+            item.add_marker(skip_e2e)
+
+
 @contextmanager
 def disposable_database(server_url: str) -> Iterator[str]:
     name = disposable_database_name()
