@@ -14,7 +14,9 @@ from pydantic import (
 
 from shared.config import MAX_BATCH_ITEMS
 
-Stage = Literal["db-insert", "publish", "resolve"]
+# Where an AttemptError originated: publisher's own insert/publish, the
+# agent's resolve-by-uuid step, or its decision graph (AD-039).
+Stage = Literal["db-insert", "publish", "resolve", "decide"]
 
 # The three outcomes the decision graph (and its human-review escalation
 # fallback) ever write via repository.update_decision — distinct from

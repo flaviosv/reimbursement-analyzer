@@ -98,6 +98,11 @@ class DescribeAttemptErrorFromException:
 
         assert entry.stage == "resolve"
 
+    def it_accepts_the_agent_decide_stage(self) -> None:
+        entry = AttemptError.from_exception(1, "decide", RuntimeError("boom"))
+
+        assert entry.stage == "decide"
+
 
 class DescribeRequestEnvelopeBounds:
     def it_rejects_a_negative_retry(self) -> None:
