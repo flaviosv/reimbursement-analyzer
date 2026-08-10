@@ -16,17 +16,6 @@ _REQUIRED_AI_ENV_KEYS = {
 }
 
 
-@pytest.fixture(autouse=True)
-def _default_ai_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    # T2 (conftest.py) supplies this same default globally for every other
-    # test in the package; this file's own tests exercise the fail-fast/
-    # default behavior directly, so each test overrides/deletes the one var
-    # it cares about on top of this baseline.
-    monkeypatch.setenv("GROQ_API_KEY", "gsk_test_placeholder")
-    monkeypatch.setenv("EXTRACT_FIELDS_MODEL_NAME", "llama-3.3-70b-versatile")
-    monkeypatch.setenv("ANALYSIS_MODEL_NAME", "llama-3.3-70b-versatile")
-
-
 class DescribeAgentConfig:
     def it_defaults_the_consumer_group_when_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("AGENT_CONSUMER_GROUP_ID", raising=False)
