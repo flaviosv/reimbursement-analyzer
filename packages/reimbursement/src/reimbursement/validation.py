@@ -158,12 +158,11 @@ async def _resolve(deps: Dependencies, envelope: ReimbursementEnvelope) -> Messa
 async def _decide(
     deps: Dependencies, envelope: ReimbursementEnvelope, row: asyncpg.Record
 ) -> MessageOutcome:
-    """R-011's interim floor: a decision-stage failure (a malformed
+    """R-011 resolved (AD-039): a decision-stage failure (a malformed
     original_payload, Groq unreachable, malformed structured output, a
-    genuine `apply_decision` write failure) is caught here, never
-    propagated — no retry, no auto-escalation, just a durable failure_log
-    record. The row stays exactly as it was; an operator uses the log to
-    notice and manually reprocess."""
+    genuine `apply_decision` write failure) is caught here, durably logged,
+    and escalated to human-review immediately — never propagated, never
+    left untouched."""
     try:
         reimbursement = Reimbursement.from_record(row)
         final_state = await agent.decide(
@@ -174,7 +173,7 @@ async def _decide(
         failure_log.write(
             deps.config.failure_log, _failure_record(DECISION_FAILED_EVENT, envelope, error=str(exc))
         )
-        return MessageOutcome.LOGGED
+        return await _escalate_decision_failure(deps, envelope, exc)
 
     logger.info(
         json.dumps(
@@ -188,6 +187,49 @@ async def _decide(
         )
     )
     return MessageOutcome.RESOLVED
+
+
+async def _escalate_decision_failure(
+    deps: Dependencies, envelope: ReimbursementEnvelope, exc: Exception
+) -> MessageOutcome:
+    """Mirrors `_escalate`'s exact ghost/write-failure fallback shape for
+    the decision-stage failure path: the row already exists (resolved by
+    `_resolve` just before `_decide` ran), so this is an UPDATE via
+    `escalate_existing`, carrying `envelope.errors` plus one new entry for
+    this failure. Never raises."""
+    errors = [*envelope.errors, AttemptError.from_exception(len(envelope.errors) + 1, "decide", exc)]
+    try:
+        async with deps.pool.acquire(timeout=deps.config.database.acquire_timeout_seconds) as conn:
+            result = await escalate_existing(
+                conn,
+                envelope.uuid,
+                errors,
+                deps.config.failure_log.max_message_chars,
+                header="Decision-stage failure",
+            )
+    except Exception as escalate_exc:
+        logger.error(
+            "uuid=%s could not be escalated after a decision failure: %s",
+            envelope.uuid,
+            sanitize(escalate_exc),
+        )
+        failure_log.write(
+            deps.config.failure_log,
+            _failure_record(ESCALATION_FAILED_EVENT, envelope, error=str(escalate_exc)),
+        )
+        return MessageOutcome.LOGGED
+
+    if result is None:
+        failure_log.write(
+            deps.config.failure_log,
+            _failure_record(ESCALATION_FAILED_EVENT, envelope, reason="uuid has no matching row"),
+        )
+        return MessageOutcome.LOGGED
+
+    logger.error(
+        json.dumps({"event": ESCALATED_EVENT, "uuid": str(envelope.uuid), "retry": envelope.retry})
+    )
+    return MessageOutcome.ESCALATED
 
 
 async def _requeue(

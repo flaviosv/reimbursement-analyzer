@@ -378,7 +378,39 @@ class DescribeDecideIntegration:
             for r in caplog.records
         )
 
-    async def it_catches_a_decide_failure_writes_the_failure_log_and_returns_logged_without_propagating(
+    async def it_escalates_to_human_review_with_the_error_in_the_reason_and_returns_escalated(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # R-011 resolved (AD-039): a decide() failure now escalates
+        # immediately to human-review instead of leaving the row untouched.
+        uuid = uuid4()
+        row_updated_at = datetime(2026, 4, 10, 9, 0, 0, tzinfo=UTC)
+        pool = FakePool(rows={uuid: _row(uuid=uuid, updated_at=row_updated_at)})
+        deps = _deps(pool=pool)
+        envelope = _envelope(uuid=uuid, retry=0, published_at=row_updated_at)
+
+        async def _failing_decide(
+            reimbursement: Reimbursement, pool: object, *, acquire_timeout_seconds: float
+        ) -> dict[str, object]:
+            raise RuntimeError("groq unreachable")
+
+        monkeypatch.setattr(agent, "decide", _failing_decide)
+
+        with caplog.at_level(logging.ERROR):
+            # This must never raise -- handle_message's own "never raises"
+            # invariant (AGT-20) depends on it.
+            outcome = await handle_message(deps, envelope.model_dump_json().encode())
+
+        assert outcome == MessageOutcome.ESCALATED
+        assert pool.rows[uuid]["status"] == "human-review"
+        assert "groq unreachable" in pool.updated[uuid]
+        assert "[decide]" in pool.updated[uuid]
+        assert "Decision-stage failure" in pool.updated[uuid]
+        assert any(
+            "reimbursement.escalated" in r.message and str(uuid) in r.message for r in caplog.records
+        )
+
+    async def it_still_writes_the_failure_log_when_escalation_succeeds(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
         uuid = uuid4()
@@ -395,24 +427,158 @@ class DescribeDecideIntegration:
         monkeypatch.setattr(agent, "decide", _failing_decide)
 
         with caplog.at_level(logging.CRITICAL, logger="reimbursementanalyzer.failures"):
-            # R-011 interim floor: this must not raise -- handle_message's
-            # own "never raises" invariant (AGT-20) depends on it.
+            outcome = await handle_message(deps, envelope.model_dump_json().encode())
+
+        # Both records exist independently -- escalation succeeding does not
+        # suppress the ops-alerting failure_log write.
+        assert outcome == MessageOutcome.ESCALATED
+        assert any("reimbursement.decision_failed" in r.message for r in caplog.records)
+
+    async def it_combines_prior_resolve_stage_errors_with_the_new_decide_failure_in_the_reason(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        uuid = uuid4()
+        row_updated_at = datetime(2026, 4, 10, 9, 0, 0, tzinfo=UTC)
+        pool = FakePool(rows={uuid: _row(uuid=uuid, updated_at=row_updated_at)})
+        deps = _deps(pool=pool)
+        envelope = _envelope(
+            uuid=uuid, retry=1, published_at=row_updated_at, errors=[_error(1)]
+        )
+
+        async def _failing_decide(
+            reimbursement: Reimbursement, pool: object, *, acquire_timeout_seconds: float
+        ) -> dict[str, object]:
+            raise RuntimeError("groq unreachable")
+
+        monkeypatch.setattr(agent, "decide", _failing_decide)
+
+        outcome = await handle_message(deps, envelope.model_dump_json().encode())
+
+        assert outcome == MessageOutcome.ESCALATED
+        reason = pool.updated[uuid]
+        # The earlier resolve-stage entry and the new decide-stage entry
+        # both appear, in order -- a reviewer sees the whole story.
+        assert "attempt 1" in reason and "[resolve]" in reason and "db unreachable" in reason
+        assert "attempt 2" in reason and "[decide]" in reason and "groq unreachable" in reason
+        assert reason.index("attempt 1") < reason.index("attempt 2")
+
+    async def it_writes_to_the_failure_log_and_returns_logged_when_the_uuid_is_a_ghost(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # A race between _resolve's read and _decide's escalation write: the
+        # row is deleted in between. Nothing to escalate -- mirrors
+        # _escalate's own ghost handling exactly.
+        uuid = uuid4()
+        row_updated_at = datetime(2026, 4, 10, 9, 0, 0, tzinfo=UTC)
+        pool = FakePool(rows={uuid: _row(uuid=uuid, updated_at=row_updated_at)})
+        deps = _deps(pool=pool)
+        envelope = _envelope(uuid=uuid, retry=0, published_at=row_updated_at)
+
+        async def _failing_decide(
+            reimbursement: Reimbursement, pool: object, *, acquire_timeout_seconds: float
+        ) -> dict[str, object]:
+            del pool.rows[uuid]
+            raise RuntimeError("groq unreachable")
+
+        monkeypatch.setattr(agent, "decide", _failing_decide)
+
+        with caplog.at_level(logging.CRITICAL, logger="reimbursementanalyzer.failures"):
             outcome = await handle_message(deps, envelope.model_dump_json().encode())
 
         assert outcome == MessageOutcome.LOGGED
-        assert any("reimbursement.decision_failed" in r.message for r in caplog.records)
-        assert any("groq unreachable" in r.message for r in caplog.records)
-        # No retry, no auto-escalation: the row itself is never touched.
-        assert pool.rows[uuid]["status"] == "pending"
+        assert any("reimbursement.escalation_failed" in r.message for r in caplog.records)
 
-    async def it_catches_a_malformed_original_payload_as_a_decision_failure(
+    async def it_writes_to_the_failure_log_and_returns_logged_when_the_escalation_write_itself_fails(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        uuid = uuid4()
+        row_updated_at = datetime(2026, 4, 10, 9, 0, 0, tzinfo=UTC)
+        pool = FakePool(
+            rows={uuid: _row(uuid=uuid, updated_at=row_updated_at)},
+            update_errors={uuid: RuntimeError("connection reset")},
+        )
+        deps = _deps(pool=pool)
+        envelope = _envelope(uuid=uuid, retry=0, published_at=row_updated_at)
+
+        async def _failing_decide(
+            reimbursement: Reimbursement, pool: object, *, acquire_timeout_seconds: float
+        ) -> dict[str, object]:
+            raise RuntimeError("groq unreachable")
+
+        monkeypatch.setattr(agent, "decide", _failing_decide)
+
+        with caplog.at_level(logging.CRITICAL, logger="reimbursementanalyzer.failures"):
+            outcome = await handle_message(deps, envelope.model_dump_json().encode())
+
+        assert outcome == MessageOutcome.LOGGED
+        assert any("reimbursement.escalation_failed" in r.message for r in caplog.records)
+
+    async def it_escalates_even_when_a_decision_was_already_computed_but_the_persist_call_raised(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Mirrors a failure inside apply_policies/apply_agent_decision's own
+        # DB write, after a decision was already reached in-memory: the
+        # write never durably completed, so the computed decision is
+        # discarded in favor of human-review + the error, never trusted as
+        # final (ADE-06).
+        uuid = uuid4()
+        row_updated_at = datetime(2026, 4, 10, 9, 0, 0, tzinfo=UTC)
+        pool = FakePool(rows={uuid: _row(uuid=uuid, updated_at=row_updated_at)})
+        deps = _deps(pool=pool)
+        envelope = _envelope(uuid=uuid, retry=0, published_at=row_updated_at)
+
+        async def _decide_computed_then_failed_to_persist(
+            reimbursement: Reimbursement, pool: object, *, acquire_timeout_seconds: float
+        ) -> dict[str, object]:
+            # A real apply_agent_decision reaches this exact call shape --
+            # the graph decided "auto-approved" but the persist itself
+            # never completed.
+            raise ConnectionError("could not persist decision: connection reset")
+
+        monkeypatch.setattr(agent, "decide", _decide_computed_then_failed_to_persist)
+
+        outcome = await handle_message(deps, envelope.model_dump_json().encode())
+
+        assert outcome == MessageOutcome.ESCALATED
+        assert pool.rows[uuid]["status"] == "human-review"
+        assert "could not persist decision" in pool.updated[uuid]
+        # The never-durably-written "auto-approved" decision never appears
+        # anywhere -- only the escalation's own status is written.
+        assert "auto-approved" not in pool.updated[uuid]
+
+    async def it_keeps_the_stdout_log_sanitized_never_the_raw_decide_error(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        uuid = uuid4()
+        row_updated_at = datetime(2026, 4, 10, 9, 0, 0, tzinfo=UTC)
+        pool = FakePool(rows={uuid: _row(uuid=uuid, updated_at=row_updated_at)})
+        deps = _deps(pool=pool)
+        envelope = _envelope(uuid=uuid, retry=0, published_at=row_updated_at)
+
+        async def _failing_decide(
+            reimbursement: Reimbursement, pool: object, *, acquire_timeout_seconds: float
+        ) -> dict[str, object]:
+            raise RuntimeError("groq unreachable")
+
+        monkeypatch.setattr(agent, "decide", _failing_decide)
+
+        with caplog.at_level(logging.ERROR):
+            await handle_message(deps, envelope.model_dump_json().encode())
+
+        stdout_lines = [r.message for r in caplog.records if r.levelno == logging.ERROR]
+        assert stdout_lines
+        assert not any("groq unreachable" in line for line in stdout_lines)
+        # Full detail still reaches the DB row -- only stdout is sanitized.
+        assert "groq unreachable" in pool.updated[uuid]
+
+    async def it_catches_a_malformed_original_payload_and_escalates_it(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         # Reimbursement.from_record's json.loads used to run outside this
         # function's own try/except (before the agent.decide() call it now
         # precedes), so a corrupted payload surfaced as an unhandled
-        # exception from _resolve's outer try instead of R-011's intended
-        # durable decision-failure log.
+        # exception from _resolve's outer try instead of a durable
+        # decision-failure record.
         uuid = uuid4()
         row_updated_at = datetime(2026, 4, 10, 9, 0, 0, tzinfo=UTC)
         pool = FakePool(
@@ -426,5 +592,6 @@ class DescribeDecideIntegration:
         with caplog.at_level(logging.CRITICAL, logger="reimbursementanalyzer.failures"):
             outcome = await handle_message(deps, envelope.model_dump_json().encode())
 
-        assert outcome == MessageOutcome.LOGGED
+        assert outcome == MessageOutcome.ESCALATED
+        assert pool.rows[uuid]["status"] == "human-review"
         assert any("reimbursement.decision_failed" in r.message for r in caplog.records)
