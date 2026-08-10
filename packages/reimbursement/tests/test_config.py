@@ -48,8 +48,20 @@ class DescribeAgentConfig:
         with pytest.raises(ValueError, match="GROQ_API_KEY"):
             load_agent_config()
 
+    def it_raises_when_groq_api_key_is_blank(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("GROQ_API_KEY", "")
+
+        with pytest.raises(ValueError, match="GROQ_API_KEY"):
+            load_agent_config()
+
     def it_raises_when_extract_fields_model_name_is_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("EXTRACT_FIELDS_MODEL_NAME", raising=False)
+
+        with pytest.raises(ValueError, match="EXTRACT_FIELDS_MODEL_NAME"):
+            load_agent_config()
+
+    def it_raises_when_extract_fields_model_name_is_blank(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("EXTRACT_FIELDS_MODEL_NAME", "")
 
         with pytest.raises(ValueError, match="EXTRACT_FIELDS_MODEL_NAME"):
             load_agent_config()
@@ -58,6 +70,36 @@ class DescribeAgentConfig:
         monkeypatch.delenv("ANALYSIS_MODEL_NAME", raising=False)
 
         with pytest.raises(ValueError, match="ANALYSIS_MODEL_NAME"):
+            load_agent_config()
+
+    def it_raises_when_analysis_model_name_is_blank(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ANALYSIS_MODEL_NAME", "")
+
+        with pytest.raises(ValueError, match="ANALYSIS_MODEL_NAME"):
+            load_agent_config()
+
+    def it_raises_naming_the_variable_when_ai_timeout_seconds_is_not_numeric(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AI_TIMEOUT_SECONDS", "abc")
+
+        with pytest.raises(ValueError, match="AI_TIMEOUT_SECONDS"):
+            load_agent_config()
+
+    def it_raises_naming_the_variable_when_extract_fields_temperature_is_not_numeric(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("EXTRACT_FIELDS_TEMPERATURE", "abc")
+
+        with pytest.raises(ValueError, match="EXTRACT_FIELDS_TEMPERATURE"):
+            load_agent_config()
+
+    def it_raises_naming_the_variable_when_analysis_temperature_is_not_numeric(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ANALYSIS_TEMPERATURE", "abc")
+
+        with pytest.raises(ValueError, match="ANALYSIS_TEMPERATURE"):
             load_agent_config()
 
     def it_defaults_ai_timeout_seconds_when_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:

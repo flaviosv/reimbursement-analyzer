@@ -24,6 +24,14 @@ def _require_env(name: str) -> str:
     return value
 
 
+def _float_env(name: str, default: float) -> float:
+    value = os.getenv(name, str(default))
+    try:
+        return float(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} environment variable must be a number, got {value!r}") from exc
+
+
 @dataclass(frozen=True)
 class ModelConfig:
     model_name: str
@@ -68,22 +76,16 @@ def load_agent_config() -> AgentConfig:
         consumer_group_id=os.getenv("AGENT_CONSUMER_GROUP_ID", "agent"),
         ai=AIConfig(
             api_key=_require_env("GROQ_API_KEY"),
-            timeout_seconds=float(
-                os.getenv("AI_TIMEOUT_SECONDS", str(_DEFAULT_AI_TIMEOUT_SECONDS))
-            ),
+            timeout_seconds=_float_env("AI_TIMEOUT_SECONDS", _DEFAULT_AI_TIMEOUT_SECONDS),
         ),
         models=AgentModelsConfig(
             extract_fields=ModelConfig(
                 model_name=_require_env("EXTRACT_FIELDS_MODEL_NAME"),
-                temperature=float(
-                    os.getenv("EXTRACT_FIELDS_TEMPERATURE", str(_DEFAULT_TEMPERATURE))
-                ),
+                temperature=_float_env("EXTRACT_FIELDS_TEMPERATURE", _DEFAULT_TEMPERATURE),
             ),
             analysis=ModelConfig(
                 model_name=_require_env("ANALYSIS_MODEL_NAME"),
-                temperature=float(
-                    os.getenv("ANALYSIS_TEMPERATURE", str(_DEFAULT_TEMPERATURE))
-                ),
+                temperature=_float_env("ANALYSIS_TEMPERATURE", _DEFAULT_TEMPERATURE),
             ),
         ),
     )
