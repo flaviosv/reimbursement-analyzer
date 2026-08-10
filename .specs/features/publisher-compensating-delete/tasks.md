@@ -9,7 +9,7 @@ Implement these tasks with the `tlc-spec-driven` skill: **activate it by name an
 ---
 
 **Design**: `.specs/features/publisher-compensating-delete/design.md`
-**Status**: All 5 tasks (T1-T5) implemented and committed (`c5135b2`, `e6a9438`, `56a9a1c`, `d951089`, `b145a62`); feature-scoped gate green (`uv run pytest packages/shared packages/publisher` — 234 passed); pending the Verifier sub-agent's independent pass
+**Status**: Done. All 5 tasks (T1-T5) implemented and committed (`c5135b2`, `e6a9438`, `56a9a1c`, `d951089`, `b145a62`); feature-scoped gate green (`uv run pytest packages/shared packages/publisher` — 234 passed); independent Verifier sub-agent returned **PASS** (10/10 spec-anchored, sensor 3/3 mutants killed, 0 gaps) — see `.specs/features/publisher-compensating-delete/validation.md`
 
 ---
 
