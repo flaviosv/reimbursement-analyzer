@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
+from uuid import UUID
 
 import asyncpg
 from confluent_kafka.aio import AIOProducer
@@ -19,6 +20,7 @@ from pydantic import ValidationError
 from shared import failure_log
 from shared.config import MAX_RETRY, REQUEST_TOPIC, Config
 from shared.errors import PublishFailed, sanitize
+from shared.logging import log_event
 from shared.models import AttemptError, ReimbursementRequest, RequestEnvelope, Stage
 from shared.producer import publish
 from shared.reimbursement import repository
@@ -51,6 +53,7 @@ EMPTY_PAYLOAD_EVENT = "reimbursement.empty_payload"
 ESCALATION_FAILED_EVENT = "reimbursement.escalation_failed"
 INVALID_ITEM_EVENT = "reimbursement.invalid_item"
 ITEM_FAILED_EVENT = "reimbursement.item_failed"
+ITEM_PUBLISHED_EVENT = "reimbursement.item_published"
 MALFORMED_MESSAGE_EVENT = "reimbursement.malformed_message"
 NULL_VALUE_EVENT = "reimbursement.null_value"
 MESSAGE_HANDLED_EVENT = "reimbursement.message_handled"
@@ -190,7 +193,7 @@ async def process_item(
     if not _accepts(deps, envelope, index, item):
         return ItemOutcome.INVALID
     try:
-        await _insert_and_publish(deps, envelope, item)
+        uuid = await _insert_and_publish(deps, envelope, item)
     except PublishFailed as exc:
         return await _requeue(deps, envelope, index, item, "publish", exc)
     except Exception as exc:
@@ -202,6 +205,7 @@ async def process_item(
             _log_duplicate(envelope, item, exc)
             return ItemOutcome.DUPLICATE
         return await _requeue(deps, envelope, index, item, "db-insert", exc)
+    log_event(logger, logging.INFO, ITEM_PUBLISHED_EVENT, request_id=_request_id(item), uuid=str(uuid))
     return ItemOutcome.PUBLISHED
 
 
@@ -282,14 +286,14 @@ def _accepts(
 
 async def _insert_and_publish(
     deps: Dependencies, envelope: RequestEnvelope, item: dict[str, Any]
-) -> None:
+) -> UUID:
     # No transaction spans the publish (AD-033, amending AD-017 for this unit
     # of work only): insert_pending commits on its own, and a publish
     # failure is compensated by an explicit delete inside publish_pending
     # rather than a rollback (PUB-09 — same "no row survives a publish
     # failure" outcome, different mechanism).
     async with deps.pool.acquire(timeout=deps.config.database.acquire_timeout_seconds) as conn:
-        await publish_pending(
+        return await publish_pending(
             conn,
             deps.producer,
             item,
