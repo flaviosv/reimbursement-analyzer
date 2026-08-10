@@ -1448,6 +1448,18 @@ no second fallback path to keep in sync. See
 `.specs/features/agent-decision-error-escalation/` for the full spec/design
 and `spec.md`'s `ADE-01..08` for the traceable requirements.
 
+**Addendum (2026-08-10, PR #16 review):** `code-review` flagged that the
+raw decide-stage error text this decision puts in `decision_reason` is
+returned by the (pre-existing, unauthenticated) `GET
+/api/v1/reimbursement/{uuid}`/list endpoints. Reviewed against
+`CONCERNS.md`'s existing "No authentication on the public API" entry — the
+same endpoints already return `original_payload` unauthenticated for every
+row, independent of this feature — and confirmed with the user: leave the
+error text raw, consistent with AD-014, rather than sanitize it (which
+would gut its diagnostic value for a human reviewer) or treat it as new
+scope for this PR. No code change; no new risk entry, the gap was already
+tracked.
+
 ---
 
 ## Handoff
