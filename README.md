@@ -55,7 +55,7 @@ docker compose up -d
 What isn't bind-mounted is the venv baked into the image at build time, so it only goes stale after something that changes *that*: a `pyproject.toml`, `uv.lock`, or a `Dockerfile`. Rebuild after pulling or making one of those changes:
 
 ```bash
-docker compose up -d --bumake sure ild
+docker compose up -d --build
 ```
 
 This starts the app's Postgres, Kafka (KRaft, single node), the LangFuse observability stack, and the three services (`api`, `publisher`, `reimbursement`).
@@ -68,6 +68,8 @@ This starts the app's Postgres, Kafka (KRaft, single node), the LangFuse observa
 | LangFuse | http://localhost:3000 | Web UI; sign in with `admin@reimbursementanalyzer.local` / `LANGFUSE_INIT_USER_PASSWORD` |
 
 LangFuse's own Postgres/ClickHouse/Redis/MinIO are also exposed on their default ports (`5432`, `8123`/`9000`, `6379`, `9090`/`9091`) but are internal to its stack — not meant to be used directly.
+
+A Postman collection for manually exercising the API is available at [`docs/misc/ReimbursementAnalyzer.postman_collection.json`](docs/misc/ReimbursementAnalyzer.postman_collection.json).
 
 Verify the stack came up healthy:
 

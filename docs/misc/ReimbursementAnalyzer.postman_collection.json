@@ -1,0 +1,98 @@
+{
+  "info": {
+    "_postman_id": "b66f7998-9b19-4888-b208-d8110b5d030d",
+    "name": "ReimbursementAnalyzer",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "739024"
+  },
+  "item": [
+    {
+      "name": "GET Reimbursement",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:8000/api/v1/reimbursement?",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "8000",
+          "path": [
+            "api",
+            "v1",
+            "reimbursement"
+          ],
+          "query": [
+            {
+              "key": "",
+              "value": null
+            }
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "POST Reimbursement",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "[\n  {\n    \"request_id\": \"REQ-00019\",\n    \"submitted_by\": \"ana.silva@company.com\",\n    \"submitted_at\": \"2026-04-10T09:15:00Z\",\n    \"raw_ocr_text\": \"HOTEL IBIS\\nTAX ID 12.345.678/0001-90\\nDATE 15/30/2026\\nBUSINESS LUNCH\\n2 X EXECUTIVE MEAL R$ 42.50\\nSUBTOTAL R$ 85.00\\nSERVICE 10% R$ 8.50\\nVALUE R$ 1500\",\n    \"claimed_category\": \"clothes\",\n    \"claimed_amount_brl\": 1500,\n    \"data\": \"28//08//2026\",\n    \"attachments\": [\n      \"receipt_0001.jpg\"\n    ]\n  }\n]",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:8000/api/v1/reimbursement",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "8000",
+          "path": [
+            "api",
+            "v1",
+            "reimbursement"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "PUT Reimbursement",
+      "request": {
+        "method": "PUT",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"status\": \"approved\",\n  \"reason\": \"I could locate the fields in the raw_ocr_text\",\n  \"receipts_date\": \"2026-01-05\",\n  \"receipts_value\": \"50.00\",\n  \"receipts_currency\": \"BRL\",\n  \"approved_by\": \"reviewer@example.com\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:8000/api/v1/reimbursement/019fe78a-4fdd-7b58-aa41-8c08fac1310f",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "8000",
+          "path": [
+            "api",
+            "v1",
+            "reimbursement",
+            "019fe78a-4fdd-7b58-aa41-8c08fac1310f"
+          ]
+        }
+      },
+      "response": []
+    }
+  ]
+}
