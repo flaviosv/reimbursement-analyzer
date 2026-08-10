@@ -1,15 +1,21 @@
+import logging
 from uuid import UUID
 
 import asyncpg
 from fastapi import APIRouter, Depends
 from shared.config import load_config
+from shared.errors import ReimbursementNotFound
+from shared.logging import log_event
 from shared.reimbursement.use_cases.get_reimbursement import get_reimbursement
 
 from api.dependencies import get_pool
 from api.errors import MessageResponse
 from api.reimbursement.response import ReimbursementDetailResponse, ReimbursementItem
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
+
+DETAIL_QUERIED_EVENT = "reimbursement.detail_queried"
 
 
 @router.get(
@@ -28,5 +34,10 @@ async def get_reimbursement_by_uuid(
     FastAPI's own path coercion raises RequestValidationError first, caught
     by the app-wide handler in errors.py."""
     async with pool.acquire(timeout=load_config().database.acquire_timeout_seconds) as conn:
-        row = await get_reimbursement(conn, uuid)
+        try:
+            row = await get_reimbursement(conn, uuid)
+        except ReimbursementNotFound:
+            log_event(logger, logging.INFO, DETAIL_QUERIED_EVENT, uuid=str(uuid), found=False)
+            raise
+    log_event(logger, logging.INFO, DETAIL_QUERIED_EVENT, uuid=str(uuid), found=True)
     return ReimbursementDetailResponse(msg="reimbursement found", data=ReimbursementItem.from_record(row))

@@ -1,9 +1,17 @@
+import logging
 from uuid import UUID
 
 import asyncpg
 from fastapi import APIRouter, Depends, Request
+from shared import failure_log
 from shared.config import MAX_BODY_BYTES, load_config
-from shared.errors import ReimbursementNotFound, ReimbursementUuidMismatch
+from shared.errors import (
+    ReimbursementNotEligible,
+    ReimbursementNotFound,
+    ReimbursementUuidMismatch,
+    sanitize,
+)
+from shared.logging import log_event
 from shared.reimbursement.use_cases.get_reimbursement import get_reimbursement
 from shared.reimbursement.use_cases.review_reimbursement import approve_reimbursement, reject_reimbursement
 
@@ -13,7 +21,11 @@ from api.reimbursement.create.payload import read_capped
 from api.reimbursement.response import ReimbursementDetailResponse, ReimbursementItem
 from api.reimbursement.update.validation import ApproveReview, validate_review
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
+
+DECISION_RECORDED_EVENT = "reimbursement.decision_recorded"
+DECISION_WRITE_FAILED_EVENT = "reimbursement.decision_write_failed"
 
 
 @router.put(
@@ -42,26 +54,63 @@ async def put_reimbursement(
     if review.uuid is not None and review.uuid != uuid:
         raise ReimbursementUuidMismatch("body uuid does not match the path uuid")
 
+    decision_write_error: Exception | None = None
     async with pool.acquire(timeout=load_config().database.acquire_timeout_seconds) as conn:
-        if isinstance(review, ApproveReview):
-            await approve_reimbursement(
-                conn,
-                uuid,
-                receipts_value=review.receipts_value,
-                receipts_date=review.receipts_date,
-                receipts_currency=review.receipts_currency,
-                reason=review.reason,
-                approved_by=review.approved_by,
-            )
-        else:
-            await reject_reimbursement(conn, uuid, reason=review.reason, approved_by=review.approved_by)
-
         try:
-            row = await get_reimbursement(conn, uuid)
-        except ReimbursementNotFound as exc:
-            raise RuntimeError(
-                f"reimbursement {uuid} decision committed but could not be re-fetched afterward"
-            ) from exc
+            if isinstance(review, ApproveReview):
+                await approve_reimbursement(
+                    conn,
+                    uuid,
+                    receipts_value=review.receipts_value,
+                    receipts_date=review.receipts_date,
+                    receipts_currency=review.receipts_currency,
+                    reason=review.reason,
+                    approved_by=review.approved_by,
+                )
+            else:
+                await reject_reimbursement(conn, uuid, reason=review.reason, approved_by=review.approved_by)
+        except (ReimbursementNotFound, ReimbursementNotEligible):
+            # Routine, already-typed business outcomes (unknown uuid / row
+            # ineligible for this decision) — each has its own registered
+            # 404/400 handler in errors.py. Not a failure_log-worthy event:
+            # that channel is the last-resort record for something nothing
+            # else in the chain could handle, not for expected client
+            # behavior like a double-submitted or stale decision.
+            raise
+        except Exception as exc:
+            # Genuinely unexpected — held until the connection is released
+            # below, matching publisher.processing's own convention of not
+            # holding a pool connection across a (potentially blocking)
+            # failure_log.write() call.
+            decision_write_error = exc
+        else:
+            try:
+                row = await get_reimbursement(conn, uuid)
+            except ReimbursementNotFound as exc:
+                raise RuntimeError(
+                    f"reimbursement {uuid} decision committed but could not be re-fetched afterward"
+                ) from exc
+
+    if decision_write_error is not None:
+        failure_log.write(
+            load_config().failure_log,
+            {
+                "event": DECISION_WRITE_FAILED_EVENT,
+                "uuid": str(uuid),
+                "approved_by": review.approved_by,
+                "error": sanitize(decision_write_error),
+            },
+        )
+        raise decision_write_error
+
+    log_event(
+        logger,
+        logging.INFO,
+        DECISION_RECORDED_EVENT,
+        uuid=str(uuid),
+        status=row["status"],
+        approved_by=review.approved_by,
+    )
 
     return ReimbursementDetailResponse(
         msg="reimbursement decision recorded", data=ReimbursementItem.from_record(row)

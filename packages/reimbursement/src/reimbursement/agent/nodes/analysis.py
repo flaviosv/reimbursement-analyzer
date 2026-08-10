@@ -32,7 +32,8 @@ class Analysis:
         self._model_name = model_name
 
     async def __call__(self, state: State, config: RunnableConfig) -> dict[str, Any]:
-        logger.info("FLOW: Executing 'analysis' node")
+        uuid = state["reimbursement"].uuid
+        logger.info("FLOW: Executing 'analysis' node uuid=%s", uuid)
 
         extracted = state["extracted"]
         messages = [get_analysis_prompt(extracted)]
@@ -40,10 +41,11 @@ class Analysis:
 
         status = "auto-approved" if verdict.consistent else "human-review"
         logger.info(
-            "FLOW: analysis guardrail_verdict=%s status=%s model=%s",
+            "FLOW: analysis guardrail_verdict=%s status=%s model=%s uuid=%s",
             verdict.consistent,
             status,
             self._model_name,
+            uuid,
         )
 
         return {

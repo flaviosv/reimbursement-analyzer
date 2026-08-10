@@ -1,15 +1,22 @@
 import logging
 from datetime import date
+from uuid import uuid4
 
 import pytest
 
 from reimbursement.agent.nodes.validate import Validate, route_after_validate
+from reimbursement.models import Reimbursement
 
 pytestmark = pytest.mark.anyio
 
+_UUID = uuid4()
+
 
 def _state(*, value: float | None, receipts_date: date | None) -> dict:
-    return {"extracted": {"value": value, "currency": "BRL", "receipts_date": receipts_date}}
+    return {
+        "reimbursement": Reimbursement(uuid=_UUID, original_payload={}),
+        "extracted": {"value": value, "currency": "BRL", "receipts_date": receipts_date},
+    }
 
 
 class DescribeValidate:

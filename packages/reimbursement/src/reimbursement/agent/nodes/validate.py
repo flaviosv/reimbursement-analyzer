@@ -14,7 +14,8 @@ logger = logging.getLogger(__name__)
 
 class Validate:
     async def __call__(self, state: State, config: RunnableConfig) -> dict[str, Any]:
-        logger.info("FLOW: Executing 'validate' node")
+        uuid = state["reimbursement"].uuid
+        logger.info("FLOW: Executing 'validate' node uuid=%s", uuid)
 
         extracted = state["extracted"]
         missing: list[str] = []
@@ -23,7 +24,7 @@ class Validate:
         if extracted.get("receipts_date") is None:
             missing.append("receipts_date")
 
-        logger.info("FLOW: validate found missing_fields=%s", missing)
+        logger.info("FLOW: validate found missing_fields=%s uuid=%s", missing, uuid)
 
         if not missing:
             return {"missing_fields": missing}
