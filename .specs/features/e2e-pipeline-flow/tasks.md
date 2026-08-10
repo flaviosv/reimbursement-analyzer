@@ -375,8 +375,12 @@ T13 → T14
 - Skill: NONE
 
 **Done when**:
-- [ ] `uv run pytest -m e2e -k "retry_ceiling or ghost or stale"` passes against the real stack, covering all 3 cases
-- [ ] `uv run pytest -m "not integration"` gate still passes (excluded from that run)
+- [x] `uv run pytest -m e2e -k "retry_ceiling or ghost or stale"` passes against the real stack, covering all 3 cases
+- [x] `uv run pytest -m "not integration and not e2e"` gate still passes (excluded from that run)
+
+**Deviation** (E2E-09/stale): the literal AC ("row SHALL remain status=pending") is untestable against a row created via a real POST — that row always has its own natural `Reimbursement(retry=0)` message racing to decide it, independent of anything this test sends, so "stays pending" would either always lose that race (real POST) or require a direct DB insert (ruled out by design.md's own Tech Decision). Implemented instead as a race-free equivalent: let the natural decision settle first, then confirm a message older than the row's settled `updated_at` is a no-op (status/decision_reason unchanged) — the same guard, exercised on the realistic scenario it defends against (a late message arriving after a newer one already decided the row). See the test file's own docstring for the full rationale.
+
+**Observed flake** (not a code defect in this feature): one real run of the retry-ceiling case failed because Groq's `extract_fields` structured-output call returned `receipts_date` as `"10/08/2026"` (DD/MM/YYYY) instead of ISO-8601, which fails `ExtractedFieldsSchema`'s tool-call validation with a 400 before it ever reaches Python-side validation — `_decide`'s catch-all (no retry, per its own docstring) leaves the row `pending` forever. Reproduced once, passed on immediate retry with the same payload — a genuine, pre-existing extract_fields prompt/schema robustness gap (Groq occasionally ignores the ISO-date instruction), outside T9-T14's scope to fix. Flagged here per the design's own accepted live-model-steering risk, not masked by a retry inside the test.
 
 **Tests**: e2e
 **Gate**: e2e
