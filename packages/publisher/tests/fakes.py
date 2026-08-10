@@ -77,10 +77,8 @@ class FakeConnection:
         return await self.pool.insert(args)
 
     async def execute(self, statement: str, *args: Any) -> str:
-        # Only caller today is the compensating delete_pending() — a
-        # publish-failure test that doesn't care about delete outcomes still
-        # needs this to not crash, so it always reports success.
-        return "DELETE 1"
+        # Only caller today is the compensating delete_pending().
+        return self.pool.delete(args[0])
 
 
 class FakePool:
@@ -91,7 +89,16 @@ class FakePool:
     `insert_turns` holds the named request_ids for that many extra event-loop
     turns, which reorders completion deterministically without a clock;
     `insert_delay_seconds` gives every item the same real delay, so the shape
-    of the fan-out (concurrent vs. serialised) becomes observable."""
+    of the fan-out (concurrent vs. serialised) becomes observable.
+
+    `delete_errors` fails the compensating delete of the named request_ids
+    only (looked up by the uuid `delete_pending` is called with), mirroring
+    `insert_errors`' shape for the delete side — lets a test force
+    `ItemOutcome.REQUEUED` to still hold even when the compensating delete
+    itself raises. A successful delete removes the matching entry from
+    `inserted`, keeping that list an accurate "rows currently persisted in
+    the fake store" — a failed delete leaves it untouched, matching a real
+    DELETE that never actually removed the row."""
 
     def __init__(
         self,
@@ -100,12 +107,15 @@ class FakePool:
         insert_turns: dict[str, int] | None = None,
         insert_delay_seconds: float = 0.0,
         acquire_error: Exception | None = None,
+        delete_errors: dict[str, Exception] | None = None,
     ) -> None:
         self.insert_errors = insert_errors or {}
         self.insert_turns = insert_turns or {}
         self.insert_delay_seconds = insert_delay_seconds
         self.acquire_error = acquire_error
+        self.delete_errors = delete_errors or {}
         self.inserted: list[tuple[Any, ...]] = []
+        self._by_uuid: dict[UUID, tuple[Any, ...]] = {}
         self.acquisitions = 0
         self.in_flight = 0
         self.max_in_flight = 0
@@ -121,7 +131,20 @@ class FakePool:
         if error is not None:
             raise error
         self.inserted.append(args)
-        return uuid4()
+        uuid = uuid4()
+        self._by_uuid[uuid] = args
+        return uuid
+
+    def delete(self, uuid: UUID) -> str:
+        args = self._by_uuid.get(uuid)
+        request_id = args[0] if args is not None else None
+        error = self.delete_errors.get(request_id)
+        if error is not None:
+            raise error
+        if args is not None:
+            self.inserted.remove(args)
+            del self._by_uuid[uuid]
+        return "DELETE 1"
 
 
 class _RealAcquisition:

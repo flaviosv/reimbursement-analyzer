@@ -28,6 +28,7 @@ from shared.config import (
 )
 from shared.models import AttemptError, RequestEnvelope, Stage
 from shared.reimbursement.repository import insert_pending
+import shared.reimbursement.use_cases.publish_pending as publish_pending_module
 
 pytestmark = pytest.mark.anyio
 
@@ -262,6 +263,39 @@ class DescribeInsertThenPublish:
 
         assert outcome is ItemOutcome.REQUEUED
         assert await _row_count(db, "REQ-ROLLBACK") == 0
+
+    async def it_still_requeues_when_the_compensating_delete_itself_fails(self) -> None:
+        item = valid_reimbursement_item("REQ-DELETE-FAILS")
+        pool = FakePool(delete_errors={"REQ-DELETE-FAILS": asyncpg.PostgresConnectionError("reset")})
+        producer = FakeProducer(errors={REIMBURSEMENT_TOPIC: RuntimeError("broker unreachable")})
+
+        outcome = await process_item(_deps(pool, producer), _envelope([item]), 0, item)
+
+        assert outcome is ItemOutcome.REQUEUED
+
+    async def it_forwards_the_envelopes_retry_into_the_compensating_delete_log(
+        self, db: asyncpg.Connection, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # publish_pending's retry parameter is now threaded through from
+        # envelope.retry, not a hardcoded default (processing.py:299) — this
+        # proves the real wiring, not just that a directly-supplied retry
+        # kwarg reaches the log (already covered at the shared-package level).
+        item = valid_reimbursement_item("REQ-RETRY-WIRING")
+        producer = FakeProducer(errors={REIMBURSEMENT_TOPIC: RuntimeError("broker unreachable")})
+
+        with caplog.at_level(logging.INFO, logger=publish_pending_module.__name__):
+            outcome = await process_item(
+                _deps(RealPool(db), producer), _envelope([item], retry=2), 0, item
+            )
+
+        assert outcome is ItemOutcome.REQUEUED
+        events = [
+            json.loads(record.message)
+            for record in caplog.records
+            if record.name == publish_pending_module.__name__ and record.levelno == logging.INFO
+        ]
+        assert len(events) == 1
+        assert events[0]["retry"] == 2
 
     async def it_does_not_publish_a_reimbursement_message_when_the_insert_fails(self) -> None:
         item = valid_reimbursement_item("REQ-NO-PUBLISH")
