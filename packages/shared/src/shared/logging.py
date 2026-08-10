@@ -22,6 +22,11 @@ def log_event(logger: logging.Logger, level: int, event: str, **fields: Any) -> 
     flow. Falls back to a differently-named logger on failure, the same
     "don't recurse into the same failure" reasoning `failure_log.write`
     uses.
+
+    No field allowlist or redaction: callers are responsible for passing
+    only pre-vetted primitive fields (`str`/`int`/`float`/`bool`/`None`/
+    `UUID`) — passing a raw exception, ORM row, or pydantic model would
+    silently serialize whatever `default=str` produces for it.
     """
     try:
         payload = json.dumps({"event": event, **fields}, default=str)
