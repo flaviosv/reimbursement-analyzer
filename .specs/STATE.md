@@ -1355,6 +1355,55 @@ claim was checked, not assumed.
 
 ---
 
+### AD-038 — `.env` is mounted read-only into every uv-workspace container at runtime; `docker-compose.yml`'s `environment:` blocks are pruned to Docker-network-topology values only
+
+**Date:** 2026-08-09
+**Status:** Active
+
+`api`, `publisher`, `reimbursement`, and `migrate` each gain a runtime
+volume mount (`./.env:/app/.env:ro`) in `docker-compose.yml`, making their
+existing `load_dotenv()` calls (already present at every entrypoint) the
+real config-resolution mechanism inside Docker, not just on the host.
+Correspondingly, each service's `environment:` block is pruned to **only**
+the values that cannot be a single shared `.env` value regardless of where
+the process runs — `KAFKA_BOOTSTRAP_SERVERS`, `DATABASE_URL`, and (for
+`reimbursement`) `LANGFUSE_HOST`, all Docker-network hostnames that differ
+from `shared.config`'s own host-default (`localhost:...`). Every other
+value a service's config loader reads (secrets, model config, tuning,
+SASL/TLS) reaches the container exclusively through the mounted `.env` —
+`docker-compose.yml` no longer duplicates it via `${VAR}` substitution.
+`.dockerignore` continues excluding `.env` from every build context, so the
+mount is runtime-only and never bakes a secret into a distributable image
+layer.
+
+**Why:** user decision, made explicitly during `e2e-pipeline-flow`'s
+Specify phase after the agent's first draft under-scoped the ask — the
+agent had proposed only patching `docker-compose.yml`'s missing/asymmetric
+`environment:` entries (keeping compose's own `${VAR}` substitution as the
+delivery mechanism), which the user rejected: "I want the application to
+rely on dotenv, i don't want propagating over the docker-compose file...
+rely on .env always." This was the concrete trigger: `.env` is
+`.dockerignore`d and never reachable inside any container today, so
+`load_dotenv()` has always been a silent no-op under Docker — and that gap
+had already caused real drift (`reimbursement`'s compose block was missing
+`GROQ_API_KEY`/model-name vars entirely, `publisher`/`reimbursement` were
+both missing the Kafka SASL/TLS vars `api` alone received).
+
+**Implication:** this is a project-level configuration-delivery convention,
+not scoped to the three services this feature touches — any future
+uv-workspace service follows the same shape (mount `.env`, keep only
+genuine topology values in `environment:`). `LANGFUSE_SECRET_KEY` gains its
+own `.env.sample` entry (mirroring `LANGFUSE_INIT_PROJECT_SECRET_KEY`'s
+placeholder) so `reimbursement` resolves it directly with no compose-level
+rename. A new guard test (`packages/api/tests/test_dotenv_config_parity.py`)
+asserts both directions of drift — an `environment:` block gaining an
+unexpected non-topology var, or `.env.sample` missing a var a service's
+loader reads — so this exact class of gap can't recur unnoticed. See
+`.specs/features/e2e-pipeline-flow/design.md` for the full design and
+`spec.md`'s `ENV-01..04` for the traceable requirements.
+
+---
+
 ## Handoff
 
 **Last updated:** 2026-08-09
