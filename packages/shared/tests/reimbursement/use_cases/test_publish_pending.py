@@ -1,6 +1,7 @@
 import json
 import logging
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 import asyncpg
@@ -33,7 +34,7 @@ def _error(attempt: int) -> AttemptError:
     )
 
 
-def _info_events(caplog: pytest.LogCaptureFixture) -> list[dict]:
+def _info_events(caplog: pytest.LogCaptureFixture) -> list[dict[str, Any]]:
     return [
         json.loads(record.message)
         for record in caplog.records
@@ -41,7 +42,7 @@ def _info_events(caplog: pytest.LogCaptureFixture) -> list[dict]:
     ]
 
 
-def _failure_records(caplog: pytest.LogCaptureFixture) -> list[dict]:
+def _failure_records(caplog: pytest.LogCaptureFixture) -> list[dict[str, Any]]:
     return [
         json.loads(record.message)
         for record in caplog.records
@@ -193,10 +194,16 @@ class DescribeTheCompensatingDelete:
                     retry=0,
                 )
 
+        published = producer.messages(REIMBURSEMENT_TOPIC)[0]
         events = _info_events(caplog)
         assert len(events) == 1
-        assert events[0]["event"] == COMPENSATING_DELETE_NOOP_EVENT
-        assert events[0]["request_id"] == "REQ-NOOP"
+        assert events[0] == {
+            "event": COMPENSATING_DELETE_NOOP_EVENT,
+            "uuid": published["uuid"],
+            "request_id": "REQ-NOOP",
+            "retry": 0,
+            "publish_error_type": "PublishFailed",
+        }
 
     async def it_writes_a_failure_log_record_and_still_raises_when_the_delete_itself_fails(
         self,
@@ -227,13 +234,16 @@ class DescribeTheCompensatingDelete:
                     retry=2,
                 )
 
+        published = producer.messages(REIMBURSEMENT_TOPIC)[0]
         records = _failure_records(caplog)
         assert len(records) == 1
         record = records[0]
         assert record["event"] == COMPENSATING_DELETE_FAILED_EVENT
+        assert record["uuid"] == published["uuid"]
         assert record["request_id"] == "REQ-DELETE-FAILS"
         assert record["item"] == item
         assert record["retry"] == 2
         assert record["publish_error_type"] == "PublishFailed"
+        assert "broker unreachable" in record["publish_error"]
         assert record["delete_error_type"] == "PostgresConnectionError"
         assert "connection reset" in record["delete_error"]
