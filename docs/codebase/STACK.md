@@ -68,6 +68,7 @@
 - `api`, `reimbursement`, and `publisher` bind-mount their own `packages/<pkg>` directory plus `packages/shared` for hot reload in the `dev` Docker target.
 - API: `http://localhost:8000` (`/health`). LangFuse: `http://localhost:3000`.
 - Test suite needs no running stack — `testcontainers` starts and tears down its own throwaway Postgres/Kafka.
+- `.env` is bind-mounted read-only into `api`/`publisher`/`reimbursement` at container runtime (`./.env:/app/.env:ro`) — deliberately not into `migrate`, which only reads `DATABASE_URL`, already supplied via its own compose `environment:` block. Each service's own `docker-compose.yml` `environment:` block is otherwise pruned to a topology-only allowlist (values like `kafka:19092` that are only ever correct inside the Docker network) — see `INTEGRATIONS.md` for the full per-integration breakdown.
 
 ## Environment Configuration
 
@@ -86,5 +87,6 @@
 | `ANALYSIS_TEMPERATURE` | `analysis`'s model temperature — optional, defaults to `0.0` |
 | `DATABASE_POOL_MAX_SIZE` | Shared Postgres pool's max size (default `20`) — raise this in step with `PUBLISHER_ITEM_CONCURRENCY` to avoid connection starvation under load (R-005) |
 | `LANGFUSE_POSTGRES_PASSWORD`, `SALT`, `ENCRYPTION_KEY`, `NEXTAUTH_SECRET`, `CLICKHOUSE_PASSWORD`, `REDIS_AUTH`, `MINIO_ROOT_PASSWORD`, `LANGFUSE_S3_*_SECRET_ACCESS_KEY` | LangFuse stack's own infra credentials |
-| `LANGFUSE_INIT_PROJECT_SECRET_KEY`, `LANGFUSE_INIT_USER_PASSWORD` | LangFuse first-boot bootstrap credentials; `reimbursement`'s decision graph authenticates with the same project key pair (`LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY`/`LANGFUSE_HOST`, passed to the `reimbursement` service in `docker-compose.yml`) |
+| `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | LangFuse project key pair `reimbursement`'s decision graph authenticates with — read by `langfuse.langchain.CallbackHandler()` straight from the process environment. `LANGFUSE_PUBLIC_KEY` must stay in sync with `docker-compose.yml`'s `x-langfuse-public-key` anchor, enforced by `packages/api/tests/test_dotenv_config_parity.py` |
+| `LANGFUSE_INIT_PROJECT_SECRET_KEY`, `LANGFUSE_INIT_USER_PASSWORD` | LangFuse first-boot bootstrap credentials for the `langfuse-web` service |
 | `TEST_DATABASE_URL` | Points the test suite at a supplied Postgres server instead of a throwaway container |

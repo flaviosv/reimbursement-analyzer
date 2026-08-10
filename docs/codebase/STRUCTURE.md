@@ -81,6 +81,13 @@
 │                   └── review_reimbursement.py # approve_reimbursement(), reject_reimbursement() — the approve/reject transaction
 │           ├── signals.py         # install_shutdown_handlers() — SIGINT/SIGTERM → asyncio.Event (used by reimbursement only so far)
 │           └── testing.py         # FakeProducer — the one test double genuinely reused across service test suites
+├── tests/e2e/                  # Real-docker-compose-stack, real-Groq e2e suite (@pytest.mark.e2e, excluded by default)
+│   ├── conftest.py               # Env loading + stack-readiness gate (poll-and-fail-fast; never starts/stops the stack)
+│   ├── polling.py                 # wait_for_status, find_uuid_by_request_id
+│   ├── payload_builders.py        # Per-bucket payload fixtures engineered for unambiguous real-model steering
+│   ├── langfuse_helper.py         # trace_exists_for_session — polls LangFuse's observations API
+│   └── test_{happy_path,auto_reject,human_review,retry_ghost_stale}.py  # One file per decision-outcome bucket
+├── conftest.py                 # Workspace-level Postgres fixture (shared by every package's tests) + the e2e collection-skip hook
 ├── docker-compose.yml          # Full local stack (app infra + LangFuse + 3 services)
 ├── pyproject.toml              # Workspace root — pytest config, dev dependency group
 └── uv.lock
@@ -171,6 +178,8 @@
 **`.specs/`:** `tlc-spec-driven`'s working memory — `STATE.md` (append-only architectural decision log, `AD-NNN`), `features/<name>/` (per-feature spec/design/tasks). Not part of this context set; see the root `CLAUDE.md`/`AGENTS.global.md` for how to use it.
 
 **`docs/original/`:** the sample reimbursement request dataset (`sample.json`) that several documented sizing decisions (body ceiling, batch cardinality) are calibrated against.
+
+**`tests/e2e/`:** real-stack, no-fakes e2e suite — drives the real `docker compose` stack through its external HTTP/Kafka surfaces only, no `TestClient`/`dependency_overrides`/direct DB access from test code. Gated behind `@pytest.mark.e2e`, excluded by default via both `pyproject.toml`'s `addopts` and root `conftest.py`'s structural collection hook — see `TESTING.md`.
 
 ## Monorepo Package Map
 

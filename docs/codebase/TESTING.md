@@ -41,6 +41,8 @@
 
 Docker must be running for the default `postgres`/`kafka` container fixtures; if it is not, the suite fails with one explanatory message rather than dozens of connection errors.
 
+Root `conftest.py` (repo root, not any package's own) also registers a `pytest_collection_modifyitems` hook that skips any `e2e`-marked item unless `-m` explicitly opts in with a positive `e2e` selector — not merely an expression that happens to lack `not e2e`. This is a structural backstop alongside `pyproject.toml`'s `addopts = "--import-mode=importlib -m \"not e2e\""` default, specifically for a developer who types a custom `-m` expression by hand (e.g. `-m "not integration"`) without remembering `and not e2e`: without the hook, that expression would also collect e2e tests and trigger a real-Groq run by accident.
+
 ## Coverage Targets
 
 No coverage tool or enforced target exists. Coverage is a byproduct of the `Describe*`/`it_*` convention (each behavior gets its own named test), not a measured metric.
@@ -80,7 +82,7 @@ No coverage tool or enforced target exists. Coverage is a byproduct of the `Desc
 | `shared.db.managed_pool` lifecycle | Unit | `packages/shared/tests/test_db.py` | `uv run pytest -m "not integration"` |
 | Get-detail endpoint (route, use case) | Unit + route-level | `packages/api/tests/reimbursement/get/test_route.py`, `packages/shared/tests/reimbursement/use_cases/test_get_reimbursement.py` | `uv run pytest -m "not integration"` |
 | Decision logic — auto-approve/reject/human-review policy (`reimbursement/agent/`) | Unit (fakes), one file per node + full-graph wiring | `packages/reimbursement/tests/{test_extract_fields,test_validate,test_apply_policies,test_analysis,test_apply_agent_decision,test_agent,test_langfuse}.py` | `uv run pytest -m "not integration"` |
-| Docker-compose / `.env.sample` config parity (topology allowlist + required-var coverage) | Unit | `packages/api/tests/test_dotenv_config_parity.py` | `uv run pytest -m "not integration"` |
+| Docker-compose / `.env.sample` config parity (topology allowlist + required-var coverage + LangFuse public-key/compose-anchor sync) | Unit | `packages/api/tests/test_dotenv_config_parity.py` | `uv run pytest -m "not integration"` |
 | E2E cross-service pipeline (auto-approve + traceability, auto-reject, human-review + both PUT resolutions, retry-ceiling, ghost, stale) | E2E (`@pytest.mark.e2e`, real stack, real Groq) | `tests/e2e/test_{happy_path,auto_reject,human_review,retry_ghost_stale}.py` | `uv run pytest -m e2e` |
 
 ## Parallelism Assessment

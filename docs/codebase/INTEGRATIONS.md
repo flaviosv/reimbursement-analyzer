@@ -53,4 +53,6 @@
 | --- | --------- | ------- |
 | `migrate` | Once per stack startup (one-shot compose service) | Applies pending SQL migrations before `api`/`reimbursement`/`publisher` start; every dependent service waits on `service_completed_successfully` |
 
+Unlike `api`/`publisher`/`reimbursement`, `migrate` does NOT receive the `.env` read-only bind mount — it only ever reads `DATABASE_URL`, already supplied directly via its own `docker-compose.yml` `environment:` block, so mounting the full `.env` secret set into a one-shot container would be unnecessary exposure (security-scoping fix).
+
 No recurring/scheduled jobs exist. `migrate` is not a queue-backed job — it is a single compose service, gated by dependency ordering, not a cron/queue system.
