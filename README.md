@@ -33,7 +33,7 @@ cp .env.sample .env
 
 The defaults in `.env.sample` are self-contained placeholders and work as-is for local dev — no edits needed to bring the stack up. They are deliberately weak/guessable and must never be reused outside a local machine (see the warning at the top of the file).
 
-Every service loads `.env` through [python-dotenv](https://pypi.org/project/python-dotenv/) at start-up, so running one directly (`uv run python -m api.migrate`) picks up the same configuration Compose injects. Real environment variables always win over the file, so a container's settings are never overridden by a stray local `.env`.
+Every service loads `.env` through [python-dotenv](https://pypi.org/project/python-dotenv/) at start-up — including inside a container: `docker-compose.yml` bind-mounts the repo-root `.env` read-only into `api`, `publisher`, `reimbursement`, and `migrate` (`./.env:/app/.env:ro`), so `load_dotenv()` resolves the real file there too, not a no-op. `docker-compose.yml`'s own `environment:` blocks carry only the handful of Docker-network-topology values a shared `.env` file cannot correctly hold either way (`KAFKA_BOOTSTRAP_SERVERS`, `DATABASE_URL`, and — for `reimbursement` — `LANGFUSE_HOST`), since a hostname like `kafka:19092` is only ever correct inside the Docker network, never on the host. `.dockerignore` still excludes `.env` from every build context, so `docker build` (no compose) never bakes it into an image; the mount is compose-only and runtime-only. Running a service directly on the host (`uv run python -m api.migrate`) picks up the same file the normal way. Real environment variables always win over the file, so a container's settings are never overridden by a stray local `.env`.
 
 ## Run
 
@@ -122,3 +122,17 @@ TEST_DATABASE_URL=postgresql://user:pw@host:5432/postgres uv run pytest
 ```
 
 The URL names a *server*, not a database. Every run creates its own `reimbursementanalyzer_<pid>_<random>_test` database on it and drops it afterwards, so two runs — or two `pytest-xdist` workers — against one server cannot collide. The suite drops databases `WITH (FORCE)`, which terminates whatever is attached to them, so it only ever touches a name it generated and refuses any target not ending in `_test`.
+
+### End-to-end suite
+
+`tests/e2e/` drives a real, already-running `docker compose` stack through its external surfaces only (HTTP for `api`, a direct Kafka producer for the 3 branches that need a hand-crafted message) — no `TestClient`, no fakes, real Groq calls. It's excluded from every other gate above (`@pytest.mark.e2e`, registered with a default `-m "not e2e"` in `pyproject.toml`'s `addopts`), since it's slow, costs real API calls, and needs external state up first:
+
+```bash
+cp .env.sample .env   # if not already done, with a real GROQ_API_KEY filled in
+docker compose up -d
+uv run pytest -m e2e
+```
+
+The suite never starts or stops the stack itself — it polls `api`'s `/health`, Kafka, and LangFuse for a bounded timeout and fails with a named diagnostic if one isn't reachable, rather than shelling out `docker compose up` on a developer's behalf. A real `GROQ_API_KEY` in `.env` is required; the suite fails fast with a clear message if it's unset, rather than hanging on a live call. Each run creates its own uuid-suffixed `request_id`s but leaves those rows in the persistent dev database — unlike every other integration test above, this one has no ephemeral container to tear down, so repeated local runs accumulate data (accepted, dev-only).
+
+Passing an explicit `-m` on the command line replaces `addopts`' own default rather than adding to it, so `uv run pytest -m "not integration"` also collects `e2e`-marked tests once any exist — use `uv run pytest -m "not integration and not e2e"` for the Kafka-free-but-no-real-stack gate instead.

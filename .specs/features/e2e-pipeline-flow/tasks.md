@@ -402,9 +402,9 @@ T13 → T14
 - Skill: NONE
 
 **Done when**:
-- [ ] The existing "Every service loads `.env` through python-dotenv..." paragraph is corrected to describe the mount, not passive host-only loading
-- [ ] A new section/paragraph documents the `e2e` marker, its prerequisites, and its command
-- [ ] Read through once for accuracy against the actual shipped `docker-compose.yml`/`pyproject.toml`
+- [x] The existing "Every service loads `.env` through python-dotenv..." paragraph is corrected to describe the mount, not passive host-only loading
+- [x] A new section/paragraph documents the `e2e` marker, its prerequisites, and its command
+- [x] Read through once for accuracy against the actual shipped `docker-compose.yml`/`pyproject.toml`
 
 **Tests**: none (docs)
 **Gate**: build (read-through only)
