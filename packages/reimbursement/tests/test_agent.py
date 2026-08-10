@@ -311,14 +311,18 @@ class DescribeBuildGraph:
         monkeypatch.setenv("AI_TIMEOUT_SECONDS", "12")
 
         calls: list[dict] = []
+        instances: list["_StubChatModel"] = []
 
         class _StubChatModel:
             def with_structured_output(self, schema: object) -> "_StubChatModel":
+                self.schema = schema
                 return self
 
         def _spy_init_chat_model(model: str, **kwargs: object) -> _StubChatModel:
             calls.append({"model": model, **kwargs})
-            return _StubChatModel()
+            instance = _StubChatModel()
+            instances.append(instance)
+            return instance
 
         monkeypatch.setattr(agent, "init_chat_model", _spy_init_chat_model)
 
@@ -326,6 +330,7 @@ class DescribeBuildGraph:
 
         assert len(calls) == 2
         extract_call, analysis_call = calls
+        extract_instance, analysis_instance = instances
         assert extract_call["model"] == "groq:model-a"
         assert extract_call["temperature"] == 0.1
         assert analysis_call["model"] == "groq:model-b"
@@ -338,6 +343,11 @@ class DescribeBuildGraph:
         # distinct constructed model instances, not one shared instance
         # whose value happens to be read twice.
         assert extract_call["model"] != analysis_call["model"]
+        # Proves the two structured-output schemas are bound to the right
+        # node, not swapped — a schema swap between extract_fields/analysis
+        # would silently pass every other assertion here.
+        assert extract_instance.schema is ExtractedFieldsSchema
+        assert analysis_instance.schema is GuardrailVerdict
 
 
 class DescribeDecide:
