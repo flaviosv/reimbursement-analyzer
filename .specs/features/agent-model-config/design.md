@@ -1,7 +1,7 @@
 # Agent Model Config Design
 
 **Spec**: `.specs/features/agent-model-config/spec.md`
-**Status**: Draft
+**Status**: Implemented — see `validation.md`
 
 ---
 
