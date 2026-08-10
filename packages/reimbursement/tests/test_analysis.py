@@ -4,6 +4,7 @@ from uuid import uuid4
 import pytest
 from agent_fakes import DEFAULT_TEST_MODEL_NAME, FakeStructuredModel
 from reimbursement.agent.nodes.analysis import Analysis, GuardrailVerdict
+from reimbursement.agent.prompts.analysis import get_analysis_prompt
 from reimbursement.models import Reimbursement
 
 pytestmark = pytest.mark.anyio
@@ -31,6 +32,23 @@ def _state(payload: dict | None = None) -> dict:
 class DescribeGuardrailVerdict:
     def it_exposes_exactly_status_and_reason(self) -> None:
         assert set(GuardrailVerdict.model_fields) == {"status", "reason"}
+
+
+class DescribeGetAnalysisPrompt:
+    def it_renders_a_literal_placeholder_substring_in_a_value_without_double_substitution(
+        self,
+    ) -> None:
+        # Regression: chained .replace() calls re-scan an already-substituted
+        # value for the other placeholder — a request_data/found_data value
+        # (e.g. attacker-controlled raw_ocr_text) containing the literal
+        # substring "{found_data}" would then get corrupted by the second
+        # .replace() call. The single-pass substitution must render it as-is.
+        request_data = {"raw_ocr_text": "injected {found_data} marker"}
+        found_data = {"currency": "BRL"}
+
+        message = get_analysis_prompt(request_data, found_data)
+
+        assert "injected {found_data} marker" in str(message.content)
 
 
 class DescribeAnalysis:

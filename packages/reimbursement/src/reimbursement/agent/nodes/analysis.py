@@ -37,9 +37,9 @@ class Analysis:
 
         extracted = state["extracted"]
         found_data = {
-            "currency": extracted.get("currency"),
-            "receipt_date": extracted.get("receipts_date"),
-            "receipt_value": extracted.get("value"),
+            "currency": extracted["currency"],
+            "receipt_date": extracted["receipts_date"],
+            "receipt_value": extracted["value"],
         }
 
         payload = state["reimbursement"].original_payload

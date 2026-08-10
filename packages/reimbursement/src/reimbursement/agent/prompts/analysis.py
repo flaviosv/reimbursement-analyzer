@@ -2,7 +2,13 @@
 Sees both the resolved `found_data` fields (receipt_value/currency/
 receipt_date) and the original `request_data` payload, so it can compare the
 deterministic extraction against the requester's raw submission — the
-specific checks it runs are deliberately left open by spec.md."""
+specific checks it runs are deliberately left open by spec.md.
+
+One concern here: 1MB of `request_data` can exceed the token limit, add a
+layer to send to human review. Known, accepted limitation — not fixed here,
+see docs/SCOPE.md's "What i would have done better" list."""
+
+import re
 
 from langchain_core.messages import SystemMessage
 
@@ -112,11 +118,20 @@ claimed_category and the place name meets, the total as well and the currency, t
 </examples>
 """
 
+_PLACEHOLDER_PATTERN = re.compile(r"\{found_data\}|\{request_data\}")
+
+
 def get_analysis_prompt(request_data, found_data) -> SystemMessage:
     """Renders the guardrail system prompt (AGD-17..20) for the original
-    request payload and the deterministic layer's found fields."""
-    return SystemMessage(
-        content=_ANALYSIS_PROMPT.replace("{request_data}", str(request_data)).replace(
-            "{found_data}", str(found_data)
-        )
-    )
+    request payload and the deterministic layer's found fields.
+
+    Substitution is single-pass over the original template: a `request_data`/
+    `found_data` value could itself contain the literal substring
+    "{found_data}" or "{request_data}" (e.g. via attacker-controlled
+    raw_ocr_text), and re-scanning a value already substituted in would
+    double-substitute it — chained `str.replace()` calls would do exactly
+    that.
+    """
+    values = {"{found_data}": str(found_data), "{request_data}": str(request_data)}
+    content = _PLACEHOLDER_PATTERN.sub(lambda match: values[match.group()], _ANALYSIS_PROMPT)
+    return SystemMessage(content=content)
