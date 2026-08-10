@@ -9,9 +9,21 @@ from reimbursement.models import Reimbursement
 pytestmark = pytest.mark.anyio
 
 
-def _state() -> dict:
+_PAYLOAD = {
+    "request_id": "REQ-0001",
+    "submitted_by": "ana.silva@company.com",
+    "submitted_at": "2026-04-10T09:15:00Z",
+    "raw_ocr_text": "BOM SABOR RESTAURANT LTD\nDATE 09/04/2026\nTOTAL R$ 93.50",
+    "claimed_category": "meals",
+    "claimed_amount_brl": 93.5,
+}
+
+
+def _state(payload: dict | None = None) -> dict:
     return {
-        "reimbursement": Reimbursement(uuid=uuid4(), original_payload={}),
+        "reimbursement": Reimbursement(
+            uuid=uuid4(), original_payload=payload if payload is not None else {}
+        ),
         "extracted": {"value": 1000, "currency": "BRL", "receipts_date": None},
     }
 
@@ -76,3 +88,44 @@ class DescribeAnalysis:
 
         with pytest.raises(RuntimeError, match="groq unreachable"):
             await node(_state(), {"configurable": None})
+
+    async def it_includes_found_datas_mapped_values_in_the_rendered_prompt(self) -> None:
+        # AGT-01: extracted's internal field names (value/receipts_date) must
+        # be translated to the prompt's documented names (receipt_value/
+        # receipt_date) before reaching the model.
+        model = FakeStructuredModel(result=GuardrailVerdict(consistent=True, reason="ok"))
+        node = Analysis(model=model, model_name=DEFAULT_TEST_MODEL_NAME)
+
+        await node(_state(_PAYLOAD), {"configurable": None})
+
+        assert len(model.calls) == 1
+        rendered = " ".join(str(message.content) for message in model.calls[0])
+        assert "1000" in rendered
+        assert "BRL" in rendered
+        assert "{found_data}" not in rendered
+
+    async def it_includes_request_datas_payload_values_in_the_rendered_prompt(self) -> None:
+        # AGT-01: the original (PII-stripped) payload must reach the prompt
+        # as request_data so the guardrail can compare it against found_data.
+        model = FakeStructuredModel(result=GuardrailVerdict(consistent=True, reason="ok"))
+        node = Analysis(model=model, model_name=DEFAULT_TEST_MODEL_NAME)
+
+        await node(_state(_PAYLOAD), {"configurable": None})
+
+        assert len(model.calls) == 1
+        rendered = " ".join(str(message.content) for message in model.calls[0])
+        # str(dict) escapes newlines, so raw_ocr_text is checked line-by-line.
+        assert _PAYLOAD["raw_ocr_text"].splitlines()[0] in rendered
+        assert str(_PAYLOAD["claimed_amount_brl"]) in rendered
+        assert "{request_data}" not in rendered
+
+    async def it_never_includes_submitted_by_in_the_rendered_prompt(self) -> None:
+        # AGD-26: submitted_by (PII) must not reach the analysis prompt.
+        model = FakeStructuredModel(result=GuardrailVerdict(consistent=True, reason="ok"))
+        node = Analysis(model=model, model_name=DEFAULT_TEST_MODEL_NAME)
+
+        await node(_state(_PAYLOAD), {"configurable": None})
+
+        assert len(model.calls) == 1
+        rendered = " ".join(str(message.content) for message in model.calls[0])
+        assert _PAYLOAD["submitted_by"] not in rendered

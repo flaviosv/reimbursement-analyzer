@@ -1,7 +1,8 @@
 """Guardrail/consistency-check prompt — the ambiguous-zone judge (AGD-17..20).
-Only sees the resolved `extracted` fields (value/currency/receipts_date), not
-the original payload — the specific checks it runs are deliberately left
-open by spec.md; this prompt exercises plausibility on what it can see."""
+Sees both the resolved `found_data` fields (receipt_value/currency/
+receipt_date) and the original `request_data` payload, so it can compare the
+deterministic extraction against the requester's raw submission — the
+specific checks it runs are deliberately left open by spec.md."""
 
 from langchain_core.messages import SystemMessage
 
@@ -27,6 +28,11 @@ ReimbursementAnalyzer - Reimbursement Analysis - Data Analysis
 
 <processing_guardrails>
 - Your role is limited to evaluating if the payload has enough and consistent data in order to define the status of the Reimbursement
+- The <request_data> section has the payload sent by the requester
+- The <found_data> section contains the data already found by a deterministic layer
+    - currency: It's the money representation of a nation, like BRL for Brazil, US Dollars for the US. It can be attached to the Receipt Value or found elsewhere
+    - receipt_date: When the Receipt has been placed, like a Hotel checkout date, or the date that the requester purchased an item
+    - receipt_value: Total cost of the receipt, it can also be used to extract currency, it must be a numeric field, it can be in a raw field or inside of other string
 </processing_guardrails>
 
 <goals>
@@ -38,9 +44,12 @@ ReimbursementAnalyzer - Reimbursement Analysis - Data Analysis
     - reason: a summary of why you decided on the status, you must be brief and explicit about why you decided on the recommended status
 </goals>
 
+<found_data>
+{found_data}
+</found_data>
+
 <request_data>
 {request_data}
-# One concern here: 1MB of data can exceed the token limit, add a layer to send to human review
 </request_data>
 
 <uncertainty>
@@ -48,13 +57,66 @@ ReimbursementAnalyzer - Reimbursement Analysis - Data Analysis
 </uncertainty>
 
 <examples>
-# Gonna add some examples here of input and output
-# This section will have examples of good and bad inputs / outputs
+# Example 1 - Payload with conflicted information
+
+Note that the claimed_category is transport and the raw_ocr_text has a Restaurant as the name, this is a conflict and should be reviewed by a human
+
+{
+    "request_id": ".",
+    "submitted_by": ".",
+    "submitted_at": ".",
+    "raw_ocr_text": "BOM SABOR RESTAURANT LTD\nTAX ID 12.345.678/0001-90\nDATE 09/04/2026\nBUSINESS LUNCH\n2 X EXECUTIVE MEAL R$ 42.50\nSUBTOTAL R$ 85.00\nSERVICE 10% R$ 8.50\nTOTAL R$ 93.50",
+    "claimed_category": "transport",
+    "claimed_amount_brl": 93.5
+}
+
+# Example 2 - Payload with conflicted information
+
+Note that the claimed_amount_brl is different from the total in the raw_ocr_text, this is a conflict and should be reviewed by a human
+
+{
+    "request_id": ".",
+    "submitted_by": ".",
+    "submitted_at": ".",
+    "raw_ocr_text": "BOM SABOR RESTAURANT LTD\nTAX ID 12.345.678/0001-90\nDATE 09/04/2026\nBUSINESS LUNCH\n2 X EXECUTIVE MEAL R$ 42.50\nSUBTOTAL R$ 85.00\nSERVICE 10% R$ 8.50\nTOTAL R$ 103.50",
+    "claimed_category": "meals",
+    "claimed_amount_brl": 93.5
+}
+
+# Example 3 - Payload with conflicted information
+
+The claimed_amount_brl has the currency BRL, but the Total has USD, this is a invalid payload and should be reviewed by a human
+
+{
+    "request_id": ".",
+    "submitted_by": ".",
+    "submitted_at": ".",
+    "raw_ocr_text": "BOM SABOR RESTAURANT LTD\nTAX ID 12.345.678/0001-90\nDATE 09/04/2026\nBUSINESS LUNCH\n2 X EXECUTIVE MEAL R$ 42.50\nSUBTOTAL R$ 85.00\nSERVICE 10% R$ 8.50\nTOTAL USD$ 103.50",
+    "claimed_category": "meals",
+    "claimed_amount_brl": 103.5
+}
+
+Example 4 - Payload with no conflict
+
+claimed_category and the place name meets, the total as well and the currency, this is a valid payload and can be evaluated by the system
+
+{
+    "request_id": ".",
+    "submitted_by": ".",
+    "submitted_at": ".",
+    "raw_ocr_text": "BOM SABOR RESTAURANT LTD\nTAX ID 12.345.678/0001-90\nDATE 09/04/2026\nBUSINESS LUNCH\n2 X EXECUTIVE MEAL R$ 42.50\nSUBTOTAL R$ 85.00\nSERVICE 10% R$ 8.50\nTOTAL RS$ 103.50",
+    "claimed_category": "meals",
+    "claimed_amount_brl": 103.5
+}
+
 </examples>
 """
 
-def get_analysis_prompt(request_data) -> SystemMessage:
-    """Renders the guardrail system prompt (AGD-17..20) for the resolved `extracted` fields."""
+def get_analysis_prompt(request_data, found_data) -> SystemMessage:
+    """Renders the guardrail system prompt (AGD-17..20) for the original
+    request payload and the deterministic layer's found fields."""
     return SystemMessage(
-        content=_ANALYSIS_PROMPT.replace("{request_data}", str(request_data))
+        content=_ANALYSIS_PROMPT.replace("{request_data}", str(request_data)).replace(
+            "{found_data}", str(found_data)
+        )
     )

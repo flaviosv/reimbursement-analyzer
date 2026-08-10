@@ -34,7 +34,18 @@ class Analysis:
         logger.info("FLOW: Executing 'analysis' node uuid=%s", uuid)
 
         extracted = state["extracted"]
-        messages = [get_analysis_prompt(extracted)]
+        found_data = {
+            "currency": extracted.get("currency"),
+            "receipt_date": extracted.get("receipts_date"),
+            "receipt_value": extracted.get("value"),
+        }
+
+        payload = state["reimbursement"].original_payload
+        # AGD-26: submitted_by is PII and must never reach the analysis
+        # prompt — mirrors extract_fields.py's existing pattern.
+        request_data = {key: value for key, value in payload.items() if key != "submitted_by"}
+
+        messages = [get_analysis_prompt(request_data, found_data)]
         verdict = await self._model.ainvoke(messages)
 
         status = "auto-approved" if verdict.consistent else "human-review"
