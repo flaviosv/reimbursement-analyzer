@@ -5,6 +5,8 @@
 !docs/**
 !packages
 !packages/**
+!tests
+!tests/**
 !.gitignore
 !CLAUDE.md
 !README.md
