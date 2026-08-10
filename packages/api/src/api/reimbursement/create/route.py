@@ -1,8 +1,10 @@
+import json
 import logging
 
 from confluent_kafka.aio import AIOProducer
 from fastapi import APIRouter, Depends, Request
 from shared.config import MAX_BODY_BYTES, load_config
+from shared.errors import BatchInvalid
 from shared.logging import log_event
 
 from api.dependencies import get_producer
@@ -15,6 +17,21 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 BATCH_ACCEPTED_EVENT = "reimbursement.batch_accepted"
+BATCH_REJECTED_EVENT = "reimbursement.batch_rejected"
+
+
+def _lenient_request_ids(raw: bytes) -> list[str | None]:
+    """Best-effort request_id extraction for a batch that failed validation
+    — the body may not even be a JSON array of objects. Mirrors
+    publisher.processing's own lenient-extraction shape for the same
+    "body might not be structured" problem; never raises."""
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [item.get("request_id") if isinstance(item, dict) else None for item in parsed]
 
 
 @router.post(
@@ -44,7 +61,17 @@ async def create_reimbursement(
     every failure mode is still a raise from one of the three collaborators,
     caught by the app-wide handlers registered in errors.py."""
     raw = await read_capped(request)
-    batch = validate_batch(raw)
+    try:
+        batch = validate_batch(raw)
+    except BatchInvalid as exc:
+        log_event(
+            logger,
+            logging.INFO,
+            BATCH_REJECTED_EVENT,
+            request_ids=_lenient_request_ids(raw),
+            reason=str(exc),
+        )
+        raise
     request_ids = [item.request_id for item in batch]
     accepted_count = len(batch)
     # The parsed model graph is only needed for request_ids/accepted_count
