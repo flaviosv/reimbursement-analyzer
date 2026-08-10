@@ -166,6 +166,36 @@ same drift can reappear the moment a service gains a new config var.
 
 ---
 
+### P1: Analysis guardrail node wires `found_data` and `request_data` into its prompt ⭐ MVP
+
+**User Story**: As a maintainer, I want the `analysis` node (the ambiguous-zone
+guardrail, AGD-17..20) to actually populate both `{found_data}` and
+`{request_data}` in its prompt template with the fields the prompt itself
+documents, so the guardrail can compare the resolved extraction against what
+was actually submitted, instead of silently judging on an incomplete or
+unsubstituted prompt.
+
+**Why P1**: Discovered mid-implementation of this feature (the prompt in
+`prompts/analysis.py` was updated to document a `<found_data>` section with
+`currency`/`receipt_date`/`receipt_value` fields and reference
+`{found_data}` in its template, but `get_analysis_prompt`/`Analysis.__call__`
+never substituted that placeholder and never passed the original payload at
+all — only the resolved `extracted` dict, mislabeled as `request_data`).
+Without this fix, the guardrail cannot function as the prompt itself
+describes, and `E2E-04`/`E2E-05`/`E2E-06`'s real-Groq human-review tests
+cannot validate real guardrail behavior — this blocks Phase 3 of the e2e
+suite, not just a documentation nit.
+
+**Acceptance Criteria**:
+
+1. WHEN the `analysis` node builds its prompt THEN it SHALL populate the `{found_data}` placeholder with the resolved `extracted` fields rendered under the prompt's own documented names — `currency`, `receipt_date` (from `extracted["receipts_date"]`), `receipt_value` (from `extracted["value"]`) — translated only at this prompt-building boundary; the internal `ExtractedFields` TypedDict and every other consumer of it (`validate.py`, `apply_policies.py`, persistence) keep their existing field names unchanged.
+2. WHEN the same prompt is built THEN it SHALL populate the `{request_data}` placeholder with the reimbursement's original submitted payload (`state["reimbursement"].original_payload`), with `submitted_by` (PII) stripped before it reaches the prompt — mirroring `extract_fields`'s existing AGD-26 PII-stripping precedent.
+3. WHEN a unit test inspects the rendered prompt content THEN it SHALL assert the found_data's mapped values (`currency`/`receipt_date`/`receipt_value`) and the request_data's payload values (e.g. `raw_ocr_text`, `claimed_amount_brl`) are both present in the rendered prompt, and that `submitted_by`'s value is absent.
+
+**Independent Test**: Unit test (`test_analysis.py`) asserting the rendered `SystemMessage` content contains the found_data's mapped values and the request_data's payload values, and excludes `submitted_by`.
+
+---
+
 ### P1: E2E happy path — auto-approve, real Groq, traceable ⭐ MVP
 
 **User Story**: As a developer, I want one real, live-Groq-backed test that a
@@ -287,6 +317,7 @@ proving the pipeline correct.
 | ENV-02          | P1: `docker-compose.yml` environment blocks pruned to topology-only | Design | Pending |
 | ENV-03          | P1: `.env.sample` directly names every var the code reads (LangFuse key) | Design | Pending |
 | ENV-04          | P1: Automated regression guard for dotenv-first config         | Design | Pending |
+| AGT-01          | P1: Analysis guardrail node wires `found_data`/`request_data` into its prompt | Design | Pending |
 | E2E-01          | P1: E2E happy path — auto-approve                               | Design | Pending |
 | E2E-02          | P1: E2E happy path — traceability (LangFuse)                    | Design | Pending |
 | E2E-03          | P1: E2E auto-reject path                                        | Design | Pending |

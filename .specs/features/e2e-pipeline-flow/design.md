@@ -138,6 +138,14 @@ sequenceDiagram
 | `tests/e2e/test_human_review.py` | E2E-04, E2E-05, E2E-06 |
 | `tests/e2e/test_retry_ghost_stale.py` | E2E-07, E2E-08, E2E-09 |
 
+### `reimbursement/agent/nodes/analysis.py` + `agent/prompts/analysis.py` (AGT-01)
+
+- **Purpose**: Fix the guardrail's prompt wiring — discovered mid-implementation, not part of the original ENV/E2E scope, but blocking `E2E-04/05/06`'s real-Groq validation.
+- **Location**: `packages/reimbursement/src/reimbursement/agent/{nodes,prompts}/analysis.py`, tests in `packages/reimbursement/tests/test_analysis.py`.
+- **Change**: `Analysis.__call__` builds a `found_data` dict translating `extracted`'s internal field names (`value`, `currency`, `receipts_date`) into the prompt's own documented names (`receipt_value`, `currency`, `receipt_date`) — a boundary-only translation, no rename of the internal `ExtractedFields` TypedDict or its other consumers (`validate.py`, `apply_policies.py`). It also now passes `state["reimbursement"].original_payload` (PII-stripped of `submitted_by`, mirroring `extract_fields`'s existing AGD-26 pattern) as `request_data`. `get_analysis_prompt(request_data, found_data)` renders both via `.replace()` (not `.format()`, since the prompt's `<examples>` section contains literal JSON braces that `.format()` would choke on — same reasoning as the original single-placeholder version).
+- **Reuses**: `extract_fields.py`'s existing PII-stripping pattern (AGD-26) and its `.replace()`-based prompt rendering.
+- **Out of scope**: renaming `ExtractedFields`' internal field names (`value`/`receipts_date`) anywhere outside this prompt-building boundary — grep confirmed `receipts_date` is a genuine domain-wide field name (`validate.py`, `apply_policies.py`, API response schema, DB repository), not an artifact isolated to the analysis prompt; renaming it there would be a large, unrelated blast radius.
+
 ### `packages/api/tests/test_dotenv_config_parity.py` (ENV-04)
 
 - **Purpose**: Parse `docker-compose.yml` + `.env.sample`; assert each of `api`/`publisher`/`reimbursement`'s `environment:` block contains **only** its topology allowlist, and that `.env.sample` defines every var each service's config loader reads.
