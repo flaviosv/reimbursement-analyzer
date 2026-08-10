@@ -392,7 +392,7 @@
 ## What i would have done with extra time
 - Run a detailed code review, making sure the architecture / design has better practices
     - I fully relied on agentic engineering, running code reviews, but the codebase is not small
-- I would have review the [Risks.md](RISKS.md), making sure would be ready for a launch
+- I would have review the [Risks.md](RISKS.md) and fixed some of the issues in there
 - I would have added authentication
 - Tested small / bigger models, in order to evaluate performance x cost x accuracy
 - The prompts could have received better instructions and testing layers
@@ -403,14 +403,15 @@
 - I would have prepared better my harness for this project, i made several adjusments to improve the performance and the cost savings in order to have better and performatic results
 - Improved the Human Review experience
 - I should have started by the Agent layer, not the API / Publishers, due to that i got out of enough time to better validate the prompts and nodes, also finding ways to save tokens and improve performance
-- Implement a validation on top of the Analysis layer, such as a LLM as judge 
 
 # Next Phases
 
 ## Phase 2
 Those are possible Phase 2 tasks 
+
 - Authentication
 - Human Review evaluator
     - Identify what are the most gaps going to Human Review, in order to improve the agent capabilities
-- Add an event structure to trigger to other topic when an event happen
+- Post results to Kafka topics, configurably
 - Improve the deterministic layer, reducing the chance of going to the probabilistic layer, saving tokens and resources
+- Added LLM as Judge in the `Analysis` layer

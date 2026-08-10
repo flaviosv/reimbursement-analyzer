@@ -31,8 +31,10 @@ async def publish_pending(
     publish_timeout_seconds: float,
     failure_log_config: FailureLogConfig,
     retry: int,
-) -> None:
+) -> UUID:
     """Insert `item`, let it commit, then publish its `Reimbursement` message.
+    Returns the minted `uuid` so the caller can log the request_id-to-uuid
+    correlation on success — this module adds no log call of its own.
 
     No transaction spans the publish (AD-033, amending AD-017 for this unit
     of work only): the insert commits on its own, well before the publish is
@@ -68,6 +70,7 @@ async def publish_pending(
     except Exception as exc:
         await _compensate(conn, uuid, item, retry, exc, failure_log_config)
         raise
+    return uuid
 
 
 async def _compensate(
