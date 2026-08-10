@@ -94,13 +94,28 @@ async def _escalate(deps: Dependencies, envelope: ReimbursementEnvelope) -> Mess
     """Preserve the row for a human, explained. Never publishes, never
     requeues: past the ceiling there is nothing left to retry. Never
     raises."""
+    return await _escalate_row(deps, envelope, envelope.errors)
+
+
+async def _escalate_row(
+    deps: Dependencies,
+    envelope: ReimbursementEnvelope,
+    errors: list[AttemptError],
+    *,
+    header: str = "Retry ceiling reached",
+    context: str = "",
+) -> MessageOutcome:
+    """The UPDATE-escalation shape shared by `_escalate` (retry-ceiling) and
+    `_escalate_decision_failure` (immediate decision-stage failure, AD-039):
+    acquire a connection, call `escalate_existing`, and handle the identical
+    ghost/write-failure/success outcomes. Never raises."""
     try:
         async with deps.pool.acquire(timeout=deps.config.database.acquire_timeout_seconds) as conn:
             result = await escalate_existing(
-                conn, envelope.uuid, envelope.errors, deps.config.failure_log.max_message_chars
+                conn, envelope.uuid, errors, deps.config.failure_log.max_message_chars, header=header
             )
     except Exception as exc:
-        logger.error("uuid=%s could not be escalated: %s", envelope.uuid, sanitize(exc))
+        logger.error("uuid=%s could not be escalated%s: %s", envelope.uuid, context, sanitize(exc))
         failure_log.write(
             deps.config.failure_log,
             _failure_record(ESCALATION_FAILED_EVENT, envelope, error=str(exc)),
@@ -108,8 +123,8 @@ async def _escalate(deps: Dependencies, envelope: ReimbursementEnvelope) -> Mess
         return MessageOutcome.LOGGED
 
     if result is None:
-        # Ghost + retry>3 (AGT-18): the UPDATE affected zero rows — nothing
-        # to escalate, but a durable record still needs to exist somewhere.
+        # Ghost (R-001): the UPDATE affected zero rows — nothing to
+        # escalate, but a durable record still needs to exist somewhere.
         failure_log.write(
             deps.config.failure_log,
             _failure_record(ESCALATION_FAILED_EVENT, envelope, reason="uuid has no matching row"),
@@ -198,38 +213,9 @@ async def _escalate_decision_failure(
     `escalate_existing`, carrying `envelope.errors` plus one new entry for
     this failure. Never raises."""
     errors = [*envelope.errors, AttemptError.from_exception(len(envelope.errors) + 1, "decide", exc)]
-    try:
-        async with deps.pool.acquire(timeout=deps.config.database.acquire_timeout_seconds) as conn:
-            result = await escalate_existing(
-                conn,
-                envelope.uuid,
-                errors,
-                deps.config.failure_log.max_message_chars,
-                header="Decision-stage failure",
-            )
-    except Exception as escalate_exc:
-        logger.error(
-            "uuid=%s could not be escalated after a decision failure: %s",
-            envelope.uuid,
-            sanitize(escalate_exc),
-        )
-        failure_log.write(
-            deps.config.failure_log,
-            _failure_record(ESCALATION_FAILED_EVENT, envelope, error=str(escalate_exc)),
-        )
-        return MessageOutcome.LOGGED
-
-    if result is None:
-        failure_log.write(
-            deps.config.failure_log,
-            _failure_record(ESCALATION_FAILED_EVENT, envelope, reason="uuid has no matching row"),
-        )
-        return MessageOutcome.LOGGED
-
-    logger.error(
-        json.dumps({"event": ESCALATED_EVENT, "uuid": str(envelope.uuid), "retry": envelope.retry})
+    return await _escalate_row(
+        deps, envelope, errors, header="Decision-stage failure", context=" after a decision failure"
     )
-    return MessageOutcome.ESCALATED
 
 
 async def _requeue(
