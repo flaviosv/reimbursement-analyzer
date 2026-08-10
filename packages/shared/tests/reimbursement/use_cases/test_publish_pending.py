@@ -1,5 +1,6 @@
 import json
 import logging
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -34,6 +35,28 @@ def _error(attempt: int) -> AttemptError:
     )
 
 
+async def _publish(
+    db: asyncpg.Connection,
+    producer: FakeProducer,
+    item: dict[str, Any],
+    errors: Sequence[AttemptError] = (),
+    *,
+    retry: int = 0,
+) -> None:
+    """Every test in this file calls `publish_pending` with the same fixed
+    `publish_timeout_seconds`/`failure_log_config` — only `errors`/`retry`
+    vary per test."""
+    await publish_pending(
+        db,
+        producer,
+        item,
+        list(errors),
+        publish_timeout_seconds=5.0,
+        failure_log_config=_FAILURE_LOG_CONFIG,
+        retry=retry,
+    )
+
+
 def _info_events(caplog: pytest.LogCaptureFixture) -> list[dict[str, Any]]:
     return [
         json.loads(record.message)
@@ -55,15 +78,7 @@ class DescribePublishPending:
         item = valid_reimbursement_item("REQ-PUBLISH-PENDING")
         producer = FakeProducer()
 
-        await publish_pending(
-            db,
-            producer,
-            item,
-            [],
-            publish_timeout_seconds=5.0,
-            failure_log_config=_FAILURE_LOG_CONFIG,
-            retry=0,
-        )
+        await _publish(db, producer, item)
 
         row = await db.fetchrow(
             "SELECT status, request_id FROM reimbursement WHERE request_id = $1",
@@ -75,15 +90,7 @@ class DescribePublishPending:
         item = valid_reimbursement_item("REQ-PUBLISH-UUID")
         producer = FakeProducer()
 
-        await publish_pending(
-            db,
-            producer,
-            item,
-            [],
-            publish_timeout_seconds=5.0,
-            failure_log_config=_FAILURE_LOG_CONFIG,
-            retry=0,
-        )
+        await _publish(db, producer, item)
 
         row = await db.fetchrow(
             "SELECT uuid FROM reimbursement WHERE request_id = $1", "REQ-PUBLISH-UUID"
@@ -102,15 +109,7 @@ class DescribePublishPending:
         producer = FakeProducer()
         history = [_error(1), _error(2)]
 
-        await publish_pending(
-            db,
-            producer,
-            item,
-            history,
-            publish_timeout_seconds=5.0,
-            failure_log_config=_FAILURE_LOG_CONFIG,
-            retry=0,
-        )
+        await _publish(db, producer, item, history)
 
         published = producer.messages(REIMBURSEMENT_TOPIC)[0]
         assert len(published["errors"]) == 2
@@ -123,15 +122,7 @@ class DescribeTheCompensatingDelete:
         producer = FakeProducer(errors={REIMBURSEMENT_TOPIC: RuntimeError("broker unreachable")})
 
         with pytest.raises(PublishFailed):
-            await publish_pending(
-                db,
-                producer,
-                item,
-                [],
-                publish_timeout_seconds=5.0,
-                failure_log_config=_FAILURE_LOG_CONFIG,
-                retry=1,
-            )
+            await _publish(db, producer, item, retry=1)
 
         row = await db.fetchrow(
             "SELECT * FROM reimbursement WHERE request_id = $1", "REQ-COMPENSATE"
@@ -146,15 +137,7 @@ class DescribeTheCompensatingDelete:
 
         with caplog.at_level(logging.INFO, logger=publish_pending_module.__name__):
             with pytest.raises(PublishFailed):
-                await publish_pending(
-                    db,
-                    producer,
-                    item,
-                    [],
-                    publish_timeout_seconds=5.0,
-                    failure_log_config=_FAILURE_LOG_CONFIG,
-                    retry=3,
-                )
+                await _publish(db, producer, item, retry=3)
 
         published = producer.messages(REIMBURSEMENT_TOPIC)[0]
         events = _info_events(caplog)
@@ -184,15 +167,7 @@ class DescribeTheCompensatingDelete:
 
         with caplog.at_level(logging.INFO, logger=publish_pending_module.__name__):
             with pytest.raises(PublishFailed):
-                await publish_pending(
-                    db,
-                    producer,
-                    item,
-                    [],
-                    publish_timeout_seconds=5.0,
-                    failure_log_config=_FAILURE_LOG_CONFIG,
-                    retry=0,
-                )
+                await _publish(db, producer, item)
 
         published = producer.messages(REIMBURSEMENT_TOPIC)[0]
         events = _info_events(caplog)
@@ -224,15 +199,7 @@ class DescribeTheCompensatingDelete:
 
         with caplog.at_level(logging.CRITICAL, logger=_FAILURE_LOG_CONFIG.logger_name):
             with pytest.raises(PublishFailed):
-                await publish_pending(
-                    db,
-                    producer,
-                    item,
-                    [],
-                    publish_timeout_seconds=5.0,
-                    failure_log_config=_FAILURE_LOG_CONFIG,
-                    retry=2,
-                )
+                await _publish(db, producer, item, retry=2)
 
         published = producer.messages(REIMBURSEMENT_TOPIC)[0]
         records = _failure_records(caplog)
