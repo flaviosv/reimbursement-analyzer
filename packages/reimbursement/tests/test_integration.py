@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 import asyncpg
 import pytest
 import reimbursement.agent.agent as agent_module
+import reimbursement.agent.nodes.apply_policies as apply_policies_module
 from agent_fakes import DEFAULT_TEST_MODEL_NAME, FakeStructuredModel
 from confluent_kafka import KafkaException, TopicPartition
 from reimbursement.agent.nodes.analysis import Analysis, GuardrailVerdict
@@ -41,6 +42,16 @@ pytestmark = [pytest.mark.integration, pytest.mark.anyio]
 # messages it produced: a fresh group per test would re-read every earlier
 # test's message from the shared topic.
 GROUP_ID = f"agent-integration-{time.monotonic_ns()}"
+
+
+class _FixedDatetime(datetime):
+    """Freezes apply_policies.py's server-clock read to the same date its
+    fixtures use as receipts_date, so the 90-day reject rule doesn't fire
+    just because real wall-clock time has moved on since these were written."""
+
+    @classmethod
+    def now(cls, tz: object = None) -> datetime:
+        return datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
 
 def _config() -> tuple[Config, AgentConfig]:
@@ -238,6 +249,7 @@ class DescribeTheDecisionGraph:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         monkeypatch.setenv("KAFKA_BOOTSTRAP_SERVERS", kafka_bootstrap_server)
+        monkeypatch.setattr(apply_policies_module, "datetime", _FixedDatetime)
         config, agent = _config()
         uuid = await _insert_row(migrated_db, "AGENT-E2E-DECIDED")
 
@@ -304,6 +316,7 @@ class DescribeTheDecisionGraph:
         # call site the <=200 case's own ApplyPolicies write never
         # exercises against real Postgres.
         monkeypatch.setenv("KAFKA_BOOTSTRAP_SERVERS", kafka_bootstrap_server)
+        monkeypatch.setattr(apply_policies_module, "datetime", _FixedDatetime)
         config, agent = _config()
         uuid = await _insert_row(migrated_db, "AGENT-E2E-DECIDED-AMBIGUOUS")
 
