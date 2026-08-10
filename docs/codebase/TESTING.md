@@ -70,7 +70,7 @@ No coverage tool or enforced target exists. Coverage is a byproduct of the `Desc
 | `shared.models` (pydantic model validation) | Unit | `packages/shared/tests/test_models.py` | `uv run pytest -m "not integration"` |
 | Workspace-level Postgres fixture reachability | Integration (real Postgres) | `packages/shared/tests/test_database_fixture.py` | `uv run pytest` |
 | Failure log (never raises, truncation) | Unit | `packages/shared/tests/test_failure_log.py` | `uv run pytest -m "not integration"` |
-| `reimbursement` resolve/requeue/escalate (staleness guard, ghost tolerance, retry ceiling) | Unit (fakes) | `packages/reimbursement/tests/test_validation.py` | `uv run pytest -m "not integration"` |
+| `reimbursement` resolve/requeue/escalate (staleness guard, ghost tolerance, retry ceiling, decision-stage-failure escalation) | Unit (fakes) | `packages/reimbursement/tests/test_validation.py` | `uv run pytest -m "not integration"` |
 | `reimbursement` consumer lifecycle (offset commit, graceful shutdown, startup checks) | Unit | `packages/reimbursement/tests/test_consumer.py` | same |
 | `reimbursement` config loading | Unit | `packages/reimbursement/tests/test_config.py` | same |
 | `reimbursement` end-to-end (Reimbursement → resolved / ghost / stale / escalated) | Integration | `packages/reimbursement/tests/test_integration.py` | `uv run pytest` |
