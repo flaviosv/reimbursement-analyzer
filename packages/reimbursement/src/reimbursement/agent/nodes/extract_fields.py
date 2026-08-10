@@ -34,7 +34,8 @@ class ExtractFields:
         self._model_name = model_name
 
     async def __call__(self, state: State, config: RunnableConfig) -> dict[str, Any]:
-        logger.info("FLOW: Executing 'extract_fields' node")
+        uuid = state["reimbursement"].uuid
+        logger.info("FLOW: Executing 'extract_fields' node uuid=%s", uuid)
 
         payload = state["reimbursement"].original_payload
         # AGD-26: submitted_by is PII and must never reach the extraction
@@ -52,10 +53,11 @@ class ExtractFields:
             "receipts_date": result.receipts_date,
         }
         logger.info(
-            "FLOW: extract_fields resolved value=%s currency=%s receipts_date=%s model=%s",
+            "FLOW: extract_fields resolved value=%s currency=%s receipts_date=%s model=%s uuid=%s",
             extracted["value"],
             extracted["currency"],
             extracted["receipts_date"],
             self._model_name,
+            uuid,
         )
         return {"extracted": extracted}

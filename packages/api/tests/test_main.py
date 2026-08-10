@@ -1,7 +1,11 @@
+import importlib
+import logging
+
 import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
+import api.main as main_module
 from api.dependencies import get_producer
 from api.main import lifespan
 
@@ -61,6 +65,24 @@ class DescribeLifespan:
             assert app.state.pool.is_closing() is False
 
         assert app.state.pool.is_closing() is True
+
+
+class DescribeLoggingSetup:
+    def it_calls_basic_config_at_info_level_on_module_import(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # TRC-11: without this, uvicorn's default logging setup never
+        # configures the root logger, so every INFO-level log line this
+        # feature adds would silently never emit. Reloading the module
+        # re-executes its top-level logging.basicConfig(...) call under a
+        # patched basicConfig so it's observable without depending on
+        # fragile stdout/handler-state side effects.
+        calls: list[dict] = []
+        monkeypatch.setattr(logging, "basicConfig", lambda **kwargs: calls.append(kwargs))
+
+        importlib.reload(main_module)
+
+        assert calls == [{"level": logging.INFO}]
 
 
 class DescribeGetProducer:

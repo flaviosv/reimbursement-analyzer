@@ -1197,53 +1197,105 @@ own unique-constraint path is untouched by this change).
 
 ---
 
+### AD-034 — `traceability-correlation-ids` executed autonomously: sibling-feature test breakage left untouched, TRC-11 gets one dedicated test, 9 tasks run inline without a sub-agent offer
+
+**Date:** 2026-08-09
+**Status:** Active
+
+Implementing `traceability-correlation-ids` (design.md treated as
+user-confirmed per the session's own operating instructions) surfaced three
+judgment calls with no user available to confirm them mid-session:
+
+1. **Pre-existing, unrelated test breakage left alone.** `main` at this
+   feature's base commit already had 1 failing test
+   (`reimbursement/tests/test_config.py`'s Ollama-default assertion) and 4
+   uncollectable test files (`test_agent.py`, `test_analysis.py`,
+   `test_extract_fields.py`, `test_integration.py`, all
+   `PLACEHOLDER_PROMPT` import errors) — both squarely AD-032's scope
+   (`agent-model-config`, Designed but not yet Executed on its own branch;
+   confirmed via `.specs/features/agent-model-config/tasks.md`'s T1/T4/T5/T6).
+   This feature's tasks do not touch `config.py`/`prompts/*.py` or fix
+   those four files — the "full suite green" gate is interpreted as "zero
+   *new* failures vs. this exact pre-existing baseline," verified
+   byte-identical before/after every task that touches `packages/reimbursement`.
+2. **TRC-11 gets a dedicated test; TRC-01..10 do not.** spec.md's Out of
+   Scope table excludes tests for "TRC-01..10" by name — TRC-11 (api's own
+   `logging.basicConfig` call, without which every other requirement's new
+   `.info()` line silently never emits) is arithmetically outside that
+   range. Read as a deliberate signal, not an oversight, and treated
+   accordingly: one unit test added in `packages/api/tests/test_main.py`,
+   none added anywhere else.
+3. **9 tasks executed inline, no sub-agent batch offer.** `tlc-spec-driven`'s
+   own rule is "offer-then-confirm, never auto-spawn" once task count
+   exceeds ~8 — this feature generated exactly 9, and no user was reachable
+   to accept or decline the offer. Given every task was a small (1-4 line),
+   low-risk, already-fully-read edit with no cross-task ambiguity, inline
+   single-agent execution was the more reasonable default than blocking on
+   an unanswerable prompt or arbitrarily under/over-splitting the work into
+   sub-agent batches on the assistant's own authority.
+
+**Why:** each call follows the session's explicit mandate to make the most
+reasonable autonomous decision consistent with existing Decisions/
+Conventions rather than stall for input that cannot arrive, and to record
+the call here rather than silently pick one interpretation.
+
+**Implication:** `traceability-correlation-ids` shipped with the
+`reimbursement` package's pre-existing 1-failure/4-collection-error state
+unchanged — whoever executes `agent-model-config`'s tasks.md next will fix
+it as part of that feature, not this one. `.specs/features/traceability-correlation-ids/tasks.md`
+documents all three calls inline (its "Pre-Execute Note" and Test Coverage
+Matrix); `validation.md` (independent Verifier, PASS) confirms the baseline
+claim was checked, not assumed.
+
+---
+
 ## Handoff
 
-**Last updated:** 2026-08-08
+**Last updated:** 2026-08-09
 
-**Done:** `db-schema-migrations` (PR #3), `api-post-reimbursement` (PR #4),
-`publisher-consume-request` (spec-anchored 42/42, sensor 18/18, full gate
-274/0 — see its `validation.md`) — see git history for detail.
-`agent-consume-reimbursement` — spec (22 requirements) fully implemented and
-independently re-verified to **PASS**
-(`.specs/features/agent-consume-reimbursement/validation.md`, re-verified
-post-fix commit `dba67c4`); lives on branch `feature/6_reimbursement_consumer`
-(pushed to origin, working tree clean as of this session — not yet merged to
-`main`). This is the "resolve by uuid, staleness, retry/escalate" half of
-the Agent; it deliberately stopped short of any decision logic.
+**Done and merged to `main`** (see git history / merged PRs #3-#11 for
+detail): `db-schema-migrations`, `api-post-reimbursement`,
+`publisher-consume-request`, `agent-consume-reimbursement`,
+`api-get-reimbursement`, `api-put-reimbursement`, `api-reimbursement-detail`,
+`agent-decide-reimbursement` (the Reimbursement Agent's full decision graph —
+`reimbursement/agent/`, 5 nodes, wired via `agent.py`), `refactoring-package-namespacing`
+(AD-031, `uv_build` + nested src-layout). The prior entries in this section
+describing these as "in flight" are stale as of this update — superseded.
 
-**Current branch (this session's own work):** `main`, no code changes — this
-session is spec-only (`.specs/`, `docs/SCOPE.md`, `.specs/RISKS.md`).
-`api-get-reimbursement`/`api-put-reimbursement` (previous session, still
-`main`) and `feature/6_reimbursement_consumer`/`feature/7_reimbursement_get_put`
-(separate worktrees, per `git worktree list`) are untouched by this session.
+**In flight as of the `adc4309` setup commit (2026-08-09), three sibling
+features executed concurrently by separate agents on separate worktrees,
+each branching from the same `main` tip, each expected to merge (and
+possibly conflict with one another) independently:**
 
-**In flight — carried from prior session, unchanged:** `api-get-reimbursement`
-and `api-put-reimbursement` spec.md/context.md are closure-gate-clean
-(AD-027, AD-028) but still **not yet user-confirmed** — confirmation, then
-Design, remains their next step whenever picked back up.
+- **`agent-model-config`** (AD-032) — Ollama → Groq LLM provider switch for
+  the Reimbursement Agent's two LLM nodes. Design confirmed and partially
+  pre-applied directly to `main` at the setup commit (`config.py`'s default,
+  `prompts/{analysis,extract_fields}.py`'s public API) **without** its own
+  tests updated yet — `tasks.md` (T1-T8) exists and owns fixing this;
+  status as of this update: not yet known to have executed (this session
+  did not touch it — see AD-034).
+- **`publisher-compensating-delete`** (AD-033) — publisher's insert+publish
+  unit of work drops its transaction; a publish failure now triggers an
+  explicit compensating `DELETE` instead of a rollback. Design confirmed;
+  execution status not observed by this session (different worktree).
+- **`traceability-correlation-ids`** (this session) — **Done.** All 11
+  requirements (TRC-01..11) implemented across 9 tasks (T1-T9), independent
+  Verifier **PASS** (`validation.md`: 11/11 ACs spec-anchored, gate 508
+  passed/1 pre-existing-unrelated-failed/4 pre-existing-unrelated-errors
+  workspace-wide, sensor 1/3 killed with the other 2 an accepted consequence
+  of spec.md's own no-new-tests decision — see AD-034). Lives on branch
+  `feature/11-traceability-correlation-ids`, not yet merged to `main`. Three
+  autonomous judgment calls made and recorded as **AD-034**.
 
-**In flight — new this session (2026-08-08):** Specify phase complete for
-`agent-decide-reimbursement` — the decision-logic half of the Reimbursement
-Agent (reject / auto-approve deterministic+probabilistic / human-review,
-`docs/SCOPE.md:247-298`) that `agent-consume-reimbursement` explicitly
-deferred. `.specs/features/agent-decide-reimbursement/{spec,context}.md`
-written (27 requirements, AGD-01..27). Four gray areas resolved directly
-with the user and recorded as **AD-030**: (1) receipt date gets its own
-always-runs upfront LLM extraction node — no sample payload carries it as a
-structured field; (2) reject always outranks the mandatory `>2000`
-human-review rule; (3) BRL-only, `claimed_amount_brl`-first value
-resolution; (4) decision-stage error-handling mechanism is **not** decided —
-tracked as **R-011** in `.specs/RISKS.md`, since retrying a billed LLM call
-isn't free like retrying the resolve stage's DB queries. `docs/SCOPE.md`'s
-Reimbursement Agent section is amended in place with inline notes pointing
-to AD-030, same style as AD-020/AD-027/AD-028; the `reimbursement-processing.png`
-diagram is being amended separately by the user, not by this session.
-
-**Explicitly not started this session, by user request:** Design for
-`agent-decide-reimbursement`. The user has a refactor session in flight on
-`feature/6_reimbursement_consumer` and asked that Design wait until that
-syncs to `main` — spec.md/context.md are also **not yet user-confirmed**.
+**Next step for a future session:** once `agent-model-config` merges (fixing
+`packages/reimbursement/tests/{test_config,test_agent,test_analysis,test_extract_fields,test_integration}.py`'s
+pre-existing breakage), re-run `packages/reimbursement`'s full gate to
+confirm `traceability-correlation-ids`' TRC-07/TRC-08/TRC-09 changes
+(currently verified by code inspection only, per AD-034) are also exercised
+by the now-collectible `test_agent.py`/`test_validate.py` suite. Expect a
+merge conflict between `traceability-correlation-ids` and
+`agent-model-config` on `reimbursement/agent/{agent.py,nodes/analysis.py}` —
+resolution is the user's, per this session's own operating instructions.
 
 **Next step:** get `agent-decide-reimbursement/spec.md` confirmed by the
 user; then wait for the `feature/6_reimbursement_consumer` refactor to sync

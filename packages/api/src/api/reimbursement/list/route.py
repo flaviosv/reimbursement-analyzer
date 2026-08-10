@@ -1,6 +1,9 @@
+import logging
+
 import asyncpg
 from fastapi import APIRouter, Depends, Query, Request
 from shared.config import load_config
+from shared.logging import log_event
 
 from api.dependencies import get_pool
 from api.errors import MessageResponse
@@ -9,7 +12,10 @@ from api.reimbursement.list.response import ReimbursementListResponse
 from api.reimbursement.response import ReimbursementItem
 from shared.reimbursement.use_cases.list_reimbursements import list_reimbursements
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
+
+LIST_QUERIED_EVENT = "reimbursement.list_queried"
 
 
 @router.get(
@@ -38,6 +44,13 @@ async def get_reimbursements(
     statuses = parse_status_filter(request.query_params.getlist("status"))
     async with pool.acquire(timeout=load_config().database.acquire_timeout_seconds) as conn:
         rows = await list_reimbursements(conn, statuses=statuses, limit=limit, offset=offset)
+    log_event(
+        logger,
+        logging.INFO,
+        LIST_QUERIED_EVENT,
+        status_filter=status or "none",
+        result_count=len(rows),
+    )
     return ReimbursementListResponse(
         msg=f"{len(rows)} reimbursement(s) found",
         data=[ReimbursementItem.from_record(row) for row in rows],

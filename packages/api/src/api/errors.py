@@ -84,7 +84,12 @@ async def _http_exception_handler(request: Request, exc: StarletteHTTPException)
 
 
 async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    logger.exception("unhandled exception on %s %s", request.method, request.url.path)
+    logger.exception(
+        "unhandled exception on %s %s uuid=%s",
+        request.method,
+        request.url.path,
+        request.path_params.get("uuid"),
+    )
     return _msg_response(500, "internal error")
 
 

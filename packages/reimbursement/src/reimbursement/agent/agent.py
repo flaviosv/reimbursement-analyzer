@@ -150,6 +150,7 @@ async def decide(
         config={
             "configurable": {"pool": pool, "acquire_timeout_seconds": acquire_timeout_seconds},
             "callbacks": _langfuse_handlers(),
+            "metadata": {"langfuse_session_id": str(reimbursement.uuid)},
         },
     )
     return result

@@ -1,14 +1,19 @@
 import logging
+from uuid import uuid4
 
 import pytest
 from agent_fakes import DEFAULT_TEST_MODEL_NAME, FakeStructuredModel
 from reimbursement.agent.nodes.analysis import Analysis, GuardrailVerdict
+from reimbursement.models import Reimbursement
 
 pytestmark = pytest.mark.anyio
 
 
 def _state() -> dict:
-    return {"extracted": {"value": 1000, "currency": "BRL", "receipts_date": None}}
+    return {
+        "reimbursement": Reimbursement(uuid=uuid4(), original_payload={}),
+        "extracted": {"value": 1000, "currency": "BRL", "receipts_date": None},
+    }
 
 
 class DescribeGuardrailVerdict:

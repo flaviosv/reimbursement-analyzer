@@ -19,9 +19,10 @@ class ApplyAgentDecision:
         self._apply_decision = apply_decision
 
     async def __call__(self, state: State, config: RunnableConfig) -> dict[str, Any]:
-        logger.info("FLOW: Executing 'apply_agent_decision' node")
-
         reimbursement = state["reimbursement"]
+        uuid = reimbursement.uuid
+        logger.info("FLOW: Executing 'apply_agent_decision' node uuid=%s", uuid)
+
         extracted = state.get("extracted") or {}
         value = extracted.get("value")
         # Mirrors ApplyPolicies's own guard: receipts_value's DB column has
@@ -42,6 +43,6 @@ class ApplyAgentDecision:
                 currency=extracted.get("currency"),
             )
         persisted = result is not None
-        logger.info("FLOW: apply_agent_decision outcome: persisted=%s", persisted)
+        logger.info("FLOW: apply_agent_decision outcome: persisted=%s uuid=%s", persisted, uuid)
 
         return {"persisted": persisted}
