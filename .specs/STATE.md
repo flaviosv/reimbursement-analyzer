@@ -1404,6 +1404,52 @@ loader reads — so this exact class of gap can't recur unnoticed. See
 
 ---
 
+### AD-039 — R-011 resolved: a decision-stage failure escalates to `human-review` immediately, not retry-then-escalate or a cause-differentiated policy
+
+**Date:** 2026-08-10
+**Status:** Active
+
+`reimbursement/validation.py`'s `_decide` — on any exception from
+`agent.decide()` (an LLM call failure, a malformed structured-output
+response, a genuine `apply_decision` write failure inside a node) — now
+escalates the row to `human-review` via a new `_escalate_decision_failure`
+helper, in addition to its existing `failure_log` write. The mechanism is
+**immediate escalation**: no retry of the LLM call, no cause-differentiated
+handling (an LLM failure and a DB write failure escalate identically).
+`decision_reason` carries the full attempt history — any pre-existing
+resolve-stage retries already on the message envelope (AD-014) plus one new
+entry for this failure — rendered through the existing `render_history`
+machinery, which is parameterized with a `header` kwarg
+(`shared.reimbursement.use_cases.send_human_review`) so this path's wording
+("Decision-stage failure...") doesn't falsely claim a retry ceiling was
+reached, the way its retry-ceiling-specific default would have. `shared.models.Stage`
+gains a `"decide"` value so the failure can be expressed as an
+`AttemptError`. A decision computed in-memory but never durably persisted
+(the failure occurs inside the write itself) is discarded in favor of the
+escalation — a write that never completed is never trusted as final,
+regardless of what was computed.
+
+**Why:** this was `agent-decide-reimbursement`'s own AGD-25, explicitly
+deferred as **R-011** — "the mechanism is not selected by this spec... LLM
+calls are billed, unlike the resolve stage's free DB retries" (AD-030). User
+decision, made during this feature's Discuss phase: immediate escalation
+over retry-then-escalate, because retrying a billed LLM call has an
+unbounded cost profile with no cost/tradeoff evaluation behind it yet, while
+escalating a mission-critical financial row to a human reviewer is the safe
+default either way. Full (unsanitized) error detail in `decision_reason`
+reuses the AD-014 precedent (DB rows are inside the same trust boundary as
+`original_payload`) rather than inventing new redaction — stdout logging
+stays sanitized via the existing `sanitize()`, unchanged.
+
+**Implication:** `agent-decide-reimbursement/spec.md`'s AGD-25 Assumptions
+row is amended in place to point here. Any future decision-stage failure
+mode this feature didn't anticipate still escalates the same way — there is
+no second fallback path to keep in sync. See
+`.specs/features/agent-decision-error-escalation/` for the full spec/design
+and `spec.md`'s `ADE-01..08` for the traceable requirements.
+
+---
+
 ## Handoff
 
 **Last updated:** 2026-08-09
