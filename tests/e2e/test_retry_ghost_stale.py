@@ -86,11 +86,14 @@ class DescribeTheNonDecisionBranches:
 
         # "No crash" (the rest of E2E-08's AC) has no direct HTTP-observable
         # signal of its own — validation._resolve's ghost branch returns
-        # silently, it does not write anything a GET could catch. Per
-        # design.md/tasks.md, the proxy is the next real-chain test in this
-        # file (below) still passing: if the ghost message had wedged or
-        # crashed the same long-running consumer loop, that next test's own
-        # wait_for_status would time out.
+        # silently, it does not write anything a GET could catch. Made
+        # self-contained (rather than relying on a later test in this file
+        # still passing as an order-dependent proxy): post one fresh real
+        # item and wait for its own natural decision — this directly proves,
+        # within this same test, that the consumer loop which processed the
+        # ghost message is still alive and processing correctly.
+        uuid = _post_real_item(api_client, f"E2E-GHOST-{uuid4().hex[:12]}")
+        wait_for_status(api_client, uuid, _NATURAL_TERMINAL_STATUSES, timeout=_NATURAL_DECISION_TIMEOUT_SECONDS)
 
     async def it_ignores_a_stale_message_and_leaves_the_settled_decision_untouched(
         self, api_client: httpx.Client, kafka_producer_config: KafkaConfig
