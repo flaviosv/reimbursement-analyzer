@@ -9,7 +9,7 @@ Implement these tasks with the `tlc-spec-driven` skill: **activate it by name an
 ---
 
 **Design**: `.specs/features/agent-decision-error-escalation/design.md`
-**Status**: Draft
+**Status**: Done — all 4 tasks complete, Verifier PASS
 
 ---
 
@@ -85,10 +85,10 @@ T4
 
 **Done when**:
 
-- [ ] `Stage = Literal["db-insert", "publish", "resolve", "decide"]`
-- [ ] `DescribeAttemptErrorFromException::it_accepts_the_agent_decide_stage` added, asserting `AttemptError.from_exception(1, "decide", RuntimeError("boom")).stage == "decide"`
-- [ ] Gate check passes: `uv run pytest -m "not integration and not e2e"`
-- [ ] Test count: existing `packages/shared/tests/test_models.py` count + 1 passes
+- [x] `Stage = Literal["db-insert", "publish", "resolve", "decide"]`
+- [x] `DescribeAttemptErrorFromException::it_accepts_the_agent_decide_stage` added, asserting `AttemptError.from_exception(1, "decide", RuntimeError("boom")).stage == "decide"`
+- [x] Gate check passes: `uv run pytest -m "not integration and not e2e"`
+- [x] Test count: existing `packages/shared/tests/test_models.py` count + 1 passes
 
 **Tests**: unit
 **Gate**: quick
@@ -112,10 +112,10 @@ T4
 
 **Done when**:
 
-- [ ] `render_history`'s default behavior is byte-identical to today's for every existing caller (`_escalate`, `send_human_review`) — all existing tests in `DescribeRenderHistory`/`DescribeSendHumanReview`/`DescribeEscalateExisting` pass unchanged, with no assertion rewritten
-- [ ] `it_renders_a_custom_header_instead_of_the_retry_ceiling_wording` — `render_history(errors, _LIMIT, header="Decision-stage failure")` produces text containing `"Decision-stage failure after"` and NOT containing `"Retry ceiling"`
-- [ ] Gate check passes: `uv run pytest -m "not integration and not e2e"`
-- [ ] Test count: existing `packages/shared/tests/reimbursement/use_cases/test_send_human_review.py` count + 1 passes
+- [x] `render_history`'s default behavior is byte-identical to today's for every existing caller (`_escalate`, `send_human_review`) — all existing tests in `DescribeRenderHistory`/`DescribeSendHumanReview`/`DescribeEscalateExisting` pass unchanged, with no assertion rewritten
+- [x] `it_renders_a_custom_header_instead_of_the_retry_ceiling_wording` — `render_history(errors, _LIMIT, header="Decision-stage failure")` produces text containing `"Decision-stage failure after"` and NOT containing `"Retry ceiling"`
+- [x] Gate check passes: `uv run pytest -m "not integration and not e2e"`
+- [x] Test count: existing `packages/shared/tests/reimbursement/use_cases/test_send_human_review.py` count + 1 passes
 
 **Tests**: unit
 **Gate**: quick
@@ -139,16 +139,16 @@ T4
 
 **Done when**:
 
-- [ ] `it_escalates_to_human_review_with_the_error_in_the_reason_and_returns_escalated` — `_decide` raises, row's `status` becomes `human-review`, `decision_reason` contains the exception message and `"decide"`-tagged formatting, outcome is `MessageOutcome.ESCALATED` (ADE-01, ADE-02, ADE-07)
-- [ ] `it_still_writes_the_failure_log_when_escalation_succeeds` — `DECISION_FAILED_EVENT` is present in `caplog` even though escalation also succeeded (ADE-03)
-- [ ] `it_combines_prior_resolve_stage_errors_with_the_new_decide_failure_in_the_reason` — envelope carries pre-existing `errors=[_error(1)]`; the rendered `decision_reason` contains both the earlier `"resolve"`-stage line and the new `"decide"`-stage line, in order (ADE-02)
-- [ ] `it_writes_to_the_failure_log_and_returns_logged_when_the_uuid_is_a_ghost` — the row is absent from `pool.rows` when `_decide` raises; escalation affects zero rows, `ESCALATION_FAILED_EVENT` is logged, outcome is `MessageOutcome.LOGGED`, no exception propagates (ADE-04)
-- [ ] `it_writes_to_the_failure_log_and_returns_logged_when_the_escalation_write_itself_fails` — `FakePool(update_errors={uuid: RuntimeError(...)})`; `ESCALATION_FAILED_EVENT` is logged, outcome is `MessageOutcome.LOGGED` (ADE-05)
-- [ ] `it_escalates_even_when_a_decision_was_already_computed_but_the_persist_call_raised` — the stubbed `agent.decide()` raises after having "computed" a decision in a way that mirrors a persist-step failure (e.g. the fake raises the same exception the real `apply_agent_decision` write would); asserts the row still lands on `human-review` with the error-based reason, not any partially-computed status (ADE-06)
-- [ ] `it_keeps_the_stdout_log_sanitized_never_the_raw_decide_error` — the stdout `logger.error` line uses `sanitize(exc)` output only, and the raw `str(exc)` text does NOT appear anywhere in the stdout-captured log record (only in `pool.rows[uuid]["decision_reason"]`) (ADE-08)
-- [ ] The 2 pre-existing `DescribeDecideIntegration` tests that pinned the pre-feature behavior (`it_catches_a_decide_failure_writes_the_failure_log_and_returns_logged_without_propagating`, `it_catches_a_malformed_original_payload_as_a_decision_failure`) are updated to assert the new spec-mandated outcome (`ESCALATED`, row `status == "human-review"`) — user-approved during Execute (see Post-Gate note), same triggering setup retained
-- [ ] Gate check passes: `uv run pytest -m "not integration and not e2e"`
-- [ ] Test count: existing `packages/reimbursement/tests/test_validation.py` count + 6 passes (no silent deletions of the 2 existing `DescribeDecideIntegration` failure-path tests — updated, not removed)
+- [x] `it_escalates_to_human_review_with_the_error_in_the_reason_and_returns_escalated` — `_decide` raises, row's `status` becomes `human-review`, `decision_reason` contains the exception message and `"decide"`-tagged formatting, outcome is `MessageOutcome.ESCALATED` (ADE-01, ADE-02, ADE-07)
+- [x] `it_still_writes_the_failure_log_when_escalation_succeeds` — `DECISION_FAILED_EVENT` is present in `caplog` even though escalation also succeeded (ADE-03)
+- [x] `it_combines_prior_resolve_stage_errors_with_the_new_decide_failure_in_the_reason` — envelope carries pre-existing `errors=[_error(1)]`; the rendered `decision_reason` contains both the earlier `"resolve"`-stage line and the new `"decide"`-stage line, in order (ADE-02)
+- [x] `it_writes_to_the_failure_log_and_returns_logged_when_the_uuid_is_a_ghost` — the row is absent from `pool.rows` when `_decide` raises; escalation affects zero rows, `ESCALATION_FAILED_EVENT` is logged, outcome is `MessageOutcome.LOGGED`, no exception propagates (ADE-04)
+- [x] `it_writes_to_the_failure_log_and_returns_logged_when_the_escalation_write_itself_fails` — `FakePool(update_errors={uuid: RuntimeError(...)})`; `ESCALATION_FAILED_EVENT` is logged, outcome is `MessageOutcome.LOGGED` (ADE-05)
+- [x] `it_escalates_even_when_a_decision_was_already_computed_but_the_persist_call_raised` — the stubbed `agent.decide()` raises after having "computed" a decision in a way that mirrors a persist-step failure (e.g. the fake raises the same exception the real `apply_agent_decision` write would); asserts the row still lands on `human-review` with the error-based reason, not any partially-computed status (ADE-06)
+- [x] `it_keeps_the_stdout_log_sanitized_never_the_raw_decide_error` — the stdout `logger.error` line uses `sanitize(exc)` output only, and the raw `str(exc)` text does NOT appear anywhere in the stdout-captured log record (only in `pool.rows[uuid]["decision_reason"]`) (ADE-08)
+- [x] The 2 pre-existing `DescribeDecideIntegration` tests that pinned the pre-feature behavior (`it_catches_a_decide_failure_writes_the_failure_log_and_returns_logged_without_propagating`, `it_catches_a_malformed_original_payload_as_a_decision_failure`) are updated to assert the new spec-mandated outcome (`ESCALATED`, row `status == "human-review"`) — user-approved during Execute (see Post-Gate note), same triggering setup retained
+- [x] Gate check passes: `uv run pytest -m "not integration and not e2e"`
+- [x] Test count: existing `packages/reimbursement/tests/test_validation.py` count + 6 passes (no silent deletions of the 2 existing `DescribeDecideIntegration` failure-path tests — updated, not removed)
 
 **Tests**: unit
 **Gate**: quick
@@ -172,9 +172,9 @@ T4
 
 **Done when**:
 
-- [ ] `AD-039` appended to `.specs/STATE.md`'s `## Decisions` section (append-only — no existing entry rewritten), stating the decision, reason, trade-off, scope (`reimbursement/validation.py`'s decision-stage failure path), and date
-- [ ] `agent-decide-reimbursement/spec.md`'s Assumptions row for "Decision-stage error-handling mechanism" amended in place with a pointer to `AD-039` and this feature
-- [ ] No other content in either file changed
+- [x] `AD-039` appended to `.specs/STATE.md`'s `## Decisions` section (append-only — no existing entry rewritten), stating the decision, reason, trade-off, scope (`reimbursement/validation.py`'s decision-stage failure path), and date
+- [x] `agent-decide-reimbursement/spec.md`'s Assumptions row for "Decision-stage error-handling mechanism" amended in place with a pointer to `AD-039` and this feature
+- [x] No other content in either file changed
 
 **Tests**: none
 **Gate**: none (documentation only — verified by review, not by the test suite)
