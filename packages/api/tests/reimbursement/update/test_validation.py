@@ -49,6 +49,16 @@ _INVALID_REVIEW_CASES = [
         id="reject-missing-reason",
     ),
     pytest.param(
+        {**_REJECT_PAYLOAD, "receipts_currency": "brl"},
+        "receipts_currency: String should match pattern",
+        id="reject-malformed-receipts_currency",
+    ),
+    pytest.param(
+        {**_REJECT_PAYLOAD, "receipts_value": "-1.00"},
+        "receipts_value: Input should be greater than or equal to 0",
+        id="reject-negative-receipts_value",
+    ),
+    pytest.param(
         {**_REJECT_PAYLOAD, "status": "cancelled"},
         "body: Input tag 'cancelled' found using 'status' does not match any of the expected tags",
         id="invalid-status-falls-back-to-body-on-empty-loc",
@@ -68,6 +78,20 @@ class DescribeValidateReview:
 
         assert isinstance(review, RejectReview)
         assert review.approved_by == "reviewer@example.com"
+        assert review.receipts_value is None
+        assert review.receipts_date is None
+        assert review.receipts_currency is None
+
+    def it_parses_a_reject_payload_with_optional_receipts_fields_supplied(self) -> None:
+        payload = valid_reject_payload(
+            receipts_date="2026-01-05", receipts_value="50.00", receipts_currency="BRL"
+        )
+
+        review = validate_review(_body(payload))
+
+        assert isinstance(review, RejectReview)
+        assert str(review.receipts_value) == "50.00"
+        assert review.receipts_currency == "BRL"
 
     @pytest.mark.parametrize("payload, expected_message_fragment", _INVALID_REVIEW_CASES)
     def it_raises_review_invalid_with_a_message_naming_the_offending_field(

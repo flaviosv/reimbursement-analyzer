@@ -97,11 +97,11 @@ _REJECT = """
     UPDATE reimbursement
     SET status = 'human-rejected',
         decision_reason = $3,
+        receipts_value = COALESCE($4, receipts_value),
+        receipts_date = COALESCE($5, receipts_date),
+        currency = COALESCE($6, currency),
         updated_at = now()
     WHERE uuid = $1 AND status = ANY($2::text[])
-        AND receipts_value IS NOT NULL
-        AND receipts_date IS NOT NULL
-        AND currency IS NOT NULL
     RETURNING *
 """
 
@@ -223,18 +223,30 @@ async def approve(
 
 
 async def reject(
-    conn: asyncpg.Connection, uuid: UUID, *, eligible_statuses: list[str], reason: str
+    conn: asyncpg.Connection,
+    uuid: UUID,
+    *,
+    eligible_statuses: list[str],
+    reason: str,
+    receipts_value: Decimal | None = None,
+    receipts_date: date | None = None,
+    receipts_currency: str | None = None,
 ) -> asyncpg.Record | None:
-    """Atomic UPDATE ... WHERE ... RETURNING, gated on the receipts_* fields
-    already being non-null: None means the uuid doesn't exist, its status
-    isn't eligible, or the entity is incomplete — again, not distinguished
-    here."""
-    return await conn.fetchrow(_REJECT, uuid, eligible_statuses, reason)
+    """Atomic UPDATE ... WHERE ... RETURNING: None means the uuid doesn't
+    exist or its current status isn't in `eligible_statuses` — this
+    function does not distinguish the two, that's the use case's job.
+    Rejecting never requires receipts_value/receipts_date/currency to be
+    populated (unlike approve); when supplied anyway they're persisted via
+    COALESCE, otherwise the row's existing values are left untouched — a
+    rejected claim may stay incomplete."""
+    return await conn.fetchrow(
+        _REJECT, uuid, eligible_statuses, reason, receipts_value, receipts_date, receipts_currency
+    )
 
 
 async def find_reimbursement_state(conn: asyncpg.Connection, uuid: UUID) -> asyncpg.Record | None:
     """Called only on the 0-rows-affected path of approve()/reject(), to
-    disambiguate 404 (no row) from 400 (row exists, ineligible/incomplete)."""
+    disambiguate 404 (no row) from 400 (row exists, ineligible status)."""
     return await conn.fetchrow(_FIND_REIMBURSEMENT_STATE, uuid)
 
 

@@ -20,6 +20,9 @@ class ApproveReview(BaseModel):
 class RejectReview(BaseModel):
     status: Literal["rejected"]
     reason: str
+    receipts_date: date | None = None
+    receipts_value: Annotated[Decimal, Field(ge=0)] | None = None  # mirrors the DB CHECK
+    receipts_currency: Annotated[str, StringConstraints(pattern=r"^[A-Z]{3}$")] | None = None  # mirrors the DB CHECK
     approved_by: EmailStr
     uuid: UUID | None = None
 
