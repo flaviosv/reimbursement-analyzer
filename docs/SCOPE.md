@@ -35,6 +35,19 @@
 
 ![Request lifecycle](assets/request-lifecycle.png)
 
+## Key Decisions
+
+1. Considered a basic payload ID for indentificable purposes
+1. Accept all payload or reject it all
+1. Reject-first approach in the agent
+1. Probabilist layer to extract all fields, as the sample payloads doesnt have all of them
+1. Considered multi currency, that's why currency is a required field
+1. Unknow number of items in the payload, capped to 500 with 1mb
+1. Never lose a reimbursement, send to Human Review if anything fails in the process, fallback to logs. This includes excessive tries over the pub-sub structure, or handling failures
+1. There is a gap in the auto-approve/reject and human-review, the gap is analyzeb by a probabilistic layer with pre-defined rules finding for data consistance
+1. Accepted the trade-off of not having an outbox pattern to send data from published to agent, the pipeline might miss reimbursement
+1. It's possible approve an rejected reimbursement, the opposite is not true
+
 ## Tech Stack
 
 - Python 3.4.7
