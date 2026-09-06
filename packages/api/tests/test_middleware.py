@@ -4,9 +4,8 @@ from typing import Any
 from uuid import UUID
 
 import pytest
-from shared.logging import get_correlation_id
-
 from api.middleware import CorrelationIdMiddleware
+from shared.logging import get_correlation_id
 
 pytestmark = pytest.mark.anyio
 
