@@ -6,6 +6,7 @@ collide with.
 Production code never imports this module.
 """
 
+import asyncio
 import json
 import os
 import threading
@@ -18,6 +19,34 @@ from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID, uuid4
 
 import asyncpg
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import Tracer
+
+
+class ThreadSafeAsyncEvent:
+    """A `threading.Event` exposed with an async-compatible `.wait()` — for
+    fake sync producers that set it from a `ThreadPoolExecutor` worker thread
+    (where `shared.producer.publish` drives `produce()`), while test code
+    awaits it from the event loop thread. `wait_sync` is for the reverse
+    direction: a worker thread blocking on it directly, without reaching
+    into the private `threading.Event` itself."""
+
+    def __init__(self) -> None:
+        self._event = threading.Event()
+
+    def set(self) -> None:
+        self._event.set()
+
+    def is_set(self) -> bool:
+        return self._event.is_set()
+
+    async def wait(self) -> None:
+        await asyncio.to_thread(self._event.wait)
+
+    def wait_sync(self, timeout: float | None = None) -> bool:
+        return self._event.wait(timeout=timeout)
 
 # Matches the postgres service in docker-compose.yml, so tests exercise the
 # same major version the stack runs.
@@ -57,6 +86,18 @@ def guard_is_test_database(url: str) -> None:
             f"refusing to run against database {name!r}: the test suite drops "
             "and recreates its database, so the name must end in '_test'"
         )
+
+
+def in_memory_tracer() -> tuple[Tracer, InMemorySpanExporter]:
+    """A throwaway `TracerProvider` wired to an `InMemorySpanExporter` via
+    `SimpleSpanProcessor` (synchronous — spans are visible immediately, no
+    batching delay), for tests that assert on finished span attributes.
+    Previously redefined independently in `shared`, `publisher`, and
+    `reimbursement`'s own test suites."""
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    return provider.get_tracer(__name__), exporter
 
 
 def valid_reimbursement_item(request_id: str = "REQ-0001", **extra: object) -> dict:
@@ -99,6 +140,12 @@ class _FakeSyncProducer:
         self._local.error = self._outer.errors.get(topic)
 
     def flush(self, timeout: float) -> int:
+        if self._outer.pending:
+            # Models "still queued" after the timeout elapses: the delivery
+            # callback never fires, so `shared.producer.publish`'s delivery
+            # future never resolves and its own `asyncio.wait_for` times out
+            # — the one documented failure path `errors=` alone can't reach.
+            return 1
         on_delivery = getattr(self._local, "on_delivery", None)
         error = getattr(self._local, "error", None)
         if on_delivery is not None:
@@ -111,10 +158,12 @@ class FakeProducer:
     `shared.producer.publish` and every caller depend on. Records every
     produced message. `errors` maps a topic to the exception its delivery
     callback carries, so a delivery failure can be injected independently
-    per topic."""
+    per topic. `pending=True` instead models a delivery that never
+    completes at all, for the "still queued" timeout branch."""
 
-    def __init__(self, *, errors: dict[str, Exception] | None = None) -> None:
+    def __init__(self, *, errors: dict[str, Exception] | None = None, pending: bool = False) -> None:
         self.errors = errors or {}
+        self.pending = pending
         self.produced: list[tuple[str, bytes]] = []
         self._producer = _FakeSyncProducer(self)
         self.executor = ThreadPoolExecutor(max_workers=4)
