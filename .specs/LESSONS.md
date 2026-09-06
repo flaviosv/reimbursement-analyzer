@@ -144,6 +144,12 @@ Seen once or not yet corroborated. Tracked, not trusted.
 - evidence: AGD-13, AGD-16 (packages/reimbursement/tests/test_apply_policies.py) (test-quality)
 - last seen: 2026-08-09T19:13:04Z
 
+### L-023 — When an AC requires a response header/behavior on both success and error paths, add a test that triggers a registered error handler and asserts the behavior — a happy-path-only test does not prove the error branch.
+- signal: `spec_precision_gap` · recurrence: 1 feature(s) · scope: `api-middleware` · harmful: 0
+- features: RA-1-json-structured-logging
+- evidence: CORR-04 (spec.md P1: HTTP-Scoped Correlation ID, AC4) (api-middleware)
+- last seen: 2026-09-06T15:42:54Z
+
 ## Quarantined (failed when applied — ignore)
 
 A confirmed lesson that recurred alongside failure. Kept for the maintainer to review.

@@ -393,6 +393,18 @@ class DescribeResolveTransientFailureRequeue:
         assert requeued["errors"][0]["attempt"] == 1
         assert requeued["errors"][1]["attempt"] == 2
 
+    async def it_carries_forward_the_original_correlation_id_unchanged(self) -> None:
+        uuid = uuid4()
+        pool = FakePool(get_errors={uuid: RuntimeError("transient failure")})
+        producer = FakeProducer()
+        deps = _deps(pool=pool, producer=producer)
+        envelope = _envelope(uuid=uuid, retry=0, correlation_id="corr-original-id")
+
+        await handle_message(deps, envelope.model_dump_json().encode())
+
+        [requeued] = producer.messages(REIMBURSEMENT_TOPIC)
+        assert requeued["correlation_id"] == "corr-original-id"
+
     async def it_writes_to_the_failure_log_when_the_requeue_itself_fails(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:

@@ -3,7 +3,7 @@
   "promote_threshold": 2,
   "window_days": 45,
   "quarantine_threshold": 2,
-  "next_id": 23,
+  "next_id": 24,
   "lessons": [
     {
       "id": "L-001",
@@ -402,6 +402,24 @@
       ],
       "created": "2026-08-09T19:13:04Z",
       "last_seen": "2026-08-09T19:13:04Z"
+    },
+    {
+      "id": "L-023",
+      "key": "spec_precision_gap::when an ac requires a response header behavior on both success and error paths add a test that triggers a registered error handler and asserts the behavior a happy path only test does not prove the error branch",
+      "text": "When an AC requires a response header/behavior on both success and error paths, add a test that triggers a registered error handler and asserts the behavior — a happy-path-only test does not prove the error branch.",
+      "signal": "spec_precision_gap",
+      "scope": "api-middleware",
+      "status": "candidate",
+      "features": [
+        "RA-1-json-structured-logging"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "CORR-04 (spec.md P1: HTTP-Scoped Correlation ID, AC4) (api-middleware)"
+      ],
+      "created": "2026-09-06T15:42:54Z",
+      "last_seen": "2026-09-06T15:42:54Z"
     }
   ]
 }

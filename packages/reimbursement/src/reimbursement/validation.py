@@ -238,7 +238,7 @@ async def _requeue(
         AttemptError.from_exception(len(envelope.errors) + 1, "resolve", exc),
     ]
     retried = ReimbursementEnvelope(
-        uuid=envelope.uuid, retry=envelope.retry + 1, published_at=datetime.now(UTC), errors=errors
+        uuid=envelope.uuid, retry=envelope.retry + 1, published_at=datetime.now(UTC), errors=errors, correlation_id=envelope.correlation_id
     )
     try:
         await publish(
