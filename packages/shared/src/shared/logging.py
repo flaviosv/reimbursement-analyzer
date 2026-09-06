@@ -38,6 +38,23 @@ def reset_correlation_id(token: contextvars.Token) -> None:
     _correlation_id.reset(token)
 
 
+class CorrelationIdFilter(logging.Filter):
+    """Injects the current context's correlation id into every `LogRecord`
+    that passes through — the mechanism that makes the field appear on
+    every log line with no per-call-site `extra={}` needed.
+
+    Omits the attribute entirely (rather than setting it to `None`) when no
+    correlation id is set: `ecs_logging.StdlibFormatter` only emits
+    attributes actually present on the record, so omitting the attribute is
+    what makes the JSON key itself absent instead of present-as-`null`."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        correlation_id = get_correlation_id()
+        if correlation_id is not None:
+            record.correlation_id = correlation_id
+        return True
+
+
 def log_event(logger: logging.Logger, level: int, event: str, **fields: Any) -> None:
     """Emit `{"event": event, **fields}` as one JSON object at `level`.
 

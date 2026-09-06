@@ -1,9 +1,19 @@
 import asyncio
+import logging
 
 import pytest
-from shared.logging import get_correlation_id, reset_correlation_id, set_correlation_id
+from shared.logging import (
+    CorrelationIdFilter,
+    get_correlation_id,
+    reset_correlation_id,
+    set_correlation_id,
+)
 
 pytestmark = pytest.mark.anyio
+
+
+def _record() -> logging.LogRecord:
+    return logging.LogRecord("test", logging.INFO, "path", 1, "message", None, None)
 
 
 class DescribeContextVar:
@@ -57,3 +67,52 @@ class DescribeContextVar:
         await asyncio.gather(_run("a", "req-a"), _run("b", "req-b"))
 
         assert seen == {"a": "req-a", "b": "req-b"}
+
+
+class DescribeCorrelationIdFilter:
+    def it_sets_the_attribute_when_a_correlation_id_is_set(self) -> None:
+        token = set_correlation_id("corr-filter-1")
+        try:
+            record = _record()
+            CorrelationIdFilter().filter(record)
+            assert record.correlation_id == "corr-filter-1"
+        finally:
+            reset_correlation_id(token)
+
+    def it_omits_the_attribute_entirely_when_no_correlation_id_is_set(self) -> None:
+        record = _record()
+
+        CorrelationIdFilter().filter(record)
+
+        # Omitted, not set to None: ecs_logging only emits attributes
+        # actually present on the record.
+        assert not hasattr(record, "correlation_id")
+
+    def it_always_returns_true_so_the_record_is_never_filtered_out(self) -> None:
+        assert CorrelationIdFilter().filter(_record()) is True
+
+        token = set_correlation_id("corr-filter-2")
+        try:
+            assert CorrelationIdFilter().filter(_record()) is True
+        finally:
+            reset_correlation_id(token)
+
+    async def it_never_leaks_one_asyncio_tasks_correlation_id_onto_anothers_record(
+        self,
+    ) -> None:
+        results: dict[str, logging.LogRecord] = {}
+
+        async def _run(name: str, value: str) -> None:
+            token = set_correlation_id(value)
+            try:
+                await asyncio.sleep(0)
+                record = _record()
+                CorrelationIdFilter().filter(record)
+                results[name] = record
+            finally:
+                reset_correlation_id(token)
+
+        await asyncio.gather(_run("a", "req-a"), _run("b", "req-b"))
+
+        assert results["a"].correlation_id == "req-a"
+        assert results["b"].correlation_id == "req-b"
