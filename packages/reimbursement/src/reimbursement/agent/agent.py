@@ -18,6 +18,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from shared import failure_log
 from shared.config import load_config
+from shared.logging import get_correlation_id
 from shared.reimbursement.use_cases.apply_decision import apply_decision
 
 from reimbursement.agent.nodes.analysis import Analysis, GuardrailVerdict
@@ -145,12 +146,15 @@ async def decide(
     own connection only for the duration of their own write, so a pool
     connection isn't held checked-out for the LLM round-trips in between."""
     graph = get_graph()
+    metadata: dict[str, str] = {"langfuse_session_id": str(reimbursement.uuid)}
+    if (correlation_id := get_correlation_id()) is not None:
+        metadata["correlation_id"] = correlation_id
     result = await graph.ainvoke(
         {"reimbursement": reimbursement},
         config={
             "configurable": {"pool": pool, "acquire_timeout_seconds": acquire_timeout_seconds},
             "callbacks": _langfuse_handlers(),
-            "metadata": {"langfuse_session_id": str(reimbursement.uuid)},
+            "metadata": metadata,
         },
     )
     return result
