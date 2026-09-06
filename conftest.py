@@ -18,6 +18,7 @@ import asyncpg
 import psycopg
 import pytest
 from api.migrate import apply_migrations
+from opentelemetry import propagate
 from shared.testing import (
     MAINTENANCE_DATABASE,
     POSTGRES_IMAGE,
@@ -27,6 +28,19 @@ from shared.testing import (
     with_database,
 )
 from testcontainers.community.postgres import PostgresContainer
+
+
+@pytest.fixture(autouse=True)
+def _restore_global_textmap() -> Iterator[None]:
+    # Several tracing tests call propagate.set_global_textmap(...) with no
+    # teardown of their own; without this, whichever test runs last decides
+    # what every later test (any package, same pytest session) sees as the
+    # global propagator.
+    original = propagate.get_global_textmap()
+    try:
+        yield
+    finally:
+        propagate.set_global_textmap(original)
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:

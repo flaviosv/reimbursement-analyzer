@@ -1,6 +1,6 @@
 # Codebase Concerns
 
-**Analysis Date:** 2026-08-09 (refreshed — agent-model-config)
+**Analysis Date:** 2026-09-06 (refreshed — adding-tracing-support)
 
 ## Tech Debt
 
@@ -30,7 +30,7 @@
 
 **All secrets flow through one local `.env` file:**
 - Risk: DB password, Kafka SASL credentials, and every LangFuse infra/API secret are read from a single `.env`, seeded from `.env.sample`'s documented weak placeholders.
-- Files: `.env.sample`, `docker-compose.yml` (`${VAR}` interpolation throughout)
+- Files: `.env.sample` (`docker-compose.yml`'s `${VAR}` interpolation, previously listed here too, no longer applies — the file was removed this branch, AD-040)
 - Current mitigation: `.env.sample`'s own header states these are local-dev-only placeholders; `.gitignore` does not track a real `.env`.
 - Recommendations: acceptable for local development as-is; no evidence of a secrets-manager integration path exists for a non-local deployment — worth defining before this ever runs outside a developer's machine.
 
@@ -51,9 +51,16 @@
 **Kafka producer construction is the app's single point of startup failure:**
 - Files: `packages/api/src/api/main.py` (`lifespan`), `packages/shared/src/shared/producer.py` (`managed_producer`)
 - Why fragile: the FastAPI app will not finish starting if the Kafka broker is unreachable at boot (the `AIOProducer` construction happens inside `lifespan`, which every request depends on).
-- Common failures: broker not yet healthy when `api` starts — mitigated in compose by `depends_on: kafka: condition: service_healthy`, but a bare `uv run uvicorn` outside compose has no such guard.
+- Common failures: broker not yet healthy when `api` starts — previously mitigated by `docker-compose.yml`'s `depends_on: kafka: condition: service_healthy`, removed entirely this branch (AD-040); no equivalent guard exists in this repo today, and a bare `uv run uvicorn` has none either — any startup-ordering guard now lives in the sibling `local-env` k3s/Tilt setup, if at all.
 - Safe-modification notes: any change to `lifespan` risks breaking startup for every route, not just `reimbursement/create` — test via `packages/api/tests/test_main.py`'s `DescribeLifespan` before altering it.
 - Test coverage: covered (`test_main.py`), but only for construction/teardown — not for a broker-unreachable-at-startup scenario.
+
+**`shared.producer.publish` drives `confluent_kafka.aio.AIOProducer`'s private internals directly:**
+- Files: `packages/shared/src/shared/producer.py` (`publish()`), `packages/shared/tests/test_producer.py`
+- Why fragile: reaches into `producer._producer` and `producer.executor` — both underscore-prefixed/undocumented implementation details of `confluent_kafka.aio.AIOProducer`, not part of its public API contract — because the library's public async `produce()` raises `NotImplementedError` unconditionally when `headers=` is passed (needed here to carry OTel trace context), on the locked `confluent-kafka==2.15.0`. A future `confluent-kafka` upgrade could rename or remove either attribute with no deprecation warning, since neither is a documented interface.
+- Common failures: silently breaks on a `confluent-kafka` version bump if `_producer`/`executor`'s shape changes — nothing else in the codebase would catch this until a test or a real publish fails.
+- Safe-modification notes: re-verify this workaround (or check for public API support for headers in the async path) before bumping `confluent-kafka` past `2.15.0`; test via `packages/shared/tests/test_producer.py`'s fakes, which model the same private-attribute shape.
+- Test coverage: covered (`test_producer.py`'s `_FakeAIOProducer`/`_ImmediateFakeSyncProducer` model the exact `._producer`/`.executor` shape), but only against a fake — no test guards against the real library's internals actually matching this shape after an upgrade.
 
 ## Test Coverage Gaps
 

@@ -144,7 +144,25 @@ Seen once or not yet corroborated. Tracked, not trusted.
 - evidence: AGD-13, AGD-16 (packages/reimbursement/tests/test_apply_policies.py) (test-quality)
 - last seen: 2026-08-09T19:13:04Z
 
-### L-023 — When an AC requires a response header/behavior on both success and error paths, add a test that triggers a registered error handler and asserts the behavior — a happy-path-only test does not prove the error branch.
+### L-023 — When a spec requires stamping an attribute at every hop where a value becomes known, check every branch of that hop's handler including escalation/error branches, not just the primary success path — a use-case return value that is discarded is a common place this slips.
+- signal: `spec_precision_gap` · recurrence: 1 feature(s) · scope: `tracing` · harmful: 0
+- features: RA-2-adding-tracing-support
+- evidence: P2 AC2 / packages/publisher/src/publisher/processing.py:214-254 (tracing)
+- last seen: 2026-09-06T17:09:17Z
+
+### L-024 — When a process-wide tracer/provider singleton blocks running multiple real service entrypoints together in one test process, a hand-simulated multi-hop test proves only the propagation mechanism, not the full real-service lifecycle — treat the full-lifecycle acceptance criterion as still open until proven against real entrypoints or live infra.
+- signal: `spec_precision_gap` · recurrence: 1 feature(s) · scope: `tracing` · harmful: 0
+- features: RA-2-adding-tracing-support
+- evidence: P1 AC7 / packages/publisher/tests/test_trace_propagation_integration.py:1-17 (tracing)
+- last seen: 2026-09-06T17:09:17Z
+
+### L-025 — When a task's own Tests field promises a test mirroring an already-built sibling test, verify that test was actually added before marking the task done — a promised-but-missing unit test for a composition-root call site is easy to lose track of.
+- signal: `ac_gap` · recurrence: 1 feature(s) · scope: `testing` · harmful: 0
+- features: RA-2-adding-tracing-support
+- evidence: T9 Done-when / packages/publisher/src/publisher/consumer.py:126,145 (testing)
+- last seen: 2026-09-06T17:09:17Z
+
+### L-026 — When an AC requires a response header/behavior on both success and error paths, add a test that triggers a registered error handler and asserts the behavior — a happy-path-only test does not prove the error branch.
 - signal: `spec_precision_gap` · recurrence: 1 feature(s) · scope: `api-middleware` · harmful: 0
 - features: RA-1-json-structured-logging
 - evidence: CORR-04 (spec.md P1: HTTP-Scoped Correlation ID, AC4) (api-middleware)

@@ -3,6 +3,7 @@ from uuid import UUID
 
 import asyncpg
 from fastapi import APIRouter, Depends, Request
+from opentelemetry import trace
 from shared import failure_log
 from shared.config import MAX_BODY_BYTES, load_config
 from shared.errors import (
@@ -11,9 +12,10 @@ from shared.errors import (
     ReimbursementUuidMismatch,
     sanitize,
 )
-from shared.logging import log_event
+from shared.logging import get_correlation_id, log_event
 from shared.reimbursement.use_cases.get_reimbursement import get_reimbursement
 from shared.reimbursement.use_cases.review_reimbursement import approve_reimbursement, reject_reimbursement
+from shared.tracing import stamp_span
 
 from api.dependencies import get_pool
 from api.errors import MessageResponse
@@ -49,6 +51,7 @@ async def put_reimbursement(
     -> respond. Every failure mode, including the uuid consistency check, is
     a raise of a typed exception from validation.py, this route, or the use
     case, caught by the app-wide handlers registered in errors.py."""
+    stamp_span(trace.get_current_span(), uuid=uuid, correlation_id=get_correlation_id())
     raw = await read_capped(request)
     review = validate_review(raw)
     if review.uuid is not None and review.uuid != uuid:

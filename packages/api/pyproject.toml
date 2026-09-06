@@ -10,6 +10,7 @@ dependencies = [
     "asyncpg>=0.31.0",
     "confluent-kafka>=2.15.0",
     "fastapi>=0.141.1",
+    "opentelemetry-instrumentation-fastapi>=0.65b0",
     "pydantic>=2.13.4",
     "python-dotenv>=1.2.2",
     "shared",

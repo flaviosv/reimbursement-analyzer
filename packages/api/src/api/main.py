@@ -4,11 +4,13 @@ from dataclasses import replace
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from shared.config import load_config
 from shared.db import managed_pool
 from shared.logging import configure_logging
 from shared.models import HealthStatus
 from shared.producer import managed_producer
+from shared.tracing import init_tracer, shutdown_tracer_async
 
 from api.errors import register_handlers
 from api.middleware import CorrelationIdMiddleware
@@ -28,19 +30,23 @@ configure_logging()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Owns every resource the app needs for its lifetime — the Kafka
-    producer and the DB pool. New resources get added here as another
-    `async with` / `app.state.*` assignment."""
+    """Owns every resource the app needs for its lifetime — the tracer
+    provider, the Kafka producer, and the DB pool. New resources get added
+    here as another `async with` / `app.state.*` assignment."""
     config = load_config()
+    tracer_provider = init_tracer("reimbursement-analyzer-api", config.tracing.otlp_endpoint)
+    app.state.tracer_provider = tracer_provider
     async with managed_producer(config.kafka.to_producer_config()) as producer:
         app.state.producer = producer
         async with managed_pool(replace(config.database, pool_min_size=0)) as pool:
             app.state.pool = pool
             yield
+            await shutdown_tracer_async(tracer_provider)
 
 
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(CorrelationIdMiddleware)
+FastAPIInstrumentor.instrument_app(app)
 register_handlers(app)
 app.include_router(reimbursement_router)
 app.include_router(list_reimbursement_router)

@@ -3,9 +3,11 @@ import logging
 
 from confluent_kafka.aio import AIOProducer
 from fastapi import APIRouter, Depends, Request
+from opentelemetry import trace
 from shared.config import MAX_BODY_BYTES, load_config
 from shared.errors import BatchInvalid
-from shared.logging import log_event
+from shared.logging import get_correlation_id, log_event
+from shared.tracing import stamp_span
 
 from api.dependencies import get_producer
 from api.errors import MessageResponse
@@ -60,6 +62,7 @@ async def create_reimbursement(
     request IDs the response and error logging both need along the way —
     every failure mode is still a raise from one of the three collaborators,
     caught by the app-wide handlers registered in errors.py."""
+    stamp_span(trace.get_current_span(), correlation_id=get_correlation_id())
     raw = await read_capped(request)
     try:
         batch = validate_batch(raw)

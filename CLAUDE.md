@@ -16,6 +16,17 @@ For any change that creates, modifies, or influences a reimbursement decision (d
 - **No silent fallbacks.** If a traceability sink (e.g., LangFuse) is unavailable, fall back to durable file/structured logging rather than dropping the trace. A decision must never happen without a durable record of how it was reached.
 - **PII** Be careful with PII, do not output/log PII information
 
+## Distributed Tracing — Standing Requirement
+
+`api`, `publisher`, and `reimbursement` are always instrumented with OpenTelemetry and export spans via OTLP/HTTP to the Elastic APM Server (default endpoint `http://apm-server.shared-services.svc.cluster.local:8200`, configurable via `OTEL_EXPORTER_OTLP_ENDPOINT`) — see `shared.tracing` for the shared `init_tracer`/`shutdown_tracer`/`traced_message_span` helpers every service's composition root calls into.
+
+- **`api`'s HTTP layer** is auto-instrumented via `FastAPIInstrumentor.instrument_app(app)` at startup — no per-route span-creation code.
+- **Any new Kafka consumer or background task** added to `publisher` or `reimbursement` must wrap its message/task processing in an explicit `shared.tracing.traced_message_span(...)` call, maintaining the same trace-context propagation pattern (extract from inbound Kafka headers, inject into outbound ones via `shared.producer.publish`) — this is required before that code path ships, not deferred as follow-up, mirroring the LLM-tracing rule above.
+- **Every service** initializes the global `TracerProvider` at startup and shuts it down cleanly at its existing shutdown hook.
+- **Span attributes**: stamp `correlation_id` at every hop where it's available (which is every hop, from the first — see `AD-041` in `.specs/STATE.md`), reading it from `shared.logging`'s ContextVar getter or the envelope, whichever is already in scope; also stamp `reimbursement.uuid` wherever the span already has it in scope (it remains independently useful, e.g. for direct DB lookups), and (for Kafka consumer spans) the message's topic/partition/offset.
+
+**Local development note:** this repo's real local dev/verification environment is the sibling `local-env` project's k3s/Tilt setup (the only place that reaches the real Elastic APM Server) — not an operational instruction for other developers to follow verbatim, since that path is specific to this machine.
+
 ## Logging
 
 Every log line across `api`, `publisher`, and `reimbursement` is a single JSON object with ECS field names, and every HTTP request carries a `correlation_id` that threads through in-process logs, Kafka messages, and LangFuse trace metadata — the mechanism that lets a decision be reconstructed end-to-end from logs alone (the traceability NFR above).

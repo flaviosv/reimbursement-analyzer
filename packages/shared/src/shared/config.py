@@ -75,6 +75,11 @@ class FailureLogConfig:
 
 
 @dataclass(frozen=True)
+class TracingConfig:
+    otlp_endpoint: str
+
+
+@dataclass(frozen=True)
 class LoggingConfig:
     """The raw `LOG_LEVEL` env value, unparsed and unvalidated — plain data
     holder (AD-023's rule). Level-name validation and the invalid-value
@@ -99,6 +104,7 @@ class Config:
     kafka: KafkaConfig
     database: DatabaseConfig
     failure_log: FailureLogConfig
+    tracing: TracingConfig
     logging: LoggingConfig
 
 
@@ -133,6 +139,12 @@ def load_config() -> Config:
         failure_log=FailureLogConfig(
             logger_name="reimbursementanalyzer.failures",
             max_message_chars=2000,
+        ),
+        tracing=TracingConfig(
+            otlp_endpoint=os.getenv(
+                "OTEL_EXPORTER_OTLP_ENDPOINT",
+                "http://apm-server.shared-services.svc.cluster.local:8200",
+            ),
         ),
         logging=LoggingConfig(level=os.getenv("LOG_LEVEL", "debug")),
     )

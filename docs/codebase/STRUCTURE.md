@@ -64,7 +64,8 @@
 │   │       ├── fakes.py            # Test doubles as classes (FakeProducer, FakePool, RealPool)
 │   │       ├── test_consumer.py
 │   │       ├── test_processing.py
-│   │       └── test_integration.py   # Real Kafka + Postgres round trip
+│   │       ├── test_integration.py   # Real Kafka + Postgres round trip
+│   │       └── test_trace_propagation_integration.py   # Real Kafka trace-context propagation round trip
 │   └── shared/                 # Shared kernel, installable package
 │       └── src/shared/
 │           ├── config.py          # KafkaConfig, DatabaseConfig, FailureLogConfig, PublisherConfig, load_config()
@@ -82,15 +83,15 @@
 │                   ├── list_reimbursements.py  # list_reimbursements() — status whitelist + limit/offset gates
 │                   └── review_reimbursement.py # approve_reimbursement(), reject_reimbursement() — the approve/reject transaction
 │           ├── signals.py         # install_shutdown_handlers() — SIGINT/SIGTERM → asyncio.Event (used by reimbursement only so far)
-│           └── testing.py         # FakeProducer — the one test double genuinely reused across service test suites
-├── tests/e2e/                  # Real-docker-compose-stack, real-Groq e2e suite (@pytest.mark.e2e, excluded by default)
+│           ├── testing.py         # FakeProducer, in_memory_tracer() — test doubles genuinely reused across service test suites
+│           └── tracing.py         # OTel wiring — init_tracer/shutdown_tracer/traced_message_span/stamp_span, Kafka header inject/extract
+├── tests/e2e/                  # Real-stack, real-Groq e2e suite (@pytest.mark.e2e, excluded by default) — real stack was docker-compose, now the sibling local-env k3s/Tilt setup (AD-040)
 │   ├── conftest.py               # Env loading + stack-readiness gate (poll-and-fail-fast; never starts/stops the stack)
 │   ├── polling.py                 # wait_for_status, find_uuid_by_request_id
 │   ├── payload_builders.py        # Per-bucket payload fixtures engineered for unambiguous real-model steering
 │   ├── langfuse_helper.py         # trace_exists_for_session — polls LangFuse's observations API
 │   └── test_{happy_path,auto_reject,human_review,retry_ghost_stale}.py  # One file per decision-outcome bucket
 ├── conftest.py                 # Workspace-level Postgres fixture (shared by every package's tests) + the e2e collection-skip hook
-├── docker-compose.yml          # Full local stack (app infra + LangFuse + 3 services)
 ├── pyproject.toml              # Workspace root — pytest config, dev dependency group
 └── uv.lock
 ```
@@ -131,7 +132,7 @@
 
 - **Purpose:** code genuinely reusable across `api`, `reimbursement`, and `publisher` — cross-service pydantic models, exception classes, Kafka config/publish primitives, the Postgres pool lifecycle, structured logging + correlation-id propagation, and the `reimbursement` domain's persistence + use-case layer (the largest slice: list/filter, the approve/reject review transaction, the insert+publish unit, and the original escalation path).
 - **Location:** `packages/shared/src/shared/`.
-- **Key files:** `config.py` (`load_config()` — single cached env-config entrypoint, incl. `LoggingConfig`), `db.py` (`managed_pool` — Postgres pool lifecycle), `logging.py` (`configure_logging()` — ECS-JSON root-logger setup; `get_correlation_id`/`set_correlation_id`/`reset_correlation_id`; `CorrelationIdFilter`; `log_event()`), `producer.py` (`managed_producer`, `publish` — technology-specific but domain-agnostic), `models.py` (`ReimbursementRequest`, `RequestEnvelope`, `ReimbursementEnvelope`, `Reimbursement`, `AttemptError`, `SampleMessage`, `HealthStatus`), `errors.py` (`PayloadTooLarge`, `BatchInvalid`, `PublishFailed`, `ReimbursementFilterInvalid`, `ReviewInvalid`, `ReimbursementNotFound`, `ReimbursementNotEligible`, `ReimbursementUuidMismatch`, `sanitize()`), `failure_log.py` (`write()` — last-resort structured log), `reimbursement/repository.py` (every SQL statement — insert, delete, fetch, approve, reject, record decision) + `reimbursement/use_cases/{send_human_review,publish_pending,list_reimbursements,review_reimbursement}.py` (the escalation action, the insert+publish unit, the list/filter gates, and the approve/reject transaction).
+- **Key files:** `config.py` (`load_config()` — single cached env-config entrypoint, incl. `LoggingConfig`), `db.py` (`managed_pool` — Postgres pool lifecycle), `logging.py` (`configure_logging()` — ECS-JSON root-logger setup; `get_correlation_id`/`set_correlation_id`/`reset_correlation_id`; `CorrelationIdFilter`; `log_event()`), `producer.py` (`managed_producer`, `publish` — technology-specific but domain-agnostic), `tracing.py` (`init_tracer()`/`shutdown_tracer()`/`traced_message_span()`/`stamp_span()` — OTel wiring shared by every service), `models.py` (`ReimbursementRequest`, `RequestEnvelope`, `ReimbursementEnvelope`, `Reimbursement`, `AttemptError`, `SampleMessage`, `HealthStatus`), `errors.py` (`PayloadTooLarge`, `BatchInvalid`, `PublishFailed`, `ReimbursementFilterInvalid`, `ReviewInvalid`, `ReimbursementNotFound`, `ReimbursementNotEligible`, `ReimbursementUuidMismatch`, `sanitize()`), `failure_log.py` (`write()` — last-resort structured log), `reimbursement/repository.py` (every SQL statement — insert, delete, fetch, approve, reject, record decision) + `reimbursement/use_cases/{send_human_review,publish_pending,list_reimbursements,review_reimbursement}.py` (the escalation action, the insert+publish unit, the list/filter gates, and the approve/reject transaction).
 
 ### `publisher`
 
@@ -181,7 +182,7 @@
 
 **`docs/original/`:** the sample reimbursement request dataset (`sample.json`) that several documented sizing decisions (body ceiling, batch cardinality) are calibrated against.
 
-**`tests/e2e/`:** real-stack, no-fakes e2e suite — drives the real `docker compose` stack through its external HTTP/Kafka surfaces only, no `TestClient`/`dependency_overrides`/direct DB access from test code. Gated behind `@pytest.mark.e2e`, excluded by default via both `pyproject.toml`'s `addopts` and root `conftest.py`'s structural collection hook — see `TESTING.md`.
+**`tests/e2e/`:** real-stack, no-fakes e2e suite — drives a real running stack through its external HTTP/Kafka surfaces only (previously `docker compose`; that file was removed this branch, AD-040 — the suite now assumes the sibling `local-env` k3s/Tilt setup is up instead), no `TestClient`/`dependency_overrides`/direct DB access from test code. Gated behind `@pytest.mark.e2e`, excluded by default via both `pyproject.toml`'s `addopts` and root `conftest.py`'s structural collection hook — see `TESTING.md`.
 
 ## Monorepo Package Map
 
