@@ -1,8 +1,10 @@
 import json
+from unittest.mock import Mock
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from opentelemetry import trace
 from shared.testing import valid_reimbursement_item
 
 from api.dependencies import get_producer
@@ -139,6 +141,62 @@ class DescribeCreateReimbursement:
 
         assert response.status_code == 500
         assert response.json() == {"msg": "failed to publish request"}
+
+    def it_stamps_correlation_id_on_the_current_span_when_available(
+        self, immediate_fake_producer_class, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # publish() -> inject_headers() also calls trace.get_current_span
+        # (with a context argument, to serialize the real active span onto
+        # the outbound Kafka headers) later in this same request — so the
+        # fake only intercepts this route's own bare, no-argument call and
+        # forwards every other call to the real implementation, rather than
+        # replacing get_current_span globally for the whole request.
+        real_get_current_span = trace.get_current_span
+        fake_span = Mock()
+
+        def _fake_get_current_span(*args: object, **kwargs: object) -> object:
+            if not args and not kwargs:
+                return fake_span
+            return real_get_current_span(*args, **kwargs)
+
+        fake = immediate_fake_producer_class()
+        client = _build_client(fake)
+        monkeypatch.setattr(
+            "api.reimbursement.create.route.trace.get_current_span", _fake_get_current_span
+        )
+        monkeypatch.setattr(
+            "api.reimbursement.create.route.get_correlation_id", lambda: "req-post-corr-id"
+        )
+
+        response = client.post("/api/v1/reimbursement", json=[VALID_ITEM])
+
+        assert response.status_code == 201
+        fake_span.set_attribute.assert_called_once_with("correlation_id", "req-post-corr-id")
+
+    def it_does_not_stamp_a_span_attribute_when_no_correlation_id_is_available(
+        self, immediate_fake_producer_class, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Same forwarding rationale as the test above: publish()'s own
+        # inject_headers() call still needs the real get_current_span.
+        real_get_current_span = trace.get_current_span
+        fake_span = Mock()
+
+        def _fake_get_current_span(*args: object, **kwargs: object) -> object:
+            if not args and not kwargs:
+                return fake_span
+            return real_get_current_span(*args, **kwargs)
+
+        fake = immediate_fake_producer_class()
+        client = _build_client(fake)
+        monkeypatch.setattr(
+            "api.reimbursement.create.route.trace.get_current_span", _fake_get_current_span
+        )
+        monkeypatch.setattr("api.reimbursement.create.route.get_correlation_id", lambda: None)
+
+        response = client.post("/api/v1/reimbursement", json=[VALID_ITEM])
+
+        assert response.status_code == 201
+        fake_span.set_attribute.assert_not_called()
 
 
 class DescribeTheRealApp:

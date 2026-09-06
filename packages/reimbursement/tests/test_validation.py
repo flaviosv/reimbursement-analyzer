@@ -212,6 +212,40 @@ class DescribeHandleMessageParsing:
         span = exporter.get_finished_spans()[0]
         assert span.attributes["reimbursement.uuid"] == str(uuid)
 
+    async def it_stamps_correlation_id_on_the_current_span_once_parsed(self) -> None:
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        tracer = provider.get_tracer(__name__)
+        pool = FakePool(rows={})
+        deps = _deps(pool=pool)
+        envelope = _envelope(uuid=uuid4(), retry=0, correlation_id="corr-validation-1")
+
+        with tracer.start_as_current_span("process_message"):
+            outcome = await handle_message(deps, envelope.model_dump_json().encode())
+
+        assert outcome == MessageOutcome.GHOST
+        span = exporter.get_finished_spans()[0]
+        assert span.attributes["correlation_id"] == "corr-validation-1"
+
+    async def it_leaves_no_correlation_id_span_attribute_when_the_envelope_carries_none(
+        self,
+    ) -> None:
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        tracer = provider.get_tracer(__name__)
+        pool = FakePool(rows={})
+        deps = _deps(pool=pool)
+        envelope = _envelope(uuid=uuid4(), retry=0, correlation_id=None)
+
+        with tracer.start_as_current_span("process_message"):
+            outcome = await handle_message(deps, envelope.model_dump_json().encode())
+
+        assert outcome == MessageOutcome.GHOST
+        span = exporter.get_finished_spans()[0]
+        assert "correlation_id" not in span.attributes
+
 
 class DescribeRetryCeilingEscalation:
     async def it_escalates_a_real_row_and_returns_escalated(

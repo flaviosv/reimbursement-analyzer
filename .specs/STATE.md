@@ -1489,6 +1489,55 @@ point at the sibling `local-env` project instead. See
 `.specs/features/RA-2-adding-tracing-support/spec.md`'s P3 AC3 for the
 traceable requirement.
 
+### AD-041 — RA-2's `reimbursement.uuid` span-attribute convention gains `correlation_id` alongside it everywhere the latter is now available (post-RA-1 merge); kept, never replaced, wherever a span already resolves `reimbursement.uuid` too
+
+**Date:** 2026-09-06
+**Status:** Active
+**Supersedes:** none (extends RA-2's OTEL-* span-attribute convention; RA-2's own spec.md flagged this migration as a known forward-looking gap — see grilling-session.md decision #2's note)
+
+RA-2 (`adding-tracing-support`) stamped `reimbursement.uuid` as the
+cross-span correlation attribute at every hop where that value was known
+— `api`'s GET/PUT request spans, `publisher`'s `process_message` span
+(`process_item`/`escalate_item`), and `reimbursement`'s `process_message`
+span. At RA-2 design time no better identifier existed, and the uuid
+itself doesn't exist until `publisher` inserts the row — which is why
+RA-2's spec.md explicitly scoped `api`'s `POST /api/v1/reimbursement`
+create-route span *out*: the uuid isn't mintable that early.
+
+Merging `main` (RA-1, `json-structured-logging`) brings in `correlation_id`
+— sourced from the inbound `X-Request-ID` header (or generated) at `api`'s
+very first hop, threaded through `shared.logging`'s ContextVar,
+`RequestEnvelope`/`ReimbursementEnvelope`, and every downstream consumer.
+Unlike `reimbursement.uuid`, it is available from the first hop onward,
+closing RA-2's own flagged gap.
+
+**Decision:** every span that stamped `reimbursement.uuid` now also stamps
+`correlation_id` (read from `shared.logging.get_correlation_id()` where
+only the ContextVar is in scope — `api`'s GET/PUT/POST routes — or directly
+from the envelope where it's already a local variable — `publisher`'s
+`process_item`/`escalate_item`, `reimbursement`'s `validation.handle_message`).
+`reimbursement.uuid` is kept, not replaced, on every span that already
+resolves it: it stays independently useful there (e.g. a direct DB lookup
+by uuid), and stamping both is one extra `set_attribute` call on a span
+already open — cheap and non-redundant. `api`'s `POST /api/v1/reimbursement`
+create-route span now stamps `correlation_id` only, since `reimbursement.uuid`
+still isn't known at that hop — this is the gap spec.md flagged as
+impossible at RA-2 design time, now closed.
+
+**Why not replace `reimbursement.uuid` outright:** a direct DB/log
+correlation by `reimbursement.uuid` is a distinct, still-common query shape
+(e.g. "find every span for this row") that `correlation_id` doesn't
+substitute for — it correlates a request/message chain, not a specific
+reimbursement row once one exists. Dropping it would regress that lookup
+path for no cost saving (the attribute is already free to add once the
+span and the value are both in scope).
+
+**Implication:** any new agent/LLM or Kafka-consumer code path this
+project adds must stamp `correlation_id` at its own first opportunity
+(mirroring `CLAUDE.md`'s Distributed Tracing standing requirement), and
+keep `reimbursement.uuid` alongside it wherever that value is also
+resolved at that span — never one or the other by default.
+
 ---
 
 ## Handoff

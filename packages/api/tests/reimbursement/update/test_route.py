@@ -275,12 +275,32 @@ class DescribePutReimbursement:
         monkeypatch.setattr(
             "api.reimbursement.update.route.trace.get_current_span", lambda: fake_span
         )
+        monkeypatch.setattr("api.reimbursement.update.route.get_correlation_id", lambda: None)
 
         async with _build_client(FakePool(db)) as client:
             response = await client.put(f"/api/v1/reimbursement/{uuid}", json=_APPROVE_PAYLOAD)
 
         assert response.status_code == 200
         fake_span.set_attribute.assert_called_once_with("reimbursement.uuid", str(uuid))
+
+    async def it_stamps_correlation_id_on_the_current_span_when_available(
+        self, db: asyncpg.Connection, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        uuid = await seed_reimbursement(db, "REQ-PUT-SPAN-CORR")
+        fake_span = Mock()
+        monkeypatch.setattr(
+            "api.reimbursement.update.route.trace.get_current_span", lambda: fake_span
+        )
+        monkeypatch.setattr(
+            "api.reimbursement.update.route.get_correlation_id", lambda: "req-put-corr-id"
+        )
+
+        async with _build_client(FakePool(db)) as client:
+            response = await client.put(f"/api/v1/reimbursement/{uuid}", json=_APPROVE_PAYLOAD)
+
+        assert response.status_code == 200
+        fake_span.set_attribute.assert_any_call("reimbursement.uuid", str(uuid))
+        fake_span.set_attribute.assert_any_call("correlation_id", "req-put-corr-id")
 
     async def it_lets_exactly_one_of_two_concurrent_puts_win(self, migrated_db: str) -> None:
         # A real asyncpg pool (not FakePool's single locked connection): the

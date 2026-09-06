@@ -373,6 +373,23 @@ class DescribeInsertThenPublish:
         span = exporter.get_finished_spans()[0]
         assert span.attributes["reimbursement.uuid"] == published_uuid
 
+    async def it_stamps_correlation_id_on_the_current_span_once_published(self) -> None:
+        item = valid_reimbursement_item("REQ-SPAN-CORR")
+        pool, producer = FakePool(), FakeProducer()
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        tracer = provider.get_tracer(__name__)
+
+        with tracer.start_as_current_span("process_message"):
+            outcome = await process_item(
+                _deps(pool, producer), _envelope([item], correlation_id="corr-publish-1"), 0, item
+            )
+
+        assert outcome is ItemOutcome.PUBLISHED
+        span = exporter.get_finished_spans()[0]
+        assert span.attributes["correlation_id"] == "corr-publish-1"
+
     async def it_leaves_no_row_behind_when_the_publish_fails(self, db: asyncpg.Connection) -> None:
         # No transaction to roll back anymore (AD-033) — the row is gone via
         # publish_pending's explicit compensating delete instead. The
@@ -755,6 +772,33 @@ class DescribeTheRetryCeilingBoundary:
         )
         span = exporter.get_finished_spans()[0]
         assert span.attributes["reimbursement.uuid"] == str(escalated_uuid)
+
+    async def it_stamps_correlation_id_on_the_current_span_once_escalated(
+        self, db: asyncpg.Connection
+    ) -> None:
+        item = valid_reimbursement_item("REQ-ESCALATE-SPAN-CORR")
+        producer = FakeProducer()
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        tracer = provider.get_tracer(__name__)
+
+        with tracer.start_as_current_span("process_message"):
+            outcomes = await handle_message(
+                _deps(RealPool(db), producer),
+                _envelope(
+                    [item],
+                    retry=MAX_RETRY + 1,
+                    errors=_three_failures(),
+                    correlation_id="corr-escalate-1",
+                )
+                .model_dump_json()
+                .encode(),
+            )
+
+        assert outcomes == [ItemOutcome.ESCALATED]
+        span = exporter.get_finished_spans()[0]
+        assert span.attributes["correlation_id"] == "corr-escalate-1"
 
 
 class DescribeAMessagePastTheRetryCeiling:
