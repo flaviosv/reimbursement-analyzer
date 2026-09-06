@@ -72,7 +72,10 @@ def extract_context(headers: KafkaHeaders | None) -> Context:
     turns into a context with no parent span — the caller's subsequent
     `start_as_current_span` then starts a new root trace, with no branching
     logic needed here."""
-    carrier = {key: value.decode() for key, value in (headers or [])}
+    try:
+        carrier = {key: value.decode() for key, value in (headers or [])}
+    except (UnicodeDecodeError, Exception):
+        carrier = {}
     return propagate.extract(carrier)
 
 
