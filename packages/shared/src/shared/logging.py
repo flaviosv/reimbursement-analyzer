@@ -1,10 +1,15 @@
-"""One JSON log-event envelope for this feature's new call sites.
+"""Structured logging configuration, context propagation, and utilities.
 
-Always import as `from shared.logging import log_event` — never
-`from shared import logging`, which reads like the stdlib module at the
+Responsibilities:
+- Correlation-id context management: set/get/reset via contextvars
+- ECS JSON formatting: configure_logging() sets up stdlib to emit JSON logs
+- Structured event helper: log_event() emits events with typed fields
+- Log filtering: CorrelationIdFilter injects context into every log record
+
+Always import as `from shared.logging import log_event, configure_logging, ...`
+— never `from shared import logging`, which reads like the stdlib module at the
 call site (no functional collision either way: Python 3's absolute imports
-resolve a plain `import logging` inside this module to the stdlib, not
-itself)."""
+resolve a plain `import logging` inside this module to the stdlib, not itself)."""
 
 import contextvars
 import logging
