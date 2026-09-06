@@ -1,9 +1,7 @@
 import asyncio
 import signal
-import threading
-import time
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
@@ -11,14 +9,11 @@ from typing import Any
 import publisher.consumer as consumer_module
 import pytest
 from opentelemetry import propagate
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from publisher.config import PublisherConfig, load_publisher_config
 from publisher.consumer import _install_signal_handlers, check_startup_config, managed_consumer, run
 from fakes import FakePool, FakeProducer
-from shared.testing import valid_reimbursement_item
+from shared.testing import ThreadSafeAsyncEvent, in_memory_tracer, valid_reimbursement_item
 from shared.tracing import inject_headers
 from publisher.processing import Dependencies
 from shared.config import REIMBURSEMENT_TOPIC, REQUEST_TOPIC, Config, load_config
@@ -104,25 +99,6 @@ class FakeConsumer:
         self.closed = True
 
 
-class _ThreadSafeAsyncEvent:
-    """A `threading.Event` exposed with an async-compatible `.wait()` — the
-    fake sync producers below set it from a `ThreadPoolExecutor` worker
-    thread (where `shared.producer.publish` now actually drives `produce()`),
-    while test code awaits it from the event loop thread."""
-
-    def __init__(self) -> None:
-        self._event = threading.Event()
-
-    def set(self) -> None:
-        self._event.set()
-
-    def is_set(self) -> bool:
-        return self._event.is_set()
-
-    async def wait(self) -> None:
-        await asyncio.to_thread(self._event.wait)
-
-
 class RecordingProducer(FakeProducer):
     """A FakeProducer that also appends to a shared timeline, so the ordering
     of item publishes against the offset commit is observable."""
@@ -147,12 +123,12 @@ class BlockingProducer(FakeProducer):
 
     def __init__(self) -> None:
         super().__init__()
-        self.started = _ThreadSafeAsyncEvent()
-        self.release = _ThreadSafeAsyncEvent()
+        self.started = ThreadSafeAsyncEvent()
+        self.release = ThreadSafeAsyncEvent()
 
         def _blocking_produce(*, topic: str, value: bytes | None = None, on_delivery: Any = None, **kwargs: object) -> None:
             self.started.set()
-            self.release._event.wait(timeout=5)
+            self.release.wait_sync(timeout=5)
             if on_delivery is not None:
                 on_delivery(None, object())
 
@@ -161,24 +137,28 @@ class BlockingProducer(FakeProducer):
 
 class SignallingProducer(FakeProducer):
     """Delivers a real SIGTERM while the first item is mid-publish, then waits
-    for the handler to fire. Polling `stopping.is_set()` (safe to read
-    cross-thread) rather than awaiting it directly is what keeps this
-    deterministic without an event loop in the executor's worker thread: the
-    message is provably still in flight when the shutdown is requested."""
+    for the handler to fire — deterministic proof the message is provably
+    still in flight when shutdown is requested. `produce()` runs on the
+    executor's worker thread (per `shared.producer.publish`'s sync
+    produce/flush path), so `stopping` (an `asyncio.Event`) is awaited via
+    `run_coroutine_threadsafe` back onto the loop that owns it, rather than
+    busy-polled from this thread."""
 
     def __init__(self, stopping: asyncio.Event) -> None:
         super().__init__()
         self.stopping = stopping
         self.raised = False
+        self._loop = asyncio.get_running_loop()
         original_produce = self._producer.produce
 
         def _signalling_produce(*, topic: str, value: bytes | None = None, **kwargs: object) -> None:
             if not self.raised:
                 self.raised = True
                 signal.raise_signal(signal.SIGTERM)
-                deadline = time.monotonic() + 2.0
-                while not self.stopping.is_set() and time.monotonic() < deadline:
-                    time.sleep(0.01)
+                try:
+                    asyncio.run_coroutine_threadsafe(self.stopping.wait(), self._loop).result(timeout=2.0)
+                except TimeoutError:
+                    pass
             original_produce(topic=topic, value=value, **kwargs)
 
         self._producer.produce = _signalling_produce
@@ -470,16 +450,9 @@ class DescribeTheLoop:
         assert len(consumer.commits) == 2
 
 
-def _in_memory_tracer() -> tuple[Any, InMemorySpanExporter]:
-    exporter = InMemorySpanExporter()
-    provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    return provider.get_tracer(__name__), exporter
-
-
 class DescribeTracedMessageProcessing:
     async def it_wraps_handling_in_a_process_message_span(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        tracer, exporter = _in_memory_tracer()
+        tracer, exporter = in_memory_tracer()
         monkeypatch.setattr(consumer_module, "tracer", tracer)
         stopping = asyncio.Event()
         consumer = FakeConsumer([[_message(["REQ-1"])]], stopping=stopping, stop_after=2)
@@ -492,7 +465,7 @@ class DescribeTracedMessageProcessing:
     async def it_stamps_topic_partition_and_offset_as_span_attributes(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        tracer, exporter = _in_memory_tracer()
+        tracer, exporter = in_memory_tracer()
         monkeypatch.setattr(consumer_module, "tracer", tracer)
         stopping = asyncio.Event()
         message = _message(["REQ-1"])
@@ -508,11 +481,37 @@ class DescribeTracedMessageProcessing:
         assert span.attributes["messaging.kafka.partition"] == 2
         assert span.attributes["messaging.kafka.offset"] == 17
 
+    async def it_stamps_both_kafka_attributes_and_reimbursement_uuid_on_the_same_span(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The other tests in this class drive the real run() loop but only
+        # ever check one attribute family; this proves both actually land on
+        # the one finished span in the real running flow, not two separately
+        # hand-constructed spans that happen to each assert their own half.
+        tracer, exporter = in_memory_tracer()
+        monkeypatch.setattr(consumer_module, "tracer", tracer)
+        stopping = asyncio.Event()
+        message = _message(["REQ-SAME-SPAN"])
+        message._topic = REQUEST_TOPIC
+        message._partition = 4
+        message._offset = 21
+        consumer = FakeConsumer([[message]], stopping=stopping, stop_after=2)
+        producer = FakeProducer()
+
+        await run(_deps(FakePool(), producer), consumer, stopping)
+
+        span = exporter.get_finished_spans()[0]
+        published_uuid = producer.messages(REIMBURSEMENT_TOPIC)[0]["uuid"]
+        assert span.attributes["messaging.kafka.topic"] == REQUEST_TOPIC
+        assert span.attributes["messaging.kafka.partition"] == 4
+        assert span.attributes["messaging.kafka.offset"] == 21
+        assert span.attributes["reimbursement.uuid"] == published_uuid
+
     async def it_starts_a_child_span_when_the_message_carries_trace_headers(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         propagate.set_global_textmap(TraceContextTextMapPropagator())
-        tracer, exporter = _in_memory_tracer()
+        tracer, exporter = in_memory_tracer()
         monkeypatch.setattr(consumer_module, "tracer", tracer)
 
         with tracer.start_as_current_span("producer-span") as producer_span:
@@ -532,7 +531,7 @@ class DescribeTracedMessageProcessing:
     async def it_starts_a_new_root_span_when_the_message_carries_no_headers(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        tracer, exporter = _in_memory_tracer()
+        tracer, exporter = in_memory_tracer()
         monkeypatch.setattr(consumer_module, "tracer", tracer)
         stopping = asyncio.Event()
         consumer = FakeConsumer([[_message(["REQ-1"])]], stopping=stopping, stop_after=2)
@@ -541,3 +540,46 @@ class DescribeTracedMessageProcessing:
 
         process_span = exporter.get_finished_spans()[0]
         assert process_span.parent is None
+
+
+class DescribeServe:
+    async def it_initializes_and_shuts_down_a_tracer_provider_with_the_publisher_service_name(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Mocks out every real-I/O dependency `_serve()` owns (DB pool, Kafka
+        # producer/consumer, the consume loop itself — each already covered
+        # on its own elsewhere in this file) so it can run to completion once,
+        # leaving only the tracer lifecycle unmocked and observable.
+        monkeypatch.setattr(consumer_module, "check_startup_config", lambda config, publisher: None)
+
+        @asynccontextmanager
+        async def _fake_managed_pool(config):
+            yield FakePool()
+
+        @asynccontextmanager
+        async def _fake_managed_producer(config, **kwargs):
+            yield FakeProducer()
+
+        @asynccontextmanager
+        async def _fake_managed_consumer(config, publisher):
+            yield object()
+
+        async def _fake_run(deps, consumer, stopping):
+            return None
+
+        monkeypatch.setattr(consumer_module, "managed_pool", _fake_managed_pool)
+        monkeypatch.setattr(consumer_module, "managed_producer", _fake_managed_producer)
+        monkeypatch.setattr(consumer_module, "managed_consumer", _fake_managed_consumer)
+        monkeypatch.setattr(consumer_module, "run", _fake_run)
+
+        shutdown_calls: list[object] = []
+
+        async def _fake_shutdown(provider: object) -> None:
+            shutdown_calls.append(provider)
+
+        monkeypatch.setattr(consumer_module, "shutdown_tracer_async", _fake_shutdown)
+
+        await consumer_module._serve()
+
+        assert len(shutdown_calls) == 1
+        assert shutdown_calls[0].resource.attributes["service.name"] == "reimbursement-analyzer-publisher"
