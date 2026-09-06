@@ -209,7 +209,7 @@ class DescribeTheEndToEndRoundTrip:
         assert len(published) == 1
         # The Agent resolves the payload from the row by uuid (AD-015), so the
         # message must carry the identifier and nothing of the request itself.
-        assert set(published[0]) == {"uuid", "retry", "published_at", "errors"}
+        assert set(published[0]) == {"uuid", "retry", "published_at", "correlation_id", "errors"}
         assert published[0]["retry"] == 0
         assert "93.5" not in json.dumps(published[0])
 
