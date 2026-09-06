@@ -7,6 +7,7 @@ Every service calls into this module from its own composition root
 target, resource shape, and header wire format live in exactly one place.
 """
 
+import asyncio
 from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any, Protocol
@@ -56,6 +57,13 @@ def shutdown_tracer(provider: TracerProvider) -> None:
     once at process shutdown; `TracerProvider.shutdown()` itself tolerates
     being called on an already-shutdown provider."""
     provider.shutdown()
+
+
+async def shutdown_tracer_async(provider: TracerProvider) -> None:
+    """Async wrapper for shutting down the tracer without blocking the event loop.
+    Runs `TracerProvider.shutdown()` in an executor to avoid blocking on span export."""
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, provider.shutdown)
 
 
 def inject_headers() -> KafkaHeaders:

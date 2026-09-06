@@ -18,7 +18,7 @@ from shared.config import REQUEST_TOPIC, Config, load_config
 from shared.db import managed_pool
 from shared.logging import configure_logging
 from shared.producer import managed_producer
-from shared.tracing import init_tracer, shutdown_tracer, traced_message_span
+from shared.tracing import init_tracer, shutdown_tracer_async, traced_message_span
 
 from publisher.config import PublisherConfig, load_publisher_config
 from publisher.processing import MESSAGE_HANDLED_EVENT, Dependencies, _LazyJSON, handle_message
@@ -146,7 +146,7 @@ async def _serve() -> None:
         logger.info("publisher consuming %s", REQUEST_TOPIC)
         deps = Dependencies(config=config, publisher=publisher, pool=pool, producer=producer)
         await run(deps, consumer, stopping)
-        shutdown_tracer(tracer_provider)
+        await shutdown_tracer_async(tracer_provider)
 
 
 def main() -> None:

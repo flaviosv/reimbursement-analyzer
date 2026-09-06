@@ -10,7 +10,7 @@ from shared.db import managed_pool
 from shared.logging import configure_logging
 from shared.models import HealthStatus
 from shared.producer import managed_producer
-from shared.tracing import init_tracer, shutdown_tracer
+from shared.tracing import init_tracer, shutdown_tracer_async
 
 from api.errors import register_handlers
 from api.middleware import CorrelationIdMiddleware
@@ -41,7 +41,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         async with managed_pool(replace(config.database, pool_min_size=0)) as pool:
             app.state.pool = pool
             yield
-            shutdown_tracer(_tracer_provider)
+            await shutdown_tracer_async(_tracer_provider)
 
 
 app = FastAPI(lifespan=lifespan)
