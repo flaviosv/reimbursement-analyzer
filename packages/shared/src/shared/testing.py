@@ -6,9 +6,10 @@ collide with.
 Production code never imports this module.
 """
 
-import asyncio
 import json
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from secrets import token_hex
@@ -72,27 +73,51 @@ def valid_reimbursement_item(request_id: str = "REQ-0001", **extra: object) -> d
     }
 
 
+class _FakeSyncProducer:
+    """The synchronous half of `FakeProducer` — models
+    `confluent_kafka.Producer`'s `produce()`/`flush()` pair, the shape
+    `shared.producer.publish` drives directly via `._producer`/`.executor`.
+    `threading.local()` mirrors `publish()`'s own per-call isolation:
+    produce() and flush() for one logical call always run on the same
+    thread."""
+
+    def __init__(self, outer: "FakeProducer") -> None:
+        self._outer = outer
+        self._local = threading.local()
+
+    def produce(
+        self,
+        *,
+        topic: str,
+        value: bytes | None = None,
+        headers: list[tuple[str, bytes]] | None = None,
+        on_delivery: Any = None,
+        **kwargs: object,
+    ) -> None:
+        self._outer.produced.append((topic, value))
+        self._local.on_delivery = on_delivery
+        self._local.error = self._outer.errors.get(topic)
+
+    def flush(self, timeout: float) -> int:
+        on_delivery = getattr(self._local, "on_delivery", None)
+        error = getattr(self._local, "error", None)
+        if on_delivery is not None:
+            on_delivery(error, object())
+        return 0
+
+
 class FakeProducer:
-    """Stands in for `confluent_kafka.aio.AIOProducer`'s `produce()`
-    contract, the one `shared.producer.publish` and every caller depend on.
-    Records every produced message. `errors` maps a topic to the exception
-    its delivery future carries, so a delivery failure can be injected
-    independently per topic."""
+    """Stands in for `confluent_kafka.aio.AIOProducer`, the one
+    `shared.producer.publish` and every caller depend on. Records every
+    produced message. `errors` maps a topic to the exception its delivery
+    callback carries, so a delivery failure can be injected independently
+    per topic."""
 
     def __init__(self, *, errors: dict[str, Exception] | None = None) -> None:
         self.errors = errors or {}
         self.produced: list[tuple[str, bytes]] = []
-
-    async def produce(self, topic: str, value: bytes, **kwargs: object) -> asyncio.Future:
-        await asyncio.sleep(0)
-        self.produced.append((topic, value))
-        future = asyncio.get_running_loop().create_future()
-        error = self.errors.get(topic)
-        if error is not None:
-            future.set_exception(error)
-        else:
-            future.set_result(object())
-        return future
+        self._producer = _FakeSyncProducer(self)
+        self.executor = ThreadPoolExecutor(max_workers=4)
 
     def messages(self, topic: str) -> list[dict[str, Any]]:
         return [json.loads(value) for produced, value in self.produced if produced == topic]
