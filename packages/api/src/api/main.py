@@ -1,4 +1,3 @@
-import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import replace
@@ -8,11 +7,13 @@ from fastapi import FastAPI
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from shared.config import load_config
 from shared.db import managed_pool
+from shared.logging import configure_logging
 from shared.models import HealthStatus
 from shared.producer import managed_producer
 from shared.tracing import init_tracer, shutdown_tracer
 
 from api.errors import register_handlers
+from api.middleware import CorrelationIdMiddleware
 from api.reimbursement.create.route import router as reimbursement_router
 from api.reimbursement.get.route import router as get_reimbursement_router
 from api.reimbursement.list.route import router as list_reimbursement_router
@@ -24,7 +25,7 @@ load_dotenv()
 # logging setup only configures its own uvicorn/uvicorn.error/uvicorn.access
 # loggers, never the root logger, so without this every new .info() call
 # this feature adds would silently never emit.
-logging.basicConfig(level=logging.INFO)
+configure_logging()
 
 _tracer_provider = init_tracer("reimbursement-analyzer-api", load_config().tracing.otlp_endpoint)
 
@@ -44,6 +45,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(lifespan=lifespan)
+app.add_middleware(CorrelationIdMiddleware)
 FastAPIInstrumentor.instrument_app(app)
 register_handlers(app)
 app.include_router(reimbursement_router)

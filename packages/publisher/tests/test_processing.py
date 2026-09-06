@@ -29,6 +29,7 @@ from shared.config import (
     REQUEST_TOPIC,
     load_config,
 )
+from shared.logging import get_correlation_id
 from shared.models import AttemptError, RequestEnvelope, Stage
 from shared.reimbursement.repository import insert_pending
 import shared.reimbursement.use_cases.publish_pending as publish_pending_module
@@ -43,11 +44,16 @@ def _deps(pool: Any, producer: Any) -> Dependencies:
 
 
 def _envelope(
-    items: list[dict[str, Any]], *, retry: int = 0, errors: Sequence[AttemptError] = ()
+    items: list[dict[str, Any]],
+    *,
+    retry: int = 0,
+    errors: Sequence[AttemptError] = (),
+    correlation_id: str | None = None,
 ) -> RequestEnvelope:
     return RequestEnvelope(
         retry=retry,
         published_at=datetime(2026, 1, 1, 12, 0, tzinfo=UTC),
+        correlation_id=correlation_id,
         errors=list(errors),
         payload=items,
     )
@@ -188,6 +194,79 @@ class DescribeHandleMessage:
         ] == ["REQ-0"]
 
 
+class DescribeHandleMessageCorrelationId:
+    async def it_sets_the_correlation_id_from_the_envelope_for_the_duration_of_processing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: list[str | None] = []
+
+        async def _spy_process_item(deps: Any, envelope: Any, index: int, item: Any) -> ItemOutcome:
+            seen.append(get_correlation_id())
+            return ItemOutcome.PUBLISHED
+
+        monkeypatch.setattr(processing, "process_item", _spy_process_item)
+        item = valid_reimbursement_item("REQ-CORR-1")
+
+        await handle_message(
+            _deps(FakePool(), FakeProducer()),
+            _envelope([item], correlation_id="corr-envelope-1").model_dump_json().encode(),
+        )
+
+        assert seen == ["corr-envelope-1"]
+
+    async def it_resets_the_correlation_id_once_handling_completes(self) -> None:
+        item = valid_reimbursement_item("REQ-CORR-2")
+
+        await handle_message(
+            _deps(FakePool(), FakeProducer()),
+            _envelope([item], correlation_id="corr-envelope-2").model_dump_json().encode(),
+        )
+
+        assert get_correlation_id() is None
+
+    async def it_leaves_the_correlation_id_absent_when_the_envelope_carries_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: list[str | None] = []
+
+        async def _spy_process_item(deps: Any, envelope: Any, index: int, item: Any) -> ItemOutcome:
+            seen.append(get_correlation_id())
+            return ItemOutcome.PUBLISHED
+
+        monkeypatch.setattr(processing, "process_item", _spy_process_item)
+        item = valid_reimbursement_item("REQ-CORR-3")
+
+        await handle_message(
+            _deps(FakePool(), FakeProducer()), _envelope([item]).model_dump_json().encode()
+        )
+
+        assert seen == [None]
+
+    async def it_never_leaks_one_messages_correlation_id_into_the_next_sequential_message(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: list[str | None] = []
+
+        async def _spy_process_item(deps: Any, envelope: Any, index: int, item: Any) -> ItemOutcome:
+            seen.append(get_correlation_id())
+            return ItemOutcome.PUBLISHED
+
+        monkeypatch.setattr(processing, "process_item", _spy_process_item)
+        deps = _deps(FakePool(), FakeProducer())
+
+        await handle_message(
+            deps,
+            _envelope([valid_reimbursement_item("REQ-CORR-4")], correlation_id="corr-first")
+            .model_dump_json()
+            .encode(),
+        )
+        await handle_message(
+            deps, _envelope([valid_reimbursement_item("REQ-CORR-5")]).model_dump_json().encode()
+        )
+
+        assert seen == ["corr-first", None]
+
+
 class DescribeTheReimbursementMessage:
     async def it_carries_the_uuid_of_the_row_just_inserted(self) -> None:
         item = valid_reimbursement_item("REQ-UUID")
@@ -216,8 +295,32 @@ class DescribeTheReimbursementMessage:
         await process_item(_deps(pool, producer), _envelope([item]), 0, item)
 
         published = producer.messages(REIMBURSEMENT_TOPIC)[0]
-        assert set(published) == {"uuid", "retry", "published_at", "errors"}
+        assert set(published) == {"uuid", "retry", "published_at", "correlation_id", "errors"}
         assert "93.5" not in json.dumps(published)
+
+    async def it_carries_the_request_envelopes_correlation_id_onto_the_published_message(
+        self,
+    ) -> None:
+        item = valid_reimbursement_item("REQ-CORR-FORWARD")
+        pool, producer = FakePool(), FakeProducer()
+
+        await process_item(
+            _deps(pool, producer), _envelope([item], correlation_id="corr-request-1"), 0, item
+        )
+
+        published = producer.messages(REIMBURSEMENT_TOPIC)[0]
+        assert published["correlation_id"] == "corr-request-1"
+
+    async def it_omits_the_correlation_id_field_as_null_when_the_request_envelope_had_none(
+        self,
+    ) -> None:
+        item = valid_reimbursement_item("REQ-NO-CORR-FORWARD")
+        pool, producer = FakePool(), FakeProducer()
+
+        await process_item(_deps(pool, producer), _envelope([item]), 0, item)
+
+        published = producer.messages(REIMBURSEMENT_TOPIC)[0]
+        assert published["correlation_id"] is None
 
     async def it_forwards_the_envelopes_error_history_even_when_this_attempt_succeeds(
         self,
@@ -391,6 +494,21 @@ class DescribeADuplicateItem:
 
 
 class DescribeTheRequeue:
+    async def it_carries_forward_the_original_correlation_id_unchanged(self) -> None:
+        item = valid_reimbursement_item("REQ-CORR-REQUEUE")
+        pool = FakePool(insert_errors={"REQ-CORR-REQUEUE": asyncpg.PostgresConnectionError("reset")})
+        producer = FakeProducer()
+
+        await process_item(
+            _deps(pool, producer),
+            _envelope([item], correlation_id="corr-original"),
+            0,
+            item,
+        )
+
+        requeued = producer.messages(REQUEST_TOPIC)[0]
+        assert requeued["correlation_id"] == "corr-original"
+
     async def it_republishes_only_the_failed_item_with_the_retry_incremented(self) -> None:
         items = [valid_reimbursement_item("REQ-A"), valid_reimbursement_item("REQ-B")]
         pool = FakePool(insert_errors={"REQ-B": asyncpg.PostgresConnectionError("reset")})

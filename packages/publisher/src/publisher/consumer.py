@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 from opentelemetry import trace
 from shared.config import REQUEST_TOPIC, Config, load_config
 from shared.db import managed_pool
+from shared.logging import configure_logging
 from shared.producer import managed_producer
 from shared.tracing import init_tracer, shutdown_tracer, traced_message_span
 
@@ -147,7 +148,7 @@ async def _serve() -> None:
 
 def main() -> None:
     load_dotenv()
-    logging.basicConfig(level=logging.INFO)
+    configure_logging()
     asyncio.run(_serve())
 
 

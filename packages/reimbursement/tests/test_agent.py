@@ -20,6 +20,7 @@ from reimbursement.agent.nodes.extract_fields import (
 )
 from reimbursement.agent.nodes.validate import Validate
 from reimbursement.models import Reimbursement
+from shared.logging import reset_correlation_id, set_correlation_id
 
 pytestmark = pytest.mark.anyio
 
@@ -397,3 +398,52 @@ class DescribeDecide:
         assert len(calls) == 1
         assert calls[0]["callbacks"] == expected_handlers
         assert calls[0]["configurable"] == {"pool": pool, "acquire_timeout_seconds": 5.0}
+
+    async def it_includes_the_correlation_id_in_metadata_when_one_is_set(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[dict] = []
+
+        class _FakeGraph:
+            async def ainvoke(self, state: dict, config: dict) -> dict:
+                calls.append(config)
+                return {"status": "auto-approved"}
+
+        monkeypatch.setattr(agent, "get_graph", lambda: _FakeGraph())
+        uuid = uuid4()
+        token = set_correlation_id("corr-decide-1")
+        try:
+            await agent.decide(
+                Reimbursement(uuid=uuid, original_payload={}),
+                FakeAcquirePool(object()),
+                acquire_timeout_seconds=5.0,
+            )
+        finally:
+            reset_correlation_id(token)
+
+        assert calls[0]["metadata"] == {
+            "langfuse_session_id": str(uuid),
+            "correlation_id": "corr-decide-1",
+        }
+
+    async def it_omits_the_correlation_id_key_entirely_when_none_is_set(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[dict] = []
+
+        class _FakeGraph:
+            async def ainvoke(self, state: dict, config: dict) -> dict:
+                calls.append(config)
+                return {"status": "auto-approved"}
+
+        monkeypatch.setattr(agent, "get_graph", lambda: _FakeGraph())
+        uuid = uuid4()
+
+        await agent.decide(
+            Reimbursement(uuid=uuid, original_payload={}),
+            FakeAcquirePool(object()),
+            acquire_timeout_seconds=5.0,
+        )
+
+        assert calls[0]["metadata"] == {"langfuse_session_id": str(uuid)}
+        assert "correlation_id" not in calls[0]["metadata"]

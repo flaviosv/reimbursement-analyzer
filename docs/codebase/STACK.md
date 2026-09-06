@@ -15,6 +15,7 @@
 | `uvicorn[standard]` | >=0.52.1 | ASGI server | `api` |
 | `pydantic[email]` | >=2.13.4 | Request/message validation, `EmailStr` | `shared`, `api` |
 | `confluent-kafka` | >=2.15.0 | Kafka producer/consumer client (`confluent_kafka.aio.AIOProducer` for the async producer) | `api`, `shared`, `reimbursement`, `publisher` |
+| `ecs-logging` | >=2.3.0 | ECS-JSON `logging.Formatter` — every service's structured log output, wired via `shared.logging.configure_logging()` | `shared` (all services transitively) |
 | `asyncpg` | >=0.31.0 | Postgres async driver — pool + statements in `shared.reimbursement.repository` | `publisher`, `reimbursement` (both real use, via `shared`) |
 | `python-dotenv` | >=1.2.2 | Loads `.env` at process start (`load_dotenv()`) | `api`, `reimbursement`, `publisher` |
 | `langchain` | >=1.3.14 | LLM orchestration — `init_chat_model` constructs the two Groq-backed chat models (`extract_fields`/`analysis`, one per node) inside `build_graph()` | `reimbursement` |
@@ -86,6 +87,7 @@
 | `ANALYSIS_MODEL_NAME` | Groq model name for the `analysis` node — required, fails fast if unset |
 | `ANALYSIS_TEMPERATURE` | `analysis`'s model temperature — optional, defaults to `0.0` |
 | `DATABASE_POOL_MAX_SIZE` | Shared Postgres pool's max size (default `20`) — raise this in step with `PUBLISHER_ITEM_CONCURRENCY` to avoid connection starvation under load (R-005) |
+| `LOG_LEVEL` | Root logger level for all three services — one of `debug`/`info`/`warning`/`error`/`critical`, case-insensitive; optional, defaults to `debug`; an invalid value falls back to `debug` with a warning |
 | `LANGFUSE_POSTGRES_PASSWORD`, `SALT`, `ENCRYPTION_KEY`, `NEXTAUTH_SECRET`, `CLICKHOUSE_PASSWORD`, `REDIS_AUTH`, `MINIO_ROOT_PASSWORD`, `LANGFUSE_S3_*_SECRET_ACCESS_KEY` | LangFuse stack's own infra credentials |
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | LangFuse project key pair `reimbursement`'s decision graph authenticates with — read by `langfuse.langchain.CallbackHandler()` straight from the process environment. `LANGFUSE_PUBLIC_KEY` must stay in sync with `docker-compose.yml`'s `x-langfuse-public-key` anchor, enforced by `packages/api/tests/test_dotenv_config_parity.py` |
 | `LANGFUSE_INIT_PROJECT_SECRET_KEY`, `LANGFUSE_INIT_USER_PASSWORD` | LangFuse first-boot bootstrap credentials for the `langfuse-web` service |

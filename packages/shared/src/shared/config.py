@@ -80,6 +80,17 @@ class TracingConfig:
 
 
 @dataclass(frozen=True)
+class LoggingConfig:
+    """The raw `LOG_LEVEL` env value, unparsed and unvalidated — plain data
+    holder (AD-023's rule). Level-name validation and the invalid-value
+    fallback are `configure_logging()`'s job, not this loader's: that logic
+    needs a working logger to emit its fallback warning into, which only
+    exists once `configure_logging()` has attached its handler."""
+
+    level: str
+
+
+@dataclass(frozen=True)
 class Config:
     """Process-wide settings every service constructs.
 
@@ -94,6 +105,7 @@ class Config:
     database: DatabaseConfig
     failure_log: FailureLogConfig
     tracing: TracingConfig
+    logging: LoggingConfig
 
 
 @lru_cache(maxsize=1)
@@ -134,4 +146,5 @@ def load_config() -> Config:
                 "http://apm-server.shared-services.svc.cluster.local:8200",
             ),
         ),
+        logging=LoggingConfig(level=os.getenv("LOG_LEVEL", "debug")),
     )

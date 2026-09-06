@@ -12,6 +12,7 @@ from reimbursement.config import load_agent_config
 from reimbursement.models import Reimbursement
 from reimbursement.validation import Dependencies, MessageOutcome, handle_message
 from shared.config import REIMBURSEMENT_TOPIC, load_config
+from shared.logging import get_correlation_id
 from shared.models import AttemptError, ReimbursementEnvelope
 
 pytestmark = pytest.mark.anyio
@@ -74,6 +75,96 @@ def _row(**overrides: object) -> dict[str, object]:
     }
     defaults.update(overrides)
     return defaults
+
+
+class DescribeHandleMessageCorrelationId:
+    async def it_sets_the_correlation_id_from_the_envelope_before_deciding(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: list[str | None] = []
+
+        async def _spy_decide(reimbursement: Reimbursement, pool: object, *, acquire_timeout_seconds: float):
+            seen.append(get_correlation_id())
+            return {"status": "auto-approved", "decision_reason": "stub", "persisted": True}
+
+        monkeypatch.setattr(agent, "decide", _spy_decide)
+        uuid = uuid4()
+        row_updated_at = datetime(2026, 4, 10, 9, 0, 0, tzinfo=UTC)
+        pool = FakePool(rows={uuid: _row(uuid=uuid, updated_at=row_updated_at)})
+        deps = _deps(pool=pool)
+        envelope = _envelope(
+            uuid=uuid, retry=0, published_at=row_updated_at, correlation_id="corr-env-1"
+        )
+
+        await handle_message(deps, envelope.model_dump_json().encode())
+
+        assert seen == ["corr-env-1"]
+
+    async def it_resets_the_correlation_id_once_handling_completes(self) -> None:
+        uuid = uuid4()
+        row_updated_at = datetime(2026, 4, 10, 9, 0, 0, tzinfo=UTC)
+        pool = FakePool(rows={uuid: _row(uuid=uuid, updated_at=row_updated_at)})
+        deps = _deps(pool=pool)
+        envelope = _envelope(
+            uuid=uuid, retry=0, published_at=row_updated_at, correlation_id="corr-env-2"
+        )
+
+        await handle_message(deps, envelope.model_dump_json().encode())
+
+        assert get_correlation_id() is None
+
+    async def it_leaves_the_correlation_id_absent_when_the_envelope_carries_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: list[str | None] = []
+
+        async def _spy_decide(reimbursement: Reimbursement, pool: object, *, acquire_timeout_seconds: float):
+            seen.append(get_correlation_id())
+            return {"status": "auto-approved", "decision_reason": "stub", "persisted": True}
+
+        monkeypatch.setattr(agent, "decide", _spy_decide)
+        uuid = uuid4()
+        row_updated_at = datetime(2026, 4, 10, 9, 0, 0, tzinfo=UTC)
+        pool = FakePool(rows={uuid: _row(uuid=uuid, updated_at=row_updated_at)})
+        deps = _deps(pool=pool)
+        envelope = _envelope(uuid=uuid, retry=0, published_at=row_updated_at)
+
+        await handle_message(deps, envelope.model_dump_json().encode())
+
+        assert seen == [None]
+
+    async def it_never_leaks_one_messages_correlation_id_into_the_next_sequential_message(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: list[str | None] = []
+
+        async def _spy_decide(reimbursement: Reimbursement, pool: object, *, acquire_timeout_seconds: float):
+            seen.append(get_correlation_id())
+            return {"status": "auto-approved", "decision_reason": "stub", "persisted": True}
+
+        monkeypatch.setattr(agent, "decide", _spy_decide)
+        uuid_1, uuid_2 = uuid4(), uuid4()
+        row_updated_at = datetime(2026, 4, 10, 9, 0, 0, tzinfo=UTC)
+        pool = FakePool(
+            rows={
+                uuid_1: _row(uuid=uuid_1, updated_at=row_updated_at),
+                uuid_2: _row(uuid=uuid_2, updated_at=row_updated_at),
+            }
+        )
+        deps = _deps(pool=pool)
+
+        await handle_message(
+            deps,
+            _envelope(uuid=uuid_1, retry=0, published_at=row_updated_at, correlation_id="corr-first")
+            .model_dump_json()
+            .encode(),
+        )
+        await handle_message(
+            deps,
+            _envelope(uuid=uuid_2, retry=0, published_at=row_updated_at).model_dump_json().encode(),
+        )
+
+        assert seen == ["corr-first", None]
 
 
 class DescribeHandleMessageParsing:
@@ -321,6 +412,18 @@ class DescribeResolveTransientFailureRequeue:
         assert len(requeued["errors"]) == 2
         assert requeued["errors"][0]["attempt"] == 1
         assert requeued["errors"][1]["attempt"] == 2
+
+    async def it_carries_forward_the_original_correlation_id_unchanged(self) -> None:
+        uuid = uuid4()
+        pool = FakePool(get_errors={uuid: RuntimeError("transient failure")})
+        producer = FakeProducer()
+        deps = _deps(pool=pool, producer=producer)
+        envelope = _envelope(uuid=uuid, retry=0, correlation_id="corr-original-id")
+
+        await handle_message(deps, envelope.model_dump_json().encode())
+
+        [requeued] = producer.messages(REIMBURSEMENT_TOPIC)
+        assert requeued["correlation_id"] == "corr-original-id"
 
     async def it_writes_to_the_failure_log_when_the_requeue_itself_fails(
         self, caplog: pytest.LogCaptureFixture
