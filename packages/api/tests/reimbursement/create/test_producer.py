@@ -172,6 +172,10 @@ class DescribePublish:
     ) -> None:
         fake = immediate_fake_producer_class(error=RuntimeError("Local: Message timed out"))
 
+        # No "RuntimeError:" prefix in the match: shared.producer.publish now
+        # wraps delivery errors as KafkaException(err) before formatting
+        # f"{type(exc).__name__}: {exc}", so the original exception's type
+        # name genuinely no longer appears.
         with pytest.raises(PublishFailed, match="Local: Message timed out"):
             await publish(fake, b"[]", ["REQ-1"], kafka_config)
 
