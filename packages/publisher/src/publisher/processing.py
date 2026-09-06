@@ -333,6 +333,11 @@ async def _requeue(
     retried = RequestEnvelope(
         retry=envelope.retry + 1,
         published_at=datetime.now(UTC),
+        # Explicit, not the model's own None default: this is the requeue
+        # path's own construction site (a second write path onto Request,
+        # separate from the API's byte-splice), so the default would
+        # otherwise silently drop the id on every requeue.
+        correlation_id=envelope.correlation_id,
         errors=errors,
         payload=[item],
     )

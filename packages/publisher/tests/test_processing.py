@@ -475,6 +475,21 @@ class DescribeADuplicateItem:
 
 
 class DescribeTheRequeue:
+    async def it_carries_forward_the_original_correlation_id_unchanged(self) -> None:
+        item = valid_reimbursement_item("REQ-CORR-REQUEUE")
+        pool = FakePool(insert_errors={"REQ-CORR-REQUEUE": asyncpg.PostgresConnectionError("reset")})
+        producer = FakeProducer()
+
+        await process_item(
+            _deps(pool, producer),
+            _envelope([item], correlation_id="corr-original"),
+            0,
+            item,
+        )
+
+        requeued = producer.messages(REQUEST_TOPIC)[0]
+        assert requeued["correlation_id"] == "corr-original"
+
     async def it_republishes_only_the_failed_item_with_the_retry_incremented(self) -> None:
         items = [valid_reimbursement_item("REQ-A"), valid_reimbursement_item("REQ-B")]
         pool = FakePool(insert_errors={"REQ-B": asyncpg.PostgresConnectionError("reset")})
