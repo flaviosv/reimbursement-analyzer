@@ -27,21 +27,21 @@ load_dotenv()
 # this feature adds would silently never emit.
 configure_logging()
 
-_tracer_provider = init_tracer("reimbursement-analyzer-api", load_config().tracing.otlp_endpoint)
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Owns every resource the app needs for its lifetime — the Kafka
-    producer and the DB pool. New resources get added here as another
-    `async with` / `app.state.*` assignment."""
+    """Owns every resource the app needs for its lifetime — the tracer
+    provider, the Kafka producer, and the DB pool. New resources get added
+    here as another `async with` / `app.state.*` assignment."""
     config = load_config()
+    tracer_provider = init_tracer("reimbursement-analyzer-api", config.tracing.otlp_endpoint)
+    app.state.tracer_provider = tracer_provider
     async with managed_producer(config.kafka.to_producer_config()) as producer:
         app.state.producer = producer
         async with managed_pool(replace(config.database, pool_min_size=0)) as pool:
             app.state.pool = pool
             yield
-            await shutdown_tracer_async(_tracer_provider)
+            await shutdown_tracer_async(tracer_provider)
 
 
 app = FastAPI(lifespan=lifespan)
