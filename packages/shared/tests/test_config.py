@@ -135,6 +135,22 @@ class DescribeFailureLogConfig:
         assert config.failure_log.max_message_chars > 0
 
 
+class DescribeTracingConfig:
+    def it_defaults_otlp_endpoint_when_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+
+        config = load_config()
+
+        assert config.tracing.otlp_endpoint == "http://apm-server.shared-services.svc.cluster.local:8200"
+
+    def it_reads_otlp_endpoint_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318")
+
+        config = load_config()
+
+        assert config.tracing.otlp_endpoint == "http://collector:4318"
+
+
 class DescribeKafkaConfigToProducerConfig:
     def it_never_disables_retries_explicitly(self) -> None:
         # enable.idempotence=true rejects retries=0, and the envelope's own

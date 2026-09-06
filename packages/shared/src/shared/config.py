@@ -75,6 +75,11 @@ class FailureLogConfig:
 
 
 @dataclass(frozen=True)
+class TracingConfig:
+    otlp_endpoint: str
+
+
+@dataclass(frozen=True)
 class Config:
     """Process-wide settings every service constructs.
 
@@ -88,6 +93,7 @@ class Config:
     kafka: KafkaConfig
     database: DatabaseConfig
     failure_log: FailureLogConfig
+    tracing: TracingConfig
 
 
 @lru_cache(maxsize=1)
@@ -121,5 +127,11 @@ def load_config() -> Config:
         failure_log=FailureLogConfig(
             logger_name="reimbursementanalyzer.failures",
             max_message_chars=2000,
+        ),
+        tracing=TracingConfig(
+            otlp_endpoint=os.getenv(
+                "OTEL_EXPORTER_OTLP_ENDPOINT",
+                "http://apm-server.shared-services.svc.cluster.local:8200",
+            ),
         ),
     )
