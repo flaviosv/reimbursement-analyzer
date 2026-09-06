@@ -12,15 +12,17 @@ from contextlib import asynccontextmanager
 
 from confluent_kafka.aio import AIOConsumer
 from dotenv import load_dotenv
+from opentelemetry import trace
 from shared.config import REQUEST_TOPIC, Config, load_config
 from shared.db import managed_pool
 from shared.producer import managed_producer
-from shared.tracing import init_tracer, shutdown_tracer
+from shared.tracing import init_tracer, shutdown_tracer, traced_message_span
 
 from publisher.config import PublisherConfig, load_publisher_config
 from publisher.processing import MESSAGE_HANDLED_EVENT, Dependencies, _LazyJSON, handle_message
 
 logger = logging.getLogger(__name__)
+tracer = trace.get_tracer(__name__)
 
 
 def check_startup_config(config: Config, publisher: PublisherConfig) -> None:
@@ -83,29 +85,32 @@ async def run(deps: Dependencies, consumer: AIOConsumer, stopping: asyncio.Event
             continue
 
         message = messages[0]
-        error = message.error()
-        if error is not None:
-            logger.error("consumer error, message skipped: %s", error)
-            continue
+        with traced_message_span(tracer, message):
+            error = message.error()
+            if error is not None:
+                logger.error("consumer error, message skipped: %s", error)
+                continue
 
-        try:
-            outcomes = await handle_message(deps, message.value())
-        except Exception:
-            # handle_message is documented never to raise (PUB-32) — this is
-            # a defence against that contract being broken, not the expected
-            # path. Still commits: without it, a handler bug would redeliver
-            # the same poisoned message forever instead of surfacing once.
-            logger.exception("handle_message raised despite its never-raises contract")
-            outcomes = []
-        else:
-            logger.info(
-                "%s", _LazyJSON({"event": MESSAGE_HANDLED_EVENT, "outcomes": [o.value for o in outcomes]})
-            )
-        # Only now. A crash before this point redelivers the whole message,
-        # and whatever already committed is absorbed by the duplicate path —
-        # which is why that path is crash-recovery machinery, not just an
-        # optimisation.
-        await consumer.commit(message=message, asynchronous=False)
+            try:
+                outcomes = await handle_message(deps, message.value())
+            except Exception:
+                # handle_message is documented never to raise (PUB-32) —
+                # this is a defence against that contract being broken, not
+                # the expected path. Still commits: without it, a handler
+                # bug would redeliver the same poisoned message forever
+                # instead of surfacing once.
+                logger.exception("handle_message raised despite its never-raises contract")
+                outcomes = []
+            else:
+                logger.info(
+                    "%s",
+                    _LazyJSON({"event": MESSAGE_HANDLED_EVENT, "outcomes": [o.value for o in outcomes]}),
+                )
+            # Only now. A crash before this point redelivers the whole
+            # message, and whatever already committed is absorbed by the
+            # duplicate path — which is why that path is crash-recovery
+            # machinery, not just an optimisation.
+            await consumer.commit(message=message, asynchronous=False)
 
 
 def _install_signal_handlers(stopping: asyncio.Event) -> None:

@@ -1,5 +1,7 @@
 import asyncio
 import signal
+import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
@@ -8,10 +10,16 @@ from typing import Any
 
 import publisher.consumer as consumer_module
 import pytest
+from opentelemetry import propagate
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from publisher.config import PublisherConfig, load_publisher_config
 from publisher.consumer import _install_signal_handlers, check_startup_config, managed_consumer, run
 from fakes import FakePool, FakeProducer
 from shared.testing import valid_reimbursement_item
+from shared.tracing import inject_headers
 from publisher.processing import Dependencies
 from shared.config import REIMBURSEMENT_TOPIC, REQUEST_TOPIC, Config, load_config
 from shared.models import RequestEnvelope
@@ -20,15 +28,40 @@ pytestmark = pytest.mark.anyio
 
 
 class FakeMessage:
-    def __init__(self, value: bytes = b"", error: object | None = None) -> None:
+    def __init__(
+        self,
+        value: bytes = b"",
+        error: object | None = None,
+        *,
+        headers: list[tuple[str, bytes]] | None = None,
+        topic: str = REQUEST_TOPIC,
+        partition: int = 0,
+        offset: int = 0,
+    ) -> None:
         self._value = value
         self._error = error
+        self._headers = headers
+        self._topic = topic
+        self._partition = partition
+        self._offset = offset
 
     def value(self) -> bytes:
         return self._value
 
     def error(self) -> object | None:
         return self._error
+
+    def headers(self) -> list[tuple[str, bytes]] | None:
+        return self._headers
+
+    def topic(self) -> str | None:
+        return self._topic
+
+    def partition(self) -> int | None:
+        return self._partition
+
+    def offset(self) -> int | None:
+        return self._offset
 
 
 class FakeConsumer:
@@ -71,6 +104,25 @@ class FakeConsumer:
         self.closed = True
 
 
+class _ThreadSafeAsyncEvent:
+    """A `threading.Event` exposed with an async-compatible `.wait()` — the
+    fake sync producers below set it from a `ThreadPoolExecutor` worker
+    thread (where `shared.producer.publish` now actually drives `produce()`),
+    while test code awaits it from the event loop thread."""
+
+    def __init__(self) -> None:
+        self._event = threading.Event()
+
+    def set(self) -> None:
+        self._event.set()
+
+    def is_set(self) -> bool:
+        return self._event.is_set()
+
+    async def wait(self) -> None:
+        await asyncio.to_thread(self._event.wait)
+
+
 class RecordingProducer(FakeProducer):
     """A FakeProducer that also appends to a shared timeline, so the ordering
     of item publishes against the offset commit is observable."""
@@ -78,44 +130,58 @@ class RecordingProducer(FakeProducer):
     def __init__(self, events: list[str]) -> None:
         super().__init__()
         self.events = events
+        original_produce = self._producer.produce
 
-    async def produce(self, topic: str, value: bytes, **kwargs: object) -> asyncio.Future:
-        future = await super().produce(topic, value, **kwargs)
-        self.events.append("item")
-        return future
+        def _recording_produce(*, topic: str, value: bytes | None = None, **kwargs: object) -> None:
+            original_produce(topic=topic, value=value, **kwargs)
+            self.events.append("item")
+
+        self._producer.produce = _recording_produce
 
 
 class BlockingProducer(FakeProducer):
-    """Suspends inside the publish so a message can be interrupted mid-flight."""
+    """Suspends inside the publish so a message can be interrupted mid-flight.
+    `produce()` now runs on the executor's worker thread (per
+    `shared.producer.publish`'s sync produce/flush path) — bounded at 5s so a
+    cancelled test never leaves an orphaned thread blocked forever."""
 
     def __init__(self) -> None:
         super().__init__()
-        self.started = asyncio.Event()
-        self.release = asyncio.Event()
+        self.started = _ThreadSafeAsyncEvent()
+        self.release = _ThreadSafeAsyncEvent()
 
-    async def produce(self, topic: str, value: bytes, **kwargs: object) -> asyncio.Future:
-        self.started.set()
-        await self.release.wait()
-        return await super().produce(topic, value, **kwargs)
+        def _blocking_produce(*, topic: str, value: bytes | None = None, on_delivery: Any = None, **kwargs: object) -> None:
+            self.started.set()
+            self.release._event.wait(timeout=5)
+            if on_delivery is not None:
+                on_delivery(None, object())
+
+        self._producer.produce = _blocking_produce
 
 
 class SignallingProducer(FakeProducer):
     """Delivers a real SIGTERM while the first item is mid-publish, then waits
-    for the handler to fire. Waiting on the event rather than sleeping is what
-    keeps this deterministic: the message is provably still in flight when the
-    shutdown is requested."""
+    for the handler to fire. Polling `stopping.is_set()` (safe to read
+    cross-thread) rather than awaiting it directly is what keeps this
+    deterministic without an event loop in the executor's worker thread: the
+    message is provably still in flight when the shutdown is requested."""
 
     def __init__(self, stopping: asyncio.Event) -> None:
         super().__init__()
         self.stopping = stopping
         self.raised = False
+        original_produce = self._producer.produce
 
-    async def produce(self, topic: str, value: bytes, **kwargs: object) -> asyncio.Future:
-        if not self.raised:
-            self.raised = True
-            signal.raise_signal(signal.SIGTERM)
-            await asyncio.wait_for(self.stopping.wait(), timeout=2.0)
-        return await super().produce(topic, value, **kwargs)
+        def _signalling_produce(*, topic: str, value: bytes | None = None, **kwargs: object) -> None:
+            if not self.raised:
+                self.raised = True
+                signal.raise_signal(signal.SIGTERM)
+                deadline = time.monotonic() + 2.0
+                while not self.stopping.is_set() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+            original_produce(topic=topic, value=value, **kwargs)
+
+        self._producer.produce = _signalling_produce
 
 
 @contextmanager
@@ -402,3 +468,76 @@ class DescribeTheLoop:
         await run(_deps(FakePool(), FakeProducer()), consumer, stopping)
 
         assert len(consumer.commits) == 2
+
+
+def _in_memory_tracer() -> tuple[Any, InMemorySpanExporter]:
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    return provider.get_tracer(__name__), exporter
+
+
+class DescribeTracedMessageProcessing:
+    async def it_wraps_handling_in_a_process_message_span(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        tracer, exporter = _in_memory_tracer()
+        monkeypatch.setattr(consumer_module, "tracer", tracer)
+        stopping = asyncio.Event()
+        consumer = FakeConsumer([[_message(["REQ-1"])]], stopping=stopping, stop_after=2)
+
+        await run(_deps(FakePool(), FakeProducer()), consumer, stopping)
+
+        finished = exporter.get_finished_spans()
+        assert [span.name for span in finished] == ["process_message"]
+
+    async def it_stamps_topic_partition_and_offset_as_span_attributes(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        tracer, exporter = _in_memory_tracer()
+        monkeypatch.setattr(consumer_module, "tracer", tracer)
+        stopping = asyncio.Event()
+        message = _message(["REQ-1"])
+        message._topic = REQUEST_TOPIC
+        message._partition = 2
+        message._offset = 17
+        consumer = FakeConsumer([[message]], stopping=stopping, stop_after=2)
+
+        await run(_deps(FakePool(), FakeProducer()), consumer, stopping)
+
+        span = exporter.get_finished_spans()[0]
+        assert span.attributes["messaging.kafka.topic"] == REQUEST_TOPIC
+        assert span.attributes["messaging.kafka.partition"] == 2
+        assert span.attributes["messaging.kafka.offset"] == 17
+
+    async def it_starts_a_child_span_when_the_message_carries_trace_headers(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        propagate.set_global_textmap(TraceContextTextMapPropagator())
+        tracer, exporter = _in_memory_tracer()
+        monkeypatch.setattr(consumer_module, "tracer", tracer)
+
+        with tracer.start_as_current_span("producer-span") as producer_span:
+            headers = inject_headers()
+            expected_trace_id = producer_span.get_span_context().trace_id
+
+        message = _message(["REQ-1"])
+        message._headers = headers
+        stopping = asyncio.Event()
+        consumer = FakeConsumer([[message]], stopping=stopping, stop_after=2)
+
+        await run(_deps(FakePool(), FakeProducer()), consumer, stopping)
+
+        process_span = next(s for s in exporter.get_finished_spans() if s.name == "process_message")
+        assert process_span.context.trace_id == expected_trace_id
+
+    async def it_starts_a_new_root_span_when_the_message_carries_no_headers(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        tracer, exporter = _in_memory_tracer()
+        monkeypatch.setattr(consumer_module, "tracer", tracer)
+        stopping = asyncio.Event()
+        consumer = FakeConsumer([[_message(["REQ-1"])]], stopping=stopping, stop_after=2)
+
+        await run(_deps(FakePool(), FakeProducer()), consumer, stopping)
+
+        process_span = exporter.get_finished_spans()[0]
+        assert process_span.parent is None

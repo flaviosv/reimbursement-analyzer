@@ -16,6 +16,7 @@ from uuid import UUID
 
 import asyncpg
 from confluent_kafka.aio import AIOProducer
+from opentelemetry import trace
 from pydantic import ValidationError
 from shared import failure_log
 from shared.config import MAX_RETRY, REQUEST_TOPIC, Config
@@ -205,6 +206,7 @@ async def process_item(
             _log_duplicate(envelope, item, exc)
             return ItemOutcome.DUPLICATE
         return await _requeue(deps, envelope, index, item, "db-insert", exc)
+    trace.get_current_span().set_attribute("reimbursement.uuid", str(uuid))
     log_event(logger, logging.INFO, ITEM_PUBLISHED_EVENT, request_id=_request_id(item), uuid=str(uuid))
     return ItemOutcome.PUBLISHED
 

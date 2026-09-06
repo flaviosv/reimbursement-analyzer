@@ -8,6 +8,9 @@ from uuid import UUID
 import asyncpg
 import publisher.processing as processing
 import pytest
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from publisher.config import load_publisher_config
 from fakes import FakePool, FakeProducer, RealPool
 from shared.testing import valid_reimbursement_item
@@ -250,6 +253,22 @@ class DescribeInsertThenPublish:
         )
         assert row["status"] == "pending"
         assert row["submitted_by"] == "person@example.com"
+
+    async def it_stamps_reimbursement_uuid_on_the_current_span_once_published(self) -> None:
+        item = valid_reimbursement_item("REQ-SPAN-ATTR")
+        pool, producer = FakePool(), FakeProducer()
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        tracer = provider.get_tracer(__name__)
+
+        with tracer.start_as_current_span("process_message"):
+            outcome = await process_item(_deps(pool, producer), _envelope([item]), 0, item)
+
+        assert outcome is ItemOutcome.PUBLISHED
+        published_uuid = producer.messages(REIMBURSEMENT_TOPIC)[0]["uuid"]
+        span = exporter.get_finished_spans()[0]
+        assert span.attributes["reimbursement.uuid"] == published_uuid
 
     async def it_leaves_no_row_behind_when_the_publish_fails(self, db: asyncpg.Connection) -> None:
         # No transaction to roll back anymore (AD-033) — the row is gone via
