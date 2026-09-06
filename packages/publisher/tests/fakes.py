@@ -4,65 +4,22 @@ A module rather than conftest fixtures because these are classes tests
 construct with arguments, not resources pytest manages. Reachable by bare
 name through the root pyproject's `pythonpath`, the same mechanism
 `src/api/tests/helpers.py` already uses.
+
+`FakeProducer` is re-exported from `shared.testing` — it models a contract
+`shared.producer` owns, and duplicating it here was a maintenance burden.
+Reimbursement's own test doubles follow this pattern (see agent_fakes.py).
 """
 
 import asyncio
-import json
-import threading
 from concurrent.futures import ThreadPoolExecutor
 from types import TracebackType
 from typing import Any, Self
 from uuid import UUID, uuid4
 
 import asyncpg
+from shared.testing import FakeProducer
 
-
-class _FakeSyncProducer:
-    """The synchronous half of `FakeProducer` — models
-    `confluent_kafka.Producer`'s `produce()`/`flush()` pair, the shape
-    `shared.producer.publish` now drives directly via `._producer`/
-    `.executor`. `threading.local()` mirrors `publish()`'s own per-call
-    isolation: produce() and flush() for one logical call always run on the
-    same thread."""
-
-    def __init__(self, outer: "FakeProducer") -> None:
-        self._outer = outer
-        self._local = threading.local()
-
-    def produce(
-        self,
-        *,
-        topic: str,
-        value: bytes | None = None,
-        headers: list[tuple[str, bytes]] | None = None,
-        on_delivery: Any = None,
-        **kwargs: object,
-    ) -> None:
-        self._outer.produced.append((topic, value))
-        self._local.on_delivery = on_delivery
-        self._local.error = self._outer.errors.get(topic)
-
-    def flush(self, timeout: float) -> int:
-        on_delivery = getattr(self._local, "on_delivery", None)
-        error = getattr(self._local, "error", None)
-        if on_delivery is not None:
-            on_delivery(error, object())
-        return 0
-
-
-class FakeProducer:
-    """Records every produced message. `errors` maps a topic to the exception
-    its delivery callback carries, so a Reimbursement failure and a requeue
-    failure can be injected independently."""
-
-    def __init__(self, *, errors: dict[str, Exception] | None = None) -> None:
-        self.errors = errors or {}
-        self.produced: list[tuple[str, bytes]] = []
-        self._producer = _FakeSyncProducer(self)
-        self.executor = ThreadPoolExecutor(max_workers=4)
-
-    def messages(self, topic: str) -> list[dict[str, Any]]:
-        return [json.loads(value) for produced, value in self.produced if produced == topic]
+__all__ = ["FakeProducer", "FakePool", "FakeConnection", "RealPool"]
 
 
 class _FakeAcquisition:

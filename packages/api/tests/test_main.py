@@ -146,7 +146,11 @@ class DescribeTracingIntegration:
 
     def it_shuts_down_the_tracer_on_lifespan_shutdown(self, monkeypatch: pytest.MonkeyPatch) -> None:
         calls: list[object] = []
-        monkeypatch.setattr(main_module, "shutdown_tracer", lambda provider: calls.append(provider))
+
+        async def mock_shutdown(provider: object) -> None:
+            calls.append(provider)
+
+        monkeypatch.setattr(main_module, "shutdown_tracer_async", mock_shutdown)
         app = _build_app()
 
         with TestClient(app):
