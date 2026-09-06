@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 from shared.config import REQUEST_TOPIC, Config, load_config
 from shared.db import managed_pool
 from shared.producer import managed_producer
+from shared.tracing import init_tracer, shutdown_tracer
 
 from publisher.config import PublisherConfig, load_publisher_config
 from publisher.processing import MESSAGE_HANDLED_EVENT, Dependencies, _LazyJSON, handle_message
@@ -117,6 +118,7 @@ async def _serve() -> None:
     config = load_config()
     publisher = load_publisher_config()
     check_startup_config(config, publisher)
+    tracer_provider = init_tracer("reimbursement-analyzer-publisher", config.tracing.otlp_endpoint)
 
     stopping = asyncio.Event()
     _install_signal_handlers(stopping)
@@ -135,6 +137,7 @@ async def _serve() -> None:
         logger.info("publisher consuming %s", REQUEST_TOPIC)
         deps = Dependencies(config=config, publisher=publisher, pool=pool, producer=producer)
         await run(deps, consumer, stopping)
+        shutdown_tracer(tracer_provider)
 
 
 def main() -> None:
