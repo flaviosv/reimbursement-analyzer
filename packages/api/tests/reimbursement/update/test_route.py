@@ -3,6 +3,7 @@ import logging
 from datetime import date
 from decimal import Decimal
 from functools import partial
+from unittest.mock import Mock
 from uuid import UUID, uuid4
 
 import asyncpg
@@ -265,6 +266,21 @@ class DescribePutReimbursement:
             "SELECT count(*) FROM human_review WHERE reimbursement_uuid = $1", uuid
         )
         assert count == 1
+
+    async def it_stamps_reimbursement_uuid_on_the_current_span(
+        self, db: asyncpg.Connection, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        uuid = await seed_reimbursement(db, "REQ-PUT-SPAN-ATTR")
+        fake_span = Mock()
+        monkeypatch.setattr(
+            "api.reimbursement.update.route.trace.get_current_span", lambda: fake_span
+        )
+
+        async with _build_client(FakePool(db)) as client:
+            response = await client.put(f"/api/v1/reimbursement/{uuid}", json=_APPROVE_PAYLOAD)
+
+        assert response.status_code == 200
+        fake_span.set_attribute.assert_called_once_with("reimbursement.uuid", str(uuid))
 
     async def it_lets_exactly_one_of_two_concurrent_puts_win(self, migrated_db: str) -> None:
         # A real asyncpg pool (not FakePool's single locked connection): the

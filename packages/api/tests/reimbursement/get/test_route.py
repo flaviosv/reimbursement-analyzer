@@ -1,6 +1,7 @@
 import logging
 from datetime import UTC, datetime
 from functools import partial
+from unittest.mock import Mock
 from uuid import uuid4
 
 import asyncpg
@@ -93,6 +94,21 @@ class DescribeGetReimbursementByUuid:
         assert response.status_code == 500
         assert response.json() == {"msg": "internal error"}
         assert "connection reset" in caplog.text
+
+    async def it_stamps_reimbursement_uuid_on_the_current_span(
+        self, db: asyncpg.Connection, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        uuid = await seed_reimbursement(db, "REQ-GET-SPAN-ATTR", status="human-approved")
+        fake_span = Mock()
+        monkeypatch.setattr(
+            "api.reimbursement.get.route.trace.get_current_span", lambda: fake_span
+        )
+
+        async with _build_client(FakePool(db)) as client:
+            response = await client.get(f"/api/v1/reimbursement/{uuid}")
+
+        assert response.status_code == 200
+        fake_span.set_attribute.assert_called_once_with("reimbursement.uuid", str(uuid))
 
 
 class DescribeTheRealApp:
