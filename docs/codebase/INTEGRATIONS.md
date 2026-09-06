@@ -16,7 +16,7 @@
 - Type: message broker
 - Purpose: durable handoff from `publisher` to `reimbursement`'s resolve layer — one message per `reimbursement` row, carrying only its `uuid`
 - Data flow: outbound from `publisher`, inbound to `reimbursement` (consumed — resolves the row by `uuid` into `shared.models.Reimbursement`, then hands it to the `reimbursement/agent/` decision graph via `agent.decide()`). A transient resolve failure is also republished here by `reimbursement` with `retry` incremented, same requeue-to-own-topic shape `publisher` uses on `Request`.
-- Protocol: same as above, message contract `shared.models.ReimbursementEnvelope` (`uuid`, `retry`, `published_at`, `errors`)
+- Protocol: same as above, message contract `shared.models.ReimbursementEnvelope` (`uuid`, `retry`, `published_at`, `correlation_id`, `errors`)
 - Location: `packages/publisher/src/publisher/processing.py` (`_insert_and_publish` → `shared.reimbursement.use_cases.publish_pending`), `packages/reimbursement/src/reimbursement/consumer.py` (consume lifecycle), `packages/reimbursement/src/reimbursement/validation.py` (resolve, requeue)
 - Authentication: same as the `Request` topic
 
@@ -33,7 +33,7 @@
 
 - Type: LLM observability platform
 - Purpose: tracing backend for `reimbursement`'s LangGraph decision graph (the `agent/` subpackage) — one trace per reimbursement invocation, via `agent.agent._langfuse_handlers()`
-- Data flow: `agent.decide()` passes a memoized `langchain.CallbackHandler` into `graph.ainvoke`'s `callbacks` config on every invocation; if the package is missing or the handler can't be constructed, a durable `failure_log` record (`reimbursement.langfuse_fallback`) is written instead — no invocation runs trace-less and unlogged
+- Data flow: `agent.decide()` passes a memoized `langchain.CallbackHandler` into `graph.ainvoke`'s `callbacks` config on every invocation, alongside `metadata={"langfuse_session_id": str(reimbursement.uuid), "correlation_id": ...}` (the latter read from `shared.logging.get_correlation_id()`, omitted when `None`) — so a trace is filterable both by the reimbursement's uuid and by the originating request's correlation id; if the package is missing or the handler can't be constructed, a durable `failure_log` record (`reimbursement.langfuse_fallback`) is written instead — no invocation runs trace-less and unlogged
 - Protocol: LangFuse's LangChain callback integration (OTLP under the hood)
 - Location: `docker-compose.yml` (`langfuse-web`, `langfuse-worker`, and their own Postgres/ClickHouse/Redis/MinIO); client wiring in `packages/reimbursement/src/reimbursement/agent/agent.py`
 - Authentication: project public/secret key pair, auto-provisioned on first boot. `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` reach `reimbursement` via the `.env` file mounted read-only into the container (`langfuse.langchain.CallbackHandler()` reads them straight from the process environment — no compose passthrough); `LANGFUSE_HOST` stays compose-set (`http://langfuse-web:3000`, a Docker-network-topology address a shared `.env` value can't be correct for both in-container and on-host use)

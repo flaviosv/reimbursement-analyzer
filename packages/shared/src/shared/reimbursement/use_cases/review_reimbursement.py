@@ -1,7 +1,12 @@
 """Approve/reject a reimbursement — the one piece of real business logic
-this feature has: eligibility, the reject-completeness gate, the two-write
-transaction, and 404 vs 400 disambiguation, kept out of route.py and
-repository.py alike.
+this feature has: eligibility, the two-write transaction, and 404 vs 400
+disambiguation, kept out of route.py and repository.py alike.
+
+Reject has no completeness gate: a reimbursement may be finalized as
+human-rejected while receipts_value/receipts_date/currency are still NULL.
+Reject's payload may optionally supply those three fields (unlike approve,
+where they're required) — if given, they're persisted; if omitted, the
+row's existing values (NULL or not) are left untouched.
 
 No explicit row lock (`SELECT ... FOR UPDATE`) before the atomic UPDATE:
 Postgres's own row-level write serialization already makes two concurrent
@@ -31,8 +36,8 @@ ELIGIBLE_STATUSES = ["human-review", "auto-rejected", "human-rejected"]
 
 async def _disambiguate(conn: asyncpg.Connection, uuid: UUID) -> NoReturn:
     """Called only on the 0-rows-affected path: distinguishes "no such
-    row" (404) from "row exists, but ineligible/incomplete" (400) — always
-    raises, never returns."""
+    row" (404) from "row exists, but its status is ineligible" (400) —
+    always raises, never returns."""
     state = await find_reimbursement_state(conn, uuid)
     if state is None:
         raise ReimbursementNotFound(f"no reimbursement with uuid {uuid}")
@@ -66,10 +71,25 @@ async def approve_reimbursement(
 
 
 async def reject_reimbursement(
-    conn: asyncpg.Connection, uuid: UUID, *, reason: str, approved_by: str
+    conn: asyncpg.Connection,
+    uuid: UUID,
+    *,
+    reason: str,
+    approved_by: str,
+    receipts_value: Decimal | None = None,
+    receipts_date: date | None = None,
+    receipts_currency: str | None = None,
 ) -> asyncpg.Record:
     async with conn.transaction():
-        row = await reject(conn, uuid, eligible_statuses=ELIGIBLE_STATUSES, reason=reason)
+        row = await reject(
+            conn,
+            uuid,
+            eligible_statuses=ELIGIBLE_STATUSES,
+            reason=reason,
+            receipts_value=receipts_value,
+            receipts_date=receipts_date,
+            receipts_currency=receipts_currency,
+        )
         if row is None:
             await _disambiguate(conn, uuid)
         await record_human_review_decision(conn, uuid, "rejected", approved_by, reason)

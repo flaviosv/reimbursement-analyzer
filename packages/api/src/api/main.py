@@ -1,4 +1,3 @@
-import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import replace
@@ -7,10 +6,12 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from shared.config import load_config
 from shared.db import managed_pool
+from shared.logging import configure_logging
 from shared.models import HealthStatus
 from shared.producer import managed_producer
 
 from api.errors import register_handlers
+from api.middleware import CorrelationIdMiddleware
 from api.reimbursement.create.route import router as reimbursement_router
 from api.reimbursement.get.route import router as get_reimbursement_router
 from api.reimbursement.list.route import router as list_reimbursement_router
@@ -22,7 +23,7 @@ load_dotenv()
 # logging setup only configures its own uvicorn/uvicorn.error/uvicorn.access
 # loggers, never the root logger, so without this every new .info() call
 # this feature adds would silently never emit.
-logging.basicConfig(level=logging.INFO)
+configure_logging()
 
 
 @asynccontextmanager
@@ -39,6 +40,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(lifespan=lifespan)
+app.add_middleware(CorrelationIdMiddleware)
 register_handlers(app)
 app.include_router(reimbursement_router)
 app.include_router(list_reimbursement_router)

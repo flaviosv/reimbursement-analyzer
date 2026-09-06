@@ -98,6 +98,7 @@ class RequestEnvelope(BaseModel):
 
     retry: Annotated[int, Field(ge=0)]
     published_at: AwareDatetime
+    correlation_id: str | None = None
     errors: list[AttemptError] = []
     # Bounded to the same ceiling the API enforces at ingress: the
     # publisher must not trust that every producer onto this topic is the
@@ -115,4 +116,5 @@ class ReimbursementEnvelope(BaseModel):
     uuid: UUID
     retry: int
     published_at: AwareDatetime
+    correlation_id: str | None = None
     errors: list[AttemptError] = []

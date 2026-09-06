@@ -75,6 +75,17 @@ class FailureLogConfig:
 
 
 @dataclass(frozen=True)
+class LoggingConfig:
+    """The raw `LOG_LEVEL` env value, unparsed and unvalidated — plain data
+    holder (AD-023's rule). Level-name validation and the invalid-value
+    fallback are `configure_logging()`'s job, not this loader's: that logic
+    needs a working logger to emit its fallback warning into, which only
+    exists once `configure_logging()` has attached its handler."""
+
+    level: str
+
+
+@dataclass(frozen=True)
 class Config:
     """Process-wide settings every service constructs.
 
@@ -88,6 +99,7 @@ class Config:
     kafka: KafkaConfig
     database: DatabaseConfig
     failure_log: FailureLogConfig
+    logging: LoggingConfig
 
 
 @lru_cache(maxsize=1)
@@ -122,4 +134,5 @@ def load_config() -> Config:
             logger_name="reimbursementanalyzer.failures",
             max_message_chars=2000,
         ),
+        logging=LoggingConfig(level=os.getenv("LOG_LEVEL", "debug")),
     )

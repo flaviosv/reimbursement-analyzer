@@ -14,6 +14,7 @@ from confluent_kafka.aio import AIOConsumer
 from dotenv import load_dotenv
 from shared.config import REQUEST_TOPIC, Config, load_config
 from shared.db import managed_pool
+from shared.logging import configure_logging
 from shared.producer import managed_producer
 
 from publisher.config import PublisherConfig, load_publisher_config
@@ -139,7 +140,7 @@ async def _serve() -> None:
 
 def main() -> None:
     load_dotenv()
-    logging.basicConfig(level=logging.INFO)
+    configure_logging()
     asyncio.run(_serve())
 
 

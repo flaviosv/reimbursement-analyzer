@@ -68,7 +68,15 @@ async def put_reimbursement(
                     approved_by=review.approved_by,
                 )
             else:
-                await reject_reimbursement(conn, uuid, reason=review.reason, approved_by=review.approved_by)
+                await reject_reimbursement(
+                    conn,
+                    uuid,
+                    reason=review.reason,
+                    approved_by=review.approved_by,
+                    receipts_value=review.receipts_value,
+                    receipts_date=review.receipts_date,
+                    receipts_currency=review.receipts_currency,
+                )
         except (ReimbursementNotFound, ReimbursementNotEligible):
             # Routine, already-typed business outcomes (unknown uuid / row
             # ineligible for this decision) — each has its own registered

@@ -42,10 +42,11 @@ async def _publish(
     errors: Sequence[AttemptError] = (),
     *,
     retry: int = 0,
+    correlation_id: str | None = None,
 ) -> None:
     """Every test in this file calls `publish_pending` with the same fixed
-    `publish_timeout_seconds`/`failure_log_config` — only `errors`/`retry`
-    vary per test."""
+    `publish_timeout_seconds`/`failure_log_config` — only `errors`/`retry`/
+    `correlation_id` vary per test."""
     await publish_pending(
         db,
         producer,
@@ -54,6 +55,7 @@ async def _publish(
         publish_timeout_seconds=5.0,
         failure_log_config=_FAILURE_LOG_CONFIG,
         retry=retry,
+        correlation_id=correlation_id,
     )
 
 
@@ -114,6 +116,28 @@ class DescribePublishPending:
         published = producer.messages(REIMBURSEMENT_TOPIC)[0]
         assert len(published["errors"]) == 2
         assert published["errors"][0]["message"] == "connection reset by peer"
+
+    async def it_carries_the_correlation_id_forward_onto_the_published_envelope(
+        self, db: asyncpg.Connection
+    ) -> None:
+        item = valid_reimbursement_item("REQ-PUBLISH-CORR")
+        producer = FakeProducer()
+
+        await _publish(db, producer, item, correlation_id="corr-from-request")
+
+        published = producer.messages(REIMBURSEMENT_TOPIC)[0]
+        assert published["correlation_id"] == "corr-from-request"
+
+    async def it_omits_a_correlation_id_only_as_a_null_field_never_a_crash(
+        self, db: asyncpg.Connection
+    ) -> None:
+        item = valid_reimbursement_item("REQ-PUBLISH-NO-CORR")
+        producer = FakeProducer()
+
+        await _publish(db, producer, item, correlation_id=None)
+
+        published = producer.messages(REIMBURSEMENT_TOPIC)[0]
+        assert published["correlation_id"] is None
 
 
 class DescribeTheCompensatingDelete:

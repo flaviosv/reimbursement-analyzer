@@ -1,5 +1,7 @@
 import asyncio
 import logging
+from datetime import date
+from decimal import Decimal
 from functools import partial
 from uuid import UUID, uuid4
 
@@ -161,14 +163,37 @@ class DescribePutReimbursement:
         status = await db.fetchval("SELECT status FROM reimbursement WHERE uuid = $1", uuid)
         assert status == "human-approved"
 
-    async def it_returns_400_when_rejecting_an_incomplete_entity(self, db: asyncpg.Connection) -> None:
+    async def it_rejects_an_eligible_incomplete_row_and_returns_200(self, db: asyncpg.Connection) -> None:
+        # Reject has no completeness gate: a human-review row whose
+        # receipts_value/receipts_date/currency were never extracted can
+        # still be rejected outright, staying incomplete.
         uuid = await seed_reimbursement(db, "REQ-PUT-REJECT-INCOMPLETE")
 
         async with _build_client(FakePool(db)) as client:
             response = await client.put(f"/api/v1/reimbursement/{uuid}", json=_REJECT_PAYLOAD)
 
-        assert response.status_code == 400
-        assert response.json() == {"msg": f"reimbursement {uuid} is not eligible for this decision"}
+        assert response.status_code == 200
+        status = await db.fetchval("SELECT status FROM reimbursement WHERE uuid = $1", uuid)
+        assert status == "human-rejected"
+
+    async def it_persists_optionally_supplied_receipts_on_reject(self, db: asyncpg.Connection) -> None:
+        # Reject's receipts fields are optional, unlike approve's — when the
+        # reviewer supplies them anyway (e.g. found in raw_ocr_text), they're
+        # persisted even though the claim is still being rejected.
+        uuid = await seed_reimbursement(db, "REQ-PUT-REJECT-WITH-RECEIPTS")
+        payload = valid_reject_payload(
+            receipts_date="2026-01-05", receipts_value="50.00", receipts_currency="BRL"
+        )
+
+        async with _build_client(FakePool(db)) as client:
+            response = await client.put(f"/api/v1/reimbursement/{uuid}", json=payload)
+
+        assert response.status_code == 200
+        row = await db.fetchrow("SELECT * FROM reimbursement WHERE uuid = $1", uuid)
+        assert row["status"] == "human-rejected"
+        assert row["receipts_value"] == Decimal("50.00")
+        assert row["receipts_date"] == date(2026, 1, 5)
+        assert row["currency"] == "BRL"
 
     async def it_re_rejects_an_already_human_rejected_row(self, db: asyncpg.Connection) -> None:
         # AD-027 §1 (.specs/STATE.md) + spec.md's P1 "Reject a reimbursement

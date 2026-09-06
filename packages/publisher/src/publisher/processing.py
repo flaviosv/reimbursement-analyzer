@@ -20,7 +20,7 @@ from pydantic import ValidationError
 from shared import failure_log
 from shared.config import MAX_RETRY, REQUEST_TOPIC, Config
 from shared.errors import PublishFailed, sanitize
-from shared.logging import log_event
+from shared.logging import log_event, reset_correlation_id, set_correlation_id
 from shared.models import AttemptError, ReimbursementRequest, RequestEnvelope, Stage
 from shared.producer import publish
 from shared.reimbursement import repository
@@ -109,16 +109,25 @@ async def handle_message(deps: Dependencies, raw: bytes | None) -> list[ItemOutc
         )
         return [ItemOutcome.LOGGED]
 
-    if not envelope.payload:
-        # A bug or a hand-crafted message — the POST endpoint already rejects
-        # [] at ingress — so it fails safe rather than crashing the loop.
-        logger.info("%s", _LazyJSON({"event": EMPTY_PAYLOAD_EVENT, "retry": envelope.retry}))
-        return []
+    # Set for the duration of this one message's processing only: messages
+    # are handled sequentially in one coroutine, so resetting in `finally` is
+    # what stops a stale value from bleeding into the next message's logs.
+    token = set_correlation_id(envelope.correlation_id)
+    try:
+        if not envelope.payload:
+            # A bug or a hand-crafted message — the POST endpoint already
+            # rejects [] at ingress — so it fails safe rather than crashing
+            # the loop.
+            logger.info("%s", _LazyJSON({"event": EMPTY_PAYLOAD_EVENT, "retry": envelope.retry}))
+            return []
 
-    # Once, before fan-out: retry is envelope-level, and past the ceiling
-    # SCOPE.md:218 stops every other action for every item in the message.
-    handler = escalate_item if envelope.retry > MAX_RETRY else process_item
-    return await _fan_out(deps, envelope, handler)
+        # Once, before fan-out: retry is envelope-level, and past the
+        # ceiling SCOPE.md:218 stops every other action for every item in
+        # the message.
+        handler = escalate_item if envelope.retry > MAX_RETRY else process_item
+        return await _fan_out(deps, envelope, handler)
+    finally:
+        reset_correlation_id(token)
 
 
 def _failure_record(
@@ -301,6 +310,7 @@ async def _insert_and_publish(
             deps.config.kafka.publish_timeout_seconds,
             deps.config.failure_log,
             envelope.retry,
+            envelope.correlation_id,
         )
 
 
@@ -323,6 +333,11 @@ async def _requeue(
     retried = RequestEnvelope(
         retry=envelope.retry + 1,
         published_at=datetime.now(UTC),
+        # Explicit, not the model's own None default: this is the requeue
+        # path's own construction site (a second write path onto Request,
+        # separate from the API's byte-splice), so the default would
+        # otherwise silently drop the id on every requeue.
+        correlation_id=envelope.correlation_id,
         errors=errors,
         payload=[item],
     )

@@ -134,16 +134,43 @@ class DescribeRejectReimbursement:
         count = await db.fetchval("SELECT count(*) FROM human_review WHERE reimbursement_uuid = $1", uuid)
         assert count == 0
 
-    async def it_raises_reimbursement_not_eligible_when_the_entity_is_incomplete(
+    async def it_rejects_an_eligible_incomplete_row_and_records_the_decision(
         self, db: asyncpg.Connection
     ) -> None:
+        # Reject has no completeness gate: a row whose receipts_value/
+        # receipts_date/currency were never extracted (e.g. an unresolved
+        # human-review escalation) can still be rejected outright, staying
+        # incomplete when no receipts fields are supplied either.
         uuid = await seed_reimbursement(db, "REQ-UC-REJECT-INCOMPLETE")
 
-        with pytest.raises(ReimbursementNotEligible):
-            await reject_reimbursement(db, uuid, reason="x", approved_by="a@example.com")
+        row = await reject_reimbursement(db, uuid, reason="x", approved_by="a@example.com")
 
-        count = await db.fetchval("SELECT count(*) FROM human_review WHERE reimbursement_uuid = $1", uuid)
-        assert count == 0
+        assert row["status"] == "human-rejected"
+        assert row["receipts_value"] is None
+        hr = await db.fetchrow("SELECT * FROM human_review WHERE reimbursement_uuid = $1", uuid)
+        assert hr["status"] == "rejected"
+
+    async def it_rejects_an_incomplete_row_and_persists_optionally_supplied_receipts(
+        self, db: asyncpg.Connection
+    ) -> None:
+        # Unlike approve (receipts fields required), reject's receipts
+        # fields are optional — when supplied anyway, they're persisted.
+        uuid = await seed_reimbursement(db, "REQ-UC-REJECT-BACKFILL")
+
+        row = await reject_reimbursement(
+            db,
+            uuid,
+            reason="I could locate the fields in the raw_ocr_text",
+            approved_by="reviewer@example.com",
+            receipts_value=Decimal("50.00"),
+            receipts_date=date(2026, 1, 5),
+            receipts_currency="BRL",
+        )
+
+        assert row["status"] == "human-rejected"
+        assert row["receipts_value"] == Decimal("50.00")
+        assert row["receipts_date"] == date(2026, 1, 5)
+        assert row["currency"] == "BRL"
 
     @pytest.mark.parametrize("starting_status", ["auto-rejected", "human-rejected"])
     async def it_re_rejects_an_already_rejected_row(

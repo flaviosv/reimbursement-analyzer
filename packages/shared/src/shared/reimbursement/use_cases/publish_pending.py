@@ -31,10 +31,17 @@ async def publish_pending(
     publish_timeout_seconds: float,
     failure_log_config: FailureLogConfig,
     retry: int,
+    correlation_id: str | None,
 ) -> UUID:
     """Insert `item`, let it commit, then publish its `Reimbursement` message.
     Returns the minted `uuid` so the caller can log the request_id-to-uuid
     correlation on success — this module adds no log call of its own.
+
+    `correlation_id` is the originating request's id, carried forward
+    unchanged from the `RequestEnvelope` this item was consumed from
+    (`None` when that envelope carried none) — this is what lets the
+    `Reimbursement` message's own consumer (reimbursement) tie its logs back
+    to the same request api and publisher already logged against.
 
     No transaction spans the publish (AD-033, amending AD-017 for this unit
     of work only): the insert commits on its own, well before the publish is
@@ -62,7 +69,11 @@ async def publish_pending(
         uuid = await insert_pending(conn, item)
     try:
         message = ReimbursementEnvelope(
-            uuid=uuid, retry=0, published_at=datetime.now(UTC), errors=errors
+            uuid=uuid,
+            retry=0,
+            published_at=datetime.now(UTC),
+            correlation_id=correlation_id,
+            errors=errors,
         )
         await publish(
             producer, REIMBURSEMENT_TOPIC, message.model_dump_json().encode(), publish_timeout_seconds
