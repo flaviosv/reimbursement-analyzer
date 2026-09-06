@@ -4,6 +4,9 @@ from uuid import uuid4
 
 import pytest
 from agent_fakes import FakePool, FakeProducer
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from reimbursement.agent import agent
 from reimbursement.config import load_agent_config
 from reimbursement.models import Reimbursement
@@ -100,6 +103,23 @@ class DescribeHandleMessageParsing:
 
         assert outcome == MessageOutcome.INVALID
         assert any("reimbursement.malformed_message" in record.message for record in caplog.records)
+
+    async def it_stamps_reimbursement_uuid_on_the_current_span_once_parsed(self) -> None:
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        tracer = provider.get_tracer(__name__)
+        pool = FakePool(rows={})
+        deps = _deps(pool=pool)
+        uuid = uuid4()
+        envelope = _envelope(uuid=uuid, retry=0)
+
+        with tracer.start_as_current_span("process_message"):
+            outcome = await handle_message(deps, envelope.model_dump_json().encode())
+
+        assert outcome == MessageOutcome.GHOST
+        span = exporter.get_finished_spans()[0]
+        assert span.attributes["reimbursement.uuid"] == str(uuid)
 
 
 class DescribeRetryCeilingEscalation:

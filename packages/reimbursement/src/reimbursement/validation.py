@@ -15,6 +15,7 @@ from typing import Any
 
 import asyncpg
 from confluent_kafka.aio import AIOProducer
+from opentelemetry import trace
 from pydantic import ValidationError
 from shared import failure_log
 from shared.config import MAX_RETRY, REIMBURSEMENT_TOPIC, Config
@@ -80,6 +81,8 @@ async def handle_message(deps: Dependencies, raw: bytes) -> MessageOutcome:
             },
         )
         return MessageOutcome.INVALID
+
+    trace.get_current_span().set_attribute("reimbursement.uuid", str(envelope.uuid))
 
     # Checked once, before the normal resolve flow: retry is message-level,
     # and past the ceiling there is nothing left to retry (SCOPE.md's Agent
