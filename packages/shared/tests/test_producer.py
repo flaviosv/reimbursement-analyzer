@@ -193,6 +193,14 @@ class DescribeManagedProducer:
         # depends on to carry headers (design.md's Risks table). If this
         # ever fails, the coupling `publish()` relies on has broken and
         # needs a new approach, not a silent production failure.
+        #
+        # SPEC_DEVIATION: this constructs a real, unmocked confluent_kafka
+        # Producer targeting the default localhost:9092 bootstrap server,
+        # with no Docker-gated container — safe in a Docker-less run only
+        # because construction and .close() never actually publish anything
+        # (produce() is never called), so a refused background connection
+        # (visible in stderr as librdkafka "Connect...failed") is expected
+        # noise, not a test failure.
         async with managed_producer({"bootstrap.servers": "localhost:9092"}) as producer:
             assert hasattr(producer, "executor")
             assert isinstance(producer._producer, confluent_kafka.Producer)
