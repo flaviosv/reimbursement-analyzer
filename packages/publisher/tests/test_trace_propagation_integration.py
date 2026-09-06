@@ -30,7 +30,7 @@ from shared.tracing import traced_message_span
 pytestmark = [pytest.mark.integration, pytest.mark.anyio]
 
 
-def _consume_one(bootstrap_server: str, topic: str, timeout: float = 30.0) -> Message:
+def _consume_one(bootstrap_server: str, topic: str, timeout: float = 10.0) -> Message:
     consumer = Consumer(
         {
             "bootstrap.servers": bootstrap_server,
