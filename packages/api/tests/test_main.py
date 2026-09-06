@@ -93,3 +93,43 @@ class DescribeGetProducer:
             response = client.get("/producer-identity-check")
 
         assert response.json() == {"is_app_state_producer": True}
+
+
+class DescribeTracingIntegration:
+    def it_initializes_a_tracer_provider_with_the_api_service_name(self) -> None:
+        # `main_module._tracer_provider` is what module scope constructed
+        # and registered; asserting on its own resource content (rather than
+        # `trace.get_tracer_provider() is ...`) keeps this robust against
+        # other tests in this file reloading the module — OTel's own
+        # set_tracer_provider() refuses to override an already-registered
+        # global provider, by design, so re-import never changes the
+        # process-wide one.
+        provider = main_module._tracer_provider
+
+        assert provider.resource.attributes["service.name"] == "reimbursement-analyzer-api"
+
+    def it_shuts_down_the_tracer_on_lifespan_shutdown(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls: list[object] = []
+        monkeypatch.setattr(main_module, "shutdown_tracer", lambda provider: calls.append(provider))
+        app = _build_app()
+
+        with TestClient(app):
+            assert calls == []
+
+        assert calls == [main_module._tracer_provider]
+
+    def it_instruments_the_app_with_fastapi_instrumentor(self) -> None:
+        # instrument_app's own documented, stable signal — set exactly once,
+        # at import time, with no per-route code (AC3's scope-out).
+        assert main_module.app._is_instrumented_by_opentelemetry is True
+
+    def it_does_not_fail_to_start_when_the_apm_server_is_unreachable(self) -> None:
+        # The default/otel-configured endpoint is unreachable in this test
+        # environment already (no live APM Server), and app construction/
+        # startup above never raised — this test names that guarantee
+        # explicitly rather than leaving it merely implicit in "the other
+        # tests didn't crash".
+        with TestClient(main_module.app) as client:
+            response = client.get("/health")
+
+        assert response.status_code == 200

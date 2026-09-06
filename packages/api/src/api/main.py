@@ -5,10 +5,12 @@ from dataclasses import replace
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from shared.config import load_config
 from shared.db import managed_pool
 from shared.models import HealthStatus
 from shared.producer import managed_producer
+from shared.tracing import init_tracer, shutdown_tracer
 
 from api.errors import register_handlers
 from api.reimbursement.create.route import router as reimbursement_router
@@ -24,6 +26,8 @@ load_dotenv()
 # this feature adds would silently never emit.
 logging.basicConfig(level=logging.INFO)
 
+_tracer_provider = init_tracer("reimbursement-analyzer-api", load_config().tracing.otlp_endpoint)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -36,9 +40,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         async with managed_pool(replace(config.database, pool_min_size=0)) as pool:
             app.state.pool = pool
             yield
+            shutdown_tracer(_tracer_provider)
 
 
 app = FastAPI(lifespan=lifespan)
+FastAPIInstrumentor.instrument_app(app)
 register_handlers(app)
 app.include_router(reimbursement_router)
 app.include_router(list_reimbursement_router)

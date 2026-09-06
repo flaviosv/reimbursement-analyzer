@@ -1,29 +1,44 @@
-import asyncio
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 import pytest
 from shared.config import KAFKA_MAX_MESSAGE_BYTES, KafkaConfig, load_config
 from testcontainers.community.kafka import KafkaContainer
 
 
+class _ImmediateFakeSyncProducer:
+    """produce() then flush() resolves the message immediately — models
+    confluent_kafka.Producer's synchronous produce()/flush() pair, the shape
+    shared.producer.publish now drives directly via ._producer/.executor."""
+
+    def __init__(self, outer: "ImmediateFakeProducer", *, error: Exception | None = None) -> None:
+        self._outer = outer
+        self.error = error
+        self._on_delivery: Any = None
+
+    def produce(
+        self, *, topic: str, value: bytes | None = None, on_delivery: Any = None, **kwargs: object
+    ) -> None:
+        self._outer.produced.append(value)
+        self._on_delivery = on_delivery
+
+    def flush(self, timeout: float) -> int:
+        if self._on_delivery is not None:
+            self._on_delivery(self.error, object())
+        return 0
+
+
 class ImmediateFakeProducer:
-    """Every produce() call returns an already-resolved (or already-failed)
-    future, so awaiting it never actually suspends. Shared by test_producer.py
-    and test_route.py — the only fake either file needs when a call's
-    outcome doesn't have to depend on argument order."""
+    """Every produce() call resolves immediately — either successfully, or
+    with the given delivery error. Shared by test_producer.py and
+    test_route.py — the only fake either file needs when a call's outcome
+    doesn't have to depend on argument order."""
 
     def __init__(self, *, error: Exception | None = None) -> None:
-        self.error = error
         self.produced: list[bytes] = []
-
-    async def produce(self, topic: str, value: bytes | None = None, **kwargs: object):
-        self.produced.append(value)
-        future = asyncio.get_running_loop().create_future()
-        if self.error is not None:
-            future.set_exception(self.error)
-        else:
-            future.set_result(object())
-        return future
+        self._producer = _ImmediateFakeSyncProducer(self, error=error)
+        self.executor = ThreadPoolExecutor(max_workers=4)
 
 
 @pytest.fixture
