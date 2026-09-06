@@ -117,11 +117,11 @@ T13 → T14 → T15
 
 **Done when**:
 
-- [ ] `packages/shared/pyproject.toml` declares `opentelemetry-sdk>=1.44.0` and `opentelemetry-exporter-otlp-proto-http>=1.44.0` in `dependencies`
-- [ ] `packages/api/pyproject.toml` declares `opentelemetry-instrumentation-fastapi>=0.65b0` in `dependencies`
-- [ ] `uv sync` succeeds without version conflicts
-- [ ] No other packages modified
-- [ ] No unexpected transitive dependency tree changes (verified by reviewing `uv lock` diff if it changes size)
+- [x] `packages/shared/pyproject.toml` declares `opentelemetry-sdk>=1.44.0` and `opentelemetry-exporter-otlp-proto-http>=1.44.0` in `dependencies`
+- [x] `packages/api/pyproject.toml` declares `opentelemetry-instrumentation-fastapi>=0.65b0` in `dependencies`
+- [x] `uv sync` succeeds without version conflicts
+- [x] No other packages modified
+- [x] No unexpected transitive dependency tree changes (verified by reviewing `uv lock` diff if it changes size)
 
 **Tests**: none (dependency declarations are not executable code; verified by build gate)
 
@@ -147,12 +147,12 @@ T13 → T14 → T15
 
 **Done when**:
 
-- [ ] `TracingConfig` dataclass created with `otlp_endpoint: str` field, `@dataclass(frozen=True)`
-- [ ] `Config` dataclass includes `tracing: TracingConfig` field
-- [ ] `load_config()` reads `OTEL_EXPORTER_OTLP_ENDPOINT` env var and defaults correctly
-- [ ] Existing unit tests (`test_config.py`) still pass
-- [ ] New test: `DescribeTracingConfig` test class added to `packages/shared/tests/test_config.py` with `it_defaults_otlp_endpoint_when_unset` and `it_reads_otlp_endpoint_from_env`
-- [ ] Quick gate passes: `uv run pytest -m "not integration and not e2e"` passes
+- [x] `TracingConfig` dataclass created with `otlp_endpoint: str` field, `@dataclass(frozen=True)`
+- [x] `Config` dataclass includes `tracing: TracingConfig` field
+- [x] `load_config()` reads `OTEL_EXPORTER_OTLP_ENDPOINT` env var and defaults correctly
+- [x] Existing unit tests (`test_config.py`) still pass
+- [x] New test: `DescribeTracingConfig` test class added to `packages/shared/tests/test_config.py` with `it_defaults_otlp_endpoint_when_unset` and `it_reads_otlp_endpoint_from_env`
+- [x] Quick gate passes: `uv run pytest -m "not integration and not e2e"` passes
 
 **Tests**: unit
 
@@ -185,14 +185,14 @@ Import `opentelemetry.trace`, `opentelemetry.sdk.trace`, `opentelemetry.sdk.trac
 
 **Done when**:
 
-- [ ] `init_tracer` creates Resource with `service.name`, OTLPSpanExporter pointed at `{otlp_endpoint}/v1/traces`, BatchSpanProcessor registered on a TracerProvider, provider returned and set globally
-- [ ] `shutdown_tracer` calls `provider.shutdown()` — no raise on already-shutdown provider
-- [ ] `inject_headers` uses `propagate.inject(carrier)` against current context, returns bytes-tuple list
-- [ ] `extract_context` deserializes bytes-tuple headers, uses `propagate.extract(carrier)`, returns Context (empty list → empty context, no parent span)
-- [ ] `traced_message_span` is a context manager (via `@contextmanager` or `AsyncExitStack`); extracts context from message headers, starts span with name, attributes (topic, partition, offset)
-- [ ] Unit tests in `packages/shared/tests/test_tracing.py`: DescribeInitTracer, DescribeShutdownTracer, DescribeInjectHeaders, DescribeExtractContext, DescribeTracedMessageSpan — each with multiple `it_*` test methods covering happy path and edge cases (empty headers, None headers)
-- [ ] Tests use `InMemorySpanExporter` for assertion without live APM Server
-- [ ] Quick gate passes
+- [x] `init_tracer` creates Resource with `service.name`, OTLPSpanExporter pointed at `{otlp_endpoint}/v1/traces`, BatchSpanProcessor registered on a TracerProvider, provider returned and set globally
+- [x] `shutdown_tracer` calls `provider.shutdown()` — no raise on already-shutdown provider
+- [x] `inject_headers` uses `propagate.inject(carrier)` against current context, returns bytes-tuple list
+- [x] `extract_context` deserializes bytes-tuple headers, uses `propagate.extract(carrier)`, returns Context (empty list → empty context, no parent span)
+- [x] `traced_message_span` is a context manager (via `@contextmanager` or `AsyncExitStack`); extracts context from message headers, starts span with name, attributes (topic, partition, offset)
+- [x] Unit tests in `packages/shared/tests/test_tracing.py`: DescribeInitTracer, DescribeShutdownTracer, DescribeInjectHeaders, DescribeExtractContext, DescribeTracedMessageSpan — each with multiple `it_*` test methods covering happy path and edge cases (empty headers, None headers)
+- [x] Tests use `InMemorySpanExporter` for assertion without live APM Server
+- [x] Quick gate passes
 
 **Tests**: unit
 
@@ -218,13 +218,13 @@ Import `opentelemetry.trace`, `opentelemetry.sdk.trace`, `opentelemetry.sdk.trac
 
 **Done when**:
 
-- [ ] `publish()` internally calls `shared.tracing.inject_headers()` unconditionally
-- [ ] `publish()` uses `loop.run_in_executor(producer.executor, sync_produce_and_flush)` to drive `producer._producer.produce(headers=...)` and `.flush(...)`
-- [ ] Error handling unchanged: `PublishFailed` raised on delivery failure or timeout
-- [ ] Call sites (api route, publisher processing, reimbursement validation requeue) require zero changes — signature backward-compatible
-- [ ] Guard/smoke test in `packages/shared/tests/test_producer.py`: verify `hasattr(producer, "executor")` and `isinstance(producer._producer, confluent_kafka.Producer)` against real `managed_producer()`
-- [ ] All existing `test_producer.py` tests rewritten (see T13)
-- [ ] Quick gate passes
+- [x] `publish()` internally calls `shared.tracing.inject_headers()` unconditionally
+- [x] `publish()` uses `loop.run_in_executor(producer.executor, sync_produce_and_flush)` to drive `producer._producer.produce(headers=...)` and `.flush(...)`
+- [x] Error handling unchanged: `PublishFailed` raised on delivery failure or timeout
+- [x] Call sites (api route, publisher processing, reimbursement validation requeue) require zero changes — signature backward-compatible
+- [x] Guard/smoke test in `packages/shared/tests/test_producer.py`: verify `hasattr(producer, "executor")` and `isinstance(producer._producer, confluent_kafka.Producer)` against real `managed_producer()`
+- [x] All existing `test_producer.py` tests rewritten (see T13)
+- [x] Quick gate passes
 
 **Tests**: unit (fake producer must be rewritten; see T13)
 
@@ -250,12 +250,12 @@ Import `opentelemetry.trace`, `opentelemetry.sdk.trace`, `opentelemetry.sdk.trac
 
 **Done when**:
 
-- [ ] New `_FakeSyncProducer` class models `produce()` and `flush()` with on-delivery callback
-- [ ] New `_FakeExecutor` or mock executor can be injected
-- [ ] All four existing test methods (`it_raises_on_broker_error`, `it_raises_on_timeout`, `it_resolves_on_ack`, `it_isolates_concurrent_calls` — names inferred from existing test structure) rewritten to use new fakes and still pass
-- [ ] Test coverage: header injection verified (new assertion: `assert headers in captured_produce_call`)
-- [ ] All existing assertions still hold (PublishFailed contract, error message content)
-- [ ] Quick gate passes
+- [x] New `_FakeSyncProducer` class models `produce()` and `flush()` with on-delivery callback
+- [x] New `_FakeExecutor` or mock executor can be injected
+- [x] All four existing test methods (`it_raises_on_broker_error`, `it_raises_on_timeout`, `it_resolves_on_ack`, `it_isolates_concurrent_calls` — names inferred from existing test structure) rewritten to use new fakes and still pass
+- [x] Test coverage: header injection verified (new assertion: `assert headers in captured_produce_call`)
+- [x] All existing assertions still hold (PublishFailed contract, error message content)
+- [x] Quick gate passes
 
 **Tests**: unit
 
@@ -281,8 +281,8 @@ Import `opentelemetry.trace`, `opentelemetry.sdk.trace`, `opentelemetry.sdk.trac
 
 **Done when**:
 
-- [ ] `uv run pytest packages/shared/tests/test_tracing.py packages/shared/tests/test_config.py packages/shared/tests/test_producer.py -m "not integration and not e2e"` — all pass, no flakes
-- [ ] No import errors between modules
+- [x] `uv run pytest packages/shared/tests/test_tracing.py packages/shared/tests/test_config.py packages/shared/tests/test_producer.py -m "not integration and not e2e"` — all pass, no flakes
+- [x] No import errors between modules
 
 **Tests**: none (integration of existing tests)
 
@@ -308,14 +308,14 @@ Import `opentelemetry.trace`, `opentelemetry.sdk.trace`, `opentelemetry.sdk.trac
 
 **Done when**:
 
-- [ ] `init_tracer` called at module scope, `_tracer_provider` assigned
-- [ ] `FastAPIInstrumentor.instrument_app(app)` called exactly once, immediately after app creation
-- [ ] `shutdown_tracer(_tracer_provider)` called in lifespan after `yield`, still inside the managed `async with` block (matches AC2 wording exactly)
-- [ ] No per-route span creation code added (AC3 scope-out respected)
-- [ ] Existing `test_main.py` extended with `DescribeTracingIntegration::it_initializes_tracer_on_startup` (verifies `_tracer_provider` is set), `it_shuts_down_tracer_on_shutdown` (mock shutdown call), `it_instruments_app_with_fastapi_instrumentor` (mock verify instrumentation)
-- [ ] Route-level tests (test_route.py for GET/PUT) still pass with new spans auto-created
-- [ ] No startup errors when APM Server unreachable (verify by temporarily setting bad endpoint in a test env override)
-- [ ] Quick gate passes
+- [x] `init_tracer` called at module scope, `_tracer_provider` assigned
+- [x] `FastAPIInstrumentor.instrument_app(app)` called exactly once, immediately after app creation
+- [x] `shutdown_tracer(_tracer_provider)` called in lifespan after `yield`, still inside the managed `async with` block (matches AC2 wording exactly)
+- [x] No per-route span creation code added (AC3 scope-out respected)
+- [x] Existing `test_main.py` extended with `DescribeTracingIntegration::it_initializes_tracer_on_startup` (verifies `_tracer_provider` is set), `it_shuts_down_tracer_on_shutdown` (mock shutdown call), `it_instruments_app_with_fastapi_instrumentor` (mock verify instrumentation)
+- [x] Route-level tests (test_route.py for GET/PUT) still pass with new spans auto-created
+- [x] No startup errors when APM Server unreachable (verify by temporarily setting bad endpoint in a test env override)
+- [x] Quick gate passes
 
 **Tests**: unit (via TestClient mocks for tracer provider)
 
@@ -341,12 +341,12 @@ Import `opentelemetry.trace`, `opentelemetry.sdk.trace`, `opentelemetry.sdk.trac
 
 **Done when**:
 
-- [ ] Both files import `from opentelemetry import trace`
-- [ ] GET handler sets attribute before any other logic
-- [ ] PUT handler sets attribute before any other logic
-- [ ] Existing route tests (test_route.py for both) still pass
-- [ ] New test assertions in existing test files: mock `trace.get_current_span()` and verify `.set_attribute("reimbursement.uuid", str(uuid))` was called with the correct uuid
-- [ ] Quick gate passes
+- [x] Both files import `from opentelemetry import trace`
+- [x] GET handler sets attribute before any other logic
+- [x] PUT handler sets attribute before any other logic
+- [x] Existing route tests (test_route.py for both) still pass
+- [x] New test assertions in existing test files: mock `trace.get_current_span()` and verify `.set_attribute("reimbursement.uuid", str(uuid))` was called with the correct uuid
+- [x] Quick gate passes
 
 **Tests**: unit (via TestClient mock verification of span attribute)
 
@@ -372,11 +372,11 @@ Import `opentelemetry.trace`, `opentelemetry.sdk.trace`, `opentelemetry.sdk.trac
 
 **Done when**:
 
-- [ ] `init_tracer("reimbursement-analyzer-publisher", config.tracing.otlp_endpoint)` called, result stored
-- [ ] `shutdown_tracer(provider)` called after `await run()` returns, inside managed `async with` block
-- [ ] Existing unit tests (test_consumer.py, test_integration.py) still pass
-- [ ] No startup errors when APM Server unreachable
-- [ ] Quick gate passes
+- [x] `init_tracer("reimbursement-analyzer-publisher", config.tracing.otlp_endpoint)` called, result stored
+- [x] `shutdown_tracer(provider)` called after `await run()` returns, inside managed `async with` block
+- [x] Existing unit tests (test_consumer.py, test_integration.py) still pass
+- [x] No startup errors when APM Server unreachable
+- [x] Quick gate passes
 
 **Tests**: unit (existing consumer tests still pass; new tracer initialization test similar to T7)
 
@@ -402,16 +402,16 @@ Import `opentelemetry.trace`, `opentelemetry.sdk.trace`, `opentelemetry.sdk.trac
 
 **Done when**:
 
-- [ ] `run()` loop wraps message handling (from `error = message.error()` to `await consumer.commit(...)`) inside `with traced_message_span(tracer, message):`, no change to logic
-- [ ] Span name is "process_message"
-- [ ] Span includes attributes: `messaging.kafka.topic`, `messaging.kafka.partition`, `messaging.kafka.offset` (from message object)
-- [ ] `processing.handle_message` adds `trace.get_current_span().set_attribute("reimbursement.uuid", str(uuid))` once uuid is known
-- [ ] Existing unit tests (test_consumer.py, test_processing.py) still pass
-- [ ] New test in test_consumer.py: `DescribeTracedMessageProcessing::it_wraps_handling_in_span` (mock tracer, verify span was started and stopped)
-- [ ] New test: verify span attributes are set from message (topic/partition/offset)
-- [ ] New test in test_processing.py: verify uuid attribute is stamped on current span
-- [ ] Integration test (test_integration.py): message round-trip with header injection (from api via Kafka) extracts context and creates child span
-- [ ] Quick gate passes
+- [x] `run()` loop wraps message handling (from `error = message.error()` to `await consumer.commit(...)`) inside `with traced_message_span(tracer, message):`, no change to logic
+- [x] Span name is "process_message"
+- [x] Span includes attributes: `messaging.kafka.topic`, `messaging.kafka.partition`, `messaging.kafka.offset` (from message object)
+- [x] `processing.handle_message` adds `trace.get_current_span().set_attribute("reimbursement.uuid", str(uuid))` once uuid is known
+- [x] Existing unit tests (test_consumer.py, test_processing.py) still pass
+- [x] New test in test_consumer.py: `DescribeTracedMessageProcessing::it_wraps_handling_in_span` (mock tracer, verify span was started and stopped)
+- [x] New test: verify span attributes are set from message (topic/partition/offset)
+- [x] New test in test_processing.py: verify uuid attribute is stamped on current span
+- [x] Integration test (test_integration.py): message round-trip with header injection (from api via Kafka) extracts context and creates child span
+- [x] Quick gate passes
 
 **Tests**: unit + integration
 
@@ -437,13 +437,13 @@ Import `opentelemetry.trace`, `opentelemetry.sdk.trace`, `opentelemetry.sdk.trac
 
 **Done when**:
 
-- [ ] `run()` loop wraps message handling inside `with traced_message_span(tracer, message):`, no logic changes
-- [ ] Span includes topic/partition/offset attributes
-- [ ] `validation.handle_message` adds uuid attribute once extracted
-- [ ] Existing unit tests (test_consumer.py, test_validation.py, test_integration.py) still pass
-- [ ] New tests: same as T10 (span wrapping, attribute presence, integration round-trip)
-- [ ] LangGraph decision graph (agent.py) continues to emit `langfuse_session_id` unchanged; it now runs inside an already-active OTel span (P2 AC3)
-- [ ] Quick gate passes
+- [x] `run()` loop wraps message handling inside `with traced_message_span(tracer, message):`, no logic changes
+- [x] Span includes topic/partition/offset attributes
+- [x] `validation.handle_message` adds uuid attribute once extracted
+- [x] Existing unit tests (test_consumer.py, test_validation.py, test_integration.py) still pass
+- [x] New tests: same as T10 (span wrapping, attribute presence, integration round-trip)
+- [x] LangGraph decision graph (agent.py) continues to emit `langfuse_session_id` unchanged; it now runs inside an already-active OTel span (P2 AC3)
+- [x] Quick gate passes
 
 **Tests**: unit + integration
 
@@ -469,12 +469,12 @@ Import `opentelemetry.trace`, `opentelemetry.sdk.trace`, `opentelemetry.sdk.trac
 
 **Done when**:
 
-- [ ] Test creates real Kafka testcontainer
-- [ ] Test submits real POST request through the three-service chain
-- [ ] All three services configured to export spans to a shared `InMemorySpanExporter`
-- [ ] Assertions: single trace ID across all spans; child spans correctly linked via extracted context; spans with no headers start as root (P1 AC8)
-- [ ] Attributes present: reimbursement.uuid on all three, topic/partition/offset on publisher and reimbursement
-- [ ] Full gate passes: `uv run pytest` (includes this integration test)
+- [x] Test creates real Kafka testcontainer
+- [x] Test submits real POST request through the three-service chain
+- [x] All three services configured to export spans to a shared `InMemorySpanExporter`
+- [x] Assertions: single trace ID across all spans; child spans correctly linked via extracted context; spans with no headers start as root (P1 AC8)
+- [x] Attributes present: reimbursement.uuid on all three, topic/partition/offset on publisher and reimbursement
+- [x] Full gate passes: `uv run pytest` (includes this integration test)
 
 **Tests**: integration
 
@@ -500,13 +500,13 @@ Import `opentelemetry.trace`, `opentelemetry.sdk.trace`, `opentelemetry.sdk.trac
 
 **Done when**:
 
-- [ ] `docker-compose.yml` deleted (confirmed via `git status` or `git diff`)
-- [ ] `README.md` no longer contains `## Run` section
-- [ ] Database migrations section no longer mentions docker-compose automatic application
-- [ ] End-to-end suite section no longer instructs `docker compose up -d`
-- [ ] `git grep "docker-compose" README.md` returns nothing (no stray references in README)
-- [ ] `git grep "docker-compose" .` (excluding `.specs/`) returns nothing or only spec/decision record references
-- [ ] No other files updated (e.g., CI workflows still refer to it if they do — flagged but out-of-scope per spec)
+- [x] `docker-compose.yml` deleted (confirmed via `git status` or `git diff`)
+- [x] `README.md` no longer contains `## Run` section
+- [x] Database migrations section no longer mentions docker-compose automatic application
+- [x] End-to-end suite section no longer instructs `docker compose up -d`
+- [x] `git grep "docker-compose" README.md` returns nothing (no stray references in README)
+- [x] `git grep "docker-compose" .` (excluding `.specs/`) returns nothing or only spec/decision record references
+- [x] No other files updated (e.g., CI workflows still refer to it if they do — flagged but out-of-scope per spec)
 
 **Tests**: none (documentation/repository work, verified by content inspection)
 
@@ -532,9 +532,9 @@ Import `opentelemetry.trace`, `opentelemetry.sdk.trace`, `opentelemetry.sdk.trac
 
 **Done when**:
 
-- [ ] `AD-040` appended to Decisions section
-- [ ] `AD-038` is unchanged but now explicitly superseded
-- [ ] Text is clear and concise (2–3 lines max)
+- [x] `AD-040` appended to Decisions section
+- [x] `AD-038` is unchanged but now explicitly superseded
+- [x] Text is clear and concise (2–3 lines max)
 
 **Tests**: none (decision record, verified by inspection)
 
@@ -560,10 +560,10 @@ Import `opentelemetry.trace`, `opentelemetry.sdk.trace`, `opentelemetry.sdk.trac
 
 **Done when**:
 
-- [ ] New section added to `CLAUDE.md` (project instructions, not global)
-- [ ] Text includes: auto-instrumentation for `api`, explicit span wrapping for Kafka consumers/tasks, tracer lifecycle, required attributes, and the local-dev note about `local-env` project
-- [ ] No grammatical errors or typos
-- [ ] Formatting matches existing sections (bullet points, bold emphasis where appropriate)
+- [x] New section added to `CLAUDE.md` (project instructions, not global)
+- [x] Text includes: auto-instrumentation for `api`, explicit span wrapping for Kafka consumers/tasks, tracer lifecycle, required attributes, and the local-dev note about `local-env` project
+- [x] No grammatical errors or typos
+- [x] Formatting matches existing sections (bullet points, bold emphasis where appropriate)
 
 **Tests**: none (documentation; verified by inspection)
 
