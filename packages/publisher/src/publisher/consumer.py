@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from confluent_kafka.aio import AIOConsumer
 from dotenv import load_dotenv
 from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode
 from shared.config import REQUEST_TOPIC, Config, load_config
 from shared.db import managed_pool
 from shared.logging import configure_logging
@@ -86,7 +87,7 @@ async def run(deps: Dependencies, consumer: AIOConsumer, stopping: asyncio.Event
             continue
 
         message = messages[0]
-        with traced_message_span(tracer, message):
+        with traced_message_span(tracer, message) as span:
             error = message.error()
             if error is not None:
                 logger.error("consumer error, message skipped: %s", error)
@@ -94,13 +95,15 @@ async def run(deps: Dependencies, consumer: AIOConsumer, stopping: asyncio.Event
 
             try:
                 outcomes = await handle_message(deps, message.value())
-            except Exception:
+            except Exception as exc:
                 # handle_message is documented never to raise (PUB-32) —
                 # this is a defence against that contract being broken, not
                 # the expected path. Still commits: without it, a handler
                 # bug would redeliver the same poisoned message forever
                 # instead of surfacing once.
                 logger.exception("handle_message raised despite its never-raises contract")
+                span.record_exception(exc)
+                span.set_status(Status(StatusCode.ERROR))
                 outcomes = []
             else:
                 logger.info(
