@@ -6,11 +6,36 @@ call site (no functional collision either way: Python 3's absolute imports
 resolve a plain `import logging` inside this module to the stdlib, not
 itself)."""
 
+import contextvars
 import json
 import logging
 from typing import Any
 
 _FALLBACK_LOGGER_NAME = "reimbursementanalyzer.logging.fallback"
+
+_correlation_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "correlation_id", default=None
+)
+
+
+def get_correlation_id() -> str | None:
+    """The current context's correlation id, or `None` if none is set (e.g.
+    outside any HTTP request/Kafka message scope)."""
+    return _correlation_id.get()
+
+
+def set_correlation_id(value: str | None) -> contextvars.Token:
+    """Set the current context's correlation id. `None` is a valid, common
+    value (e.g. a consumer processing a pre-feature message with no id to
+    carry). Returns a token for `reset_correlation_id`."""
+    return _correlation_id.set(value)
+
+
+def reset_correlation_id(token: contextvars.Token) -> None:
+    """Restore the previous correlation id. Always called in a `finally` by
+    every setter (middleware, both consumers) so one request/message's id
+    never bleeds into the next."""
+    _correlation_id.reset(token)
 
 
 def log_event(logger: logging.Logger, level: int, event: str, **fields: Any) -> None:
