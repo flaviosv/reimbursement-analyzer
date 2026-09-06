@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from uuid import uuid4
 
 import pytest
 import shared.logging as shared_logging
@@ -7,6 +8,7 @@ from shared.logging import (
     CorrelationIdFilter,
     configure_logging,
     get_correlation_id,
+    log_event,
     reset_correlation_id,
     set_correlation_id,
 )
@@ -219,3 +221,66 @@ class DescribeConfigureLogging:
             h for h in logging.getLogger().handlers if isinstance(h.formatter, ecs_logging.StdlibFormatter)
         )
         assert any(isinstance(f, CorrelationIdFilter) for f in handler.filters)
+
+
+class DescribeLogEvent:
+    def it_uses_the_event_as_the_human_readable_message(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        logger = logging.getLogger("test.log_event")
+
+        with caplog.at_level(logging.INFO, logger="test.log_event"):
+            log_event(logger, logging.INFO, "some.event")
+
+        assert caplog.records[-1].getMessage() == "some.event"
+
+    def it_also_carries_event_as_its_own_extra_field(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        logger = logging.getLogger("test.log_event")
+
+        with caplog.at_level(logging.INFO, logger="test.log_event"):
+            log_event(logger, logging.INFO, "some.event")
+
+        assert caplog.records[-1].event == "some.event"
+
+    def it_passes_non_uuid_fields_through_unchanged(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        logger = logging.getLogger("test.log_event")
+
+        with caplog.at_level(logging.INFO, logger="test.log_event"):
+            log_event(logger, logging.INFO, "some.event", request_id="REQ-1", count=3)
+
+        record = caplog.records[-1]
+        assert record.request_id == "REQ-1"
+        assert record.count == 3
+
+    def it_coerces_a_uuid_field_to_a_plain_string_not_its_repr(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        logger = logging.getLogger("test.log_event")
+        value = uuid4()
+
+        with caplog.at_level(logging.INFO, logger="test.log_event"):
+            log_event(logger, logging.INFO, "some.event", uuid=value)
+
+        record = caplog.records[-1]
+        assert record.uuid == str(value)
+        assert "UUID(" not in record.uuid
+
+    def it_falls_back_without_raising_when_a_field_collides_with_a_reserved_attribute(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        logger = logging.getLogger("test.log_event")
+
+        with (
+            caplog.at_level(logging.INFO, logger="test.log_event"),
+            caplog.at_level(logging.INFO, logger="reimbursementanalyzer.logging.fallback"),
+        ):
+            log_event(logger, logging.INFO, "some.event", message="collides")
+
+        assert any(
+            r.name == "reimbursementanalyzer.logging.fallback" and r.levelno == logging.ERROR
+            for r in caplog.records
+        )

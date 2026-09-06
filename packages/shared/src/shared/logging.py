@@ -7,10 +7,10 @@ resolve a plain `import logging` inside this module to the stdlib, not
 itself)."""
 
 import contextvars
-import json
 import logging
 import sys
 from typing import Any
+from uuid import UUID
 
 import ecs_logging
 
@@ -94,23 +94,28 @@ def configure_logging() -> None:
 
 
 def log_event(logger: logging.Logger, level: int, event: str, **fields: Any) -> None:
-    """Emit `{"event": event, **fields}` as one JSON object at `level`.
+    """Emit `event` and `**fields` as real structured fields via `extra={}`,
+    so they land as top-level JSON keys under the ECS formatter instead of
+    being embedded in one message string.
 
-    Mirrors `failure_log.write`'s `default=str` (so a `UUID`/`Decimal` field
-    serializes without extra caller effort) and defensive try/except shape —
-    never raises, so a logging call can never break the caller's business
-    flow. Falls back to a differently-named logger on failure, the same
-    "don't recurse into the same failure" reasoning `failure_log.write`
-    uses.
+    Explicitly coerces `UUID`-typed field values with `str()` before handing
+    them to `extra={}`: `ecs_logging`'s own fallback serializer renders an
+    unrecognized type via `repr()` (`"UUID('...')"`), not `str()`, which
+    would otherwise regress every existing call site's `uuid`-typed field
+    from the clean string this docstring has always promised. Mirrors
+    `failure_log.write`'s defensive try/except shape — never raises, so a
+    logging call can never break the caller's business flow. Falls back to
+    a differently-named logger on failure, the same "don't recurse into the
+    same failure" reasoning `failure_log.write` uses.
 
     No field allowlist or redaction: callers are responsible for passing
     only pre-vetted primitive fields (`str`/`int`/`float`/`bool`/`None`/
     `UUID`) — passing a raw exception, ORM row, or pydantic model would
-    silently serialize whatever `default=str` produces for it.
+    silently serialize whatever ecs-logging's fallback produces for it.
     """
     try:
-        payload = json.dumps({"event": event, **fields}, default=str)
-        logger.log(level, "%s", payload)
+        coerced = {key: str(value) if isinstance(value, UUID) else value for key, value in fields.items()}
+        logger.log(level, event, extra={"event": event, **coerced})
     except Exception:
         logging.getLogger(_FALLBACK_LOGGER_NAME).exception(
             "log_event could not emit a record for event=%s", event
