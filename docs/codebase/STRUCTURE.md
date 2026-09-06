@@ -19,6 +19,7 @@
 │   │   │   ├── main.py            # App entrypoint, lifespan (producer + DB pool construction)
 │   │   │   ├── dependencies.py    # FastAPI route dependency accessors (get_producer, get_pool)
 │   │   │   ├── errors.py          # App-wide exception handlers, MessageResponse
+│   │   │   ├── middleware.py      # CorrelationIdMiddleware — mints/echoes X-Request-ID, scopes shared.logging's ContextVar per request
 │   │   │   ├── migrate.py         # Migration runner (advisory-lock serialised)
 │   │   │   ├── migrations/        # Plain SQL migrations (yoyo)
 │   │   │   └── reimbursement/
@@ -70,6 +71,7 @@
 │           ├── db.py              # managed_pool() — Postgres pool lifecycle (relocated from reimbursement/repository.py, AD-029)
 │           ├── errors.py          # Cross-service exception classes, sanitize()
 │           ├── failure_log.py     # Last-resort structured JSON log (critical level)
+│           ├── logging.py         # configure_logging() (ECS-JSON via ecs-logging), correlation-id ContextVar + CorrelationIdFilter, log_event()
 │           ├── models.py          # Cross-service pydantic models, AttemptError, ReimbursementEnvelope, Reimbursement
 │           ├── producer.py        # Generic Kafka publish + producer lifecycle
 │           └── reimbursement/     # Domain slice: persistence + use cases for the reimbursement/human_review tables
@@ -122,14 +124,14 @@
 
 ### `api` root (`packages/api/src/api/*.py`)
 
-- **Purpose:** app-wide infrastructure that no single vertical slice owns — FastAPI app construction, lifespan/producer wiring, the app-wide error contract, and the migration runner.
-- **Location:** `packages/api/src/api/{main,dependencies,errors,migrate}.py`.
+- **Purpose:** app-wide infrastructure that no single vertical slice owns — FastAPI app construction, lifespan/producer wiring, the app-wide error contract, the correlation-id middleware, and the migration runner.
+- **Location:** `packages/api/src/api/{main,dependencies,errors,middleware,migrate}.py`.
 
 ### `shared`
 
-- **Purpose:** code genuinely reusable across `api`, `reimbursement`, and `publisher` — cross-service pydantic models, exception classes, Kafka config/publish primitives, the Postgres pool lifecycle, and the `reimbursement` domain's persistence + use-case layer (the largest slice: list/filter, the approve/reject review transaction, the insert+publish unit, and the original escalation path).
+- **Purpose:** code genuinely reusable across `api`, `reimbursement`, and `publisher` — cross-service pydantic models, exception classes, Kafka config/publish primitives, the Postgres pool lifecycle, structured logging + correlation-id propagation, and the `reimbursement` domain's persistence + use-case layer (the largest slice: list/filter, the approve/reject review transaction, the insert+publish unit, and the original escalation path).
 - **Location:** `packages/shared/src/shared/`.
-- **Key files:** `config.py` (`load_config()` — single cached env-config entrypoint), `db.py` (`managed_pool` — Postgres pool lifecycle), `producer.py` (`managed_producer`, `publish` — technology-specific but domain-agnostic), `models.py` (`ReimbursementRequest`, `RequestEnvelope`, `ReimbursementEnvelope`, `Reimbursement`, `AttemptError`, `SampleMessage`, `HealthStatus`), `errors.py` (`PayloadTooLarge`, `BatchInvalid`, `PublishFailed`, `ReimbursementFilterInvalid`, `ReviewInvalid`, `ReimbursementNotFound`, `ReimbursementNotEligible`, `ReimbursementUuidMismatch`, `sanitize()`), `failure_log.py` (`write()` — last-resort structured log), `reimbursement/repository.py` (every SQL statement — insert, delete, fetch, approve, reject, record decision) + `reimbursement/use_cases/{send_human_review,publish_pending,list_reimbursements,review_reimbursement}.py` (the escalation action, the insert+publish unit, the list/filter gates, and the approve/reject transaction).
+- **Key files:** `config.py` (`load_config()` — single cached env-config entrypoint, incl. `LoggingConfig`), `db.py` (`managed_pool` — Postgres pool lifecycle), `logging.py` (`configure_logging()` — ECS-JSON root-logger setup; `get_correlation_id`/`set_correlation_id`/`reset_correlation_id`; `CorrelationIdFilter`; `log_event()`), `producer.py` (`managed_producer`, `publish` — technology-specific but domain-agnostic), `models.py` (`ReimbursementRequest`, `RequestEnvelope`, `ReimbursementEnvelope`, `Reimbursement`, `AttemptError`, `SampleMessage`, `HealthStatus`), `errors.py` (`PayloadTooLarge`, `BatchInvalid`, `PublishFailed`, `ReimbursementFilterInvalid`, `ReviewInvalid`, `ReimbursementNotFound`, `ReimbursementNotEligible`, `ReimbursementUuidMismatch`, `sanitize()`), `failure_log.py` (`write()` — last-resort structured log), `reimbursement/repository.py` (every SQL statement — insert, delete, fetch, approve, reject, record decision) + `reimbursement/use_cases/{send_human_review,publish_pending,list_reimbursements,review_reimbursement}.py` (the escalation action, the insert+publish unit, the list/filter gates, and the approve/reject transaction).
 
 ### `publisher`
 

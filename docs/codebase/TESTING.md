@@ -84,6 +84,8 @@ No coverage tool or enforced target exists. Coverage is a byproduct of the `Desc
 | Decision logic — auto-approve/reject/human-review policy (`reimbursement/agent/`) | Unit (fakes), one file per node + full-graph wiring | `packages/reimbursement/tests/{test_extract_fields,test_validate,test_apply_policies,test_analysis,test_apply_agent_decision,test_agent,test_langfuse}.py` | `uv run pytest -m "not integration"` |
 | Docker-compose / `.env.sample` config parity (topology allowlist + required-var coverage + LangFuse public-key/compose-anchor sync) | Unit | `packages/api/tests/test_dotenv_config_parity.py` | `uv run pytest -m "not integration"` |
 | E2E cross-service pipeline (auto-approve + traceability, auto-reject, human-review + both PUT resolutions, retry-ceiling, ghost, stale) | E2E (`@pytest.mark.e2e`, real stack, real Groq) | `tests/e2e/test_{happy_path,auto_reject,human_review,retry_ghost_stale}.py` | `uv run pytest -m e2e` |
+| Structured logging (`configure_logging`, `log_event`, correlation-id ContextVar + filter) | Unit | `packages/shared/tests/test_logging.py` | `uv run pytest -m "not integration"` |
+| Correlation-id middleware (extract/generate from `X-Request-ID`, ContextVar scoping, response header echo) | Unit | `packages/api/tests/test_middleware.py` | same |
 
 ## Parallelism Assessment
 
