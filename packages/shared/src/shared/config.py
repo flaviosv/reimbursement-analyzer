@@ -134,5 +134,5 @@ def load_config() -> Config:
             logger_name="reimbursementanalyzer.failures",
             max_message_chars=2000,
         ),
-        logging=LoggingConfig(level=os.getenv("LOG_LEVEL", "info")),
+        logging=LoggingConfig(level=os.getenv("LOG_LEVEL", "debug")),
     )

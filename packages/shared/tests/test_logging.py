@@ -161,21 +161,21 @@ class DescribeConfigureLogging:
 
         assert logging.getLogger().level == expected
 
-    def it_defaults_to_info_when_log_level_is_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def it_defaults_to_debug_when_log_level_is_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("LOG_LEVEL", raising=False)
 
         configure_logging()
 
-        assert logging.getLogger().level == logging.INFO
+        assert logging.getLogger().level == logging.DEBUG
 
-    def it_falls_back_to_info_and_warns_once_on_an_invalid_level(
+    def it_falls_back_to_debug_and_warns_once_on_an_invalid_level(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
         monkeypatch.setenv("LOG_LEVEL", "bogus")
 
         with caplog.at_level(logging.WARNING):
             configure_logging()
-            assert logging.getLogger().level == logging.INFO
+            assert logging.getLogger().level == logging.DEBUG
 
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
         assert len(warnings) == 1
@@ -188,7 +188,7 @@ class DescribeConfigureLogging:
 
         with caplog.at_level(logging.WARNING):
             configure_logging()
-            assert logging.getLogger().level == logging.INFO
+            assert logging.getLogger().level == logging.DEBUG
 
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
         assert len(warnings) == 1
@@ -201,7 +201,7 @@ class DescribeConfigureLogging:
 
         with caplog.at_level(logging.WARNING):
             configure_logging()
-            assert logging.getLogger().level == logging.INFO
+            assert logging.getLogger().level == logging.DEBUG
 
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
         assert len(warnings) == 1

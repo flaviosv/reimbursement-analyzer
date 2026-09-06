@@ -22,7 +22,7 @@ import ecs_logging
 from shared.config import load_config
 
 _FALLBACK_LOGGER_NAME = "reimbursementanalyzer.logging.fallback"
-_DEFAULT_LEVEL = "info"
+_DEFAULT_LEVEL = "debug"
 _VALID_LEVELS = {"debug", "info", "warning", "error", "critical"}
 
 logger = logging.getLogger(__name__)

@@ -128,14 +128,14 @@ class DescribeDatabaseConfig:
 
 
 class DescribeLoggingConfig:
-    def it_defaults_the_raw_level_to_info_when_log_level_is_unset(
+    def it_defaults_the_raw_level_to_debug_when_log_level_is_unset(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.delenv("LOG_LEVEL", raising=False)
 
         config = load_config()
 
-        assert config.logging.level == "info"
+        assert config.logging.level == "debug"
 
     def it_reads_the_raw_log_level_value_verbatim_from_the_environment(
         self, monkeypatch: pytest.MonkeyPatch
