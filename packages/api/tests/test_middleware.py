@@ -139,3 +139,50 @@ class DescribeCorrelationIdMiddleware:
         await CorrelationIdMiddleware(app)({"type": "lifespan"}, _receive, _RecordingSend())
 
         assert calls == ["lifespan"]
+
+    async def it_truncates_header_values_exceeding_128_characters(self) -> None:
+        seen: dict[str, str | None] = {}
+
+        async def app(scope: Scope, receive: Callable, send: Callable) -> None:
+            seen["cid"] = get_correlation_id()
+            await _ok_app(scope, receive, send)
+
+        long_id = "a" * 200
+        await CorrelationIdMiddleware(app)(
+            _http_scope([(b"x-request-id", long_id.encode("latin-1"))]), _receive, _RecordingSend()
+        )
+
+        assert len(seen["cid"]) == 128
+        assert seen["cid"] == "a" * 128
+
+    async def it_rejects_header_values_containing_control_characters(self) -> None:
+        seen: dict[str, str | None] = {}
+
+        async def app(scope: Scope, receive: Callable, send: Callable) -> None:
+            seen["cid"] = get_correlation_id()
+            await _ok_app(scope, receive, send)
+
+        await CorrelationIdMiddleware(app)(
+            _http_scope([(b"x-request-id", b"caller-id\r\ninjected")]), _receive, _RecordingSend()
+        )
+
+        assert seen["cid"] is not None
+        assert UUID(seen["cid"]).version == 7
+
+    async def it_replaces_any_pre_existing_x_request_id_response_header(self) -> None:
+        async def app_that_sets_header(scope: Scope, receive: Callable, send: Callable) -> None:
+            await send({
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"x-request-id", b"downstream-value"), (b"content-type", b"text/plain")],
+            })
+
+        send = _RecordingSend()
+        await CorrelationIdMiddleware(app_that_sets_header)(
+            _http_scope([(b"x-request-id", b"middleware-id")]), _receive, send
+        )
+
+        start = next(m for m in send.messages if m["type"] == "http.response.start")
+        x_request_ids = [v for n, v in start["headers"] if n.lower() == b"x-request-id"]
+        assert len(x_request_ids) == 1
+        assert x_request_ids[0] == b"middleware-id"

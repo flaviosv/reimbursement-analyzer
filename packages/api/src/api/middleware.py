@@ -25,11 +25,15 @@ _HEADER_NAME = b"x-request-id"
 
 
 def _extract_or_generate_correlation_id(scope: Scope) -> str:
+    _MAX_CORRELATION_ID_LENGTH = 128
+
     for name, value in scope.get("headers", []):
         if name.lower() == _HEADER_NAME:
             decoded = value.decode("latin-1")
             if decoded:
-                return decoded
+                decoded = decoded[:_MAX_CORRELATION_ID_LENGTH]
+                if "\r" not in decoded and "\n" not in decoded:
+                    return decoded
             break
     return str(uuid.uuid7())
 
@@ -48,6 +52,7 @@ class CorrelationIdMiddleware:
         async def send_wrapper(message: Message) -> None:
             if message["type"] == "http.response.start":
                 headers = message.setdefault("headers", [])
+                headers[:] = [(n, v) for n, v in headers if n.lower() != _HEADER_NAME]
                 headers.append((_HEADER_NAME, correlation_id.encode("latin-1")))
             await send(message)
 
