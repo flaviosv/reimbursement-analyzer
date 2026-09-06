@@ -7,6 +7,7 @@ from importlib.resources import files
 
 import psycopg
 from dotenv import load_dotenv
+from shared.logging import configure_logging
 from yoyo import get_backend, read_migrations
 
 SUPPORTED_SCHEMES = ("postgres", "postgresql")
@@ -92,7 +93,7 @@ def apply_migrations(
 def main() -> None:
     load_dotenv()
     database_url = os.environ["DATABASE_URL"]
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
+    configure_logging()
     applied = apply_migrations(database_url)
     logger.info("migrations complete (%d applied)", applied)
 
