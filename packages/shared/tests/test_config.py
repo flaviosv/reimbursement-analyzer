@@ -127,6 +127,29 @@ class DescribeDatabaseConfig:
         assert config.database.pool_max_size == 42
 
 
+class DescribeLoggingConfig:
+    def it_defaults_the_raw_level_to_debug_when_log_level_is_unset(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("LOG_LEVEL", raising=False)
+
+        config = load_config()
+
+        assert config.logging.level == "debug"
+
+    def it_reads_the_raw_log_level_value_verbatim_from_the_environment(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Verbatim, unvalidated: LoggingConfig is a plain data holder (AD-023)
+        # — a typo like "bogus" is validated/falls back only in
+        # configure_logging(), never here.
+        monkeypatch.setenv("LOG_LEVEL", "bogus")
+
+        config = load_config()
+
+        assert config.logging.level == "bogus"
+
+
 class DescribeFailureLogConfig:
     def it_carries_a_logger_name_and_a_message_cap(self) -> None:
         config = load_config()
