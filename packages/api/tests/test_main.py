@@ -106,6 +106,20 @@ class DescribeCorrelationIdMiddlewareRegistration:
 
         assert response.headers["x-request-id"] == "caller-id"
 
+    def it_returns_the_x_request_id_header_on_an_error_response_too(self) -> None:
+        # CORR-04 covers "success or error response" — a malformed uuid
+        # never reaches the route body (FastAPI's own path coercion raises
+        # RequestValidationError first, caught by errors.py's app-wide
+        # handler), so this exercises the header on a real 400 error
+        # response with no database access needed.
+        with TestClient(main_module.app) as client:
+            response = client.get(
+                "/api/v1/reimbursement/not-a-uuid", headers={"X-Request-ID": "caller-error-id"}
+            )
+
+        assert response.status_code == 400
+        assert response.headers["x-request-id"] == "caller-error-id"
+
 
 class DescribeGetProducer:
     def it_returns_the_apps_producer_instance(self) -> None:
