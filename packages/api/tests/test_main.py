@@ -1,9 +1,12 @@
 import importlib
 import logging
 
+import ecs_logging
 import pytest
+import shared.logging as shared_logging_module
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
+from shared.logging import CorrelationIdFilter
 
 import api.main as main_module
 from api.dependencies import get_producer
@@ -68,21 +71,40 @@ class DescribeLifespan:
 
 
 class DescribeLoggingSetup:
-    def it_calls_basic_config_at_info_level_on_module_import(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # TRC-11: without this, uvicorn's default logging setup never
-        # configures the root logger, so every INFO-level log line this
-        # feature adds would silently never emit. Reloading the module
-        # re-executes its top-level logging.basicConfig(...) call under a
-        # patched basicConfig so it's observable without depending on
-        # fragile stdout/handler-state side effects.
-        calls: list[dict] = []
-        monkeypatch.setattr(logging, "basicConfig", lambda **kwargs: calls.append(kwargs))
+    def it_calls_configure_logging_on_module_import(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # RA-1 (amends TRC-11): api/main.py now calls shared.logging's
+        # configure_logging() instead of logging.basicConfig(...) directly.
+        # Reloading the module re-executes its top-level configure_logging()
+        # call under a patched configure_logging so it's observable without
+        # depending on fragile stdout/handler-state side effects.
+        calls: list[tuple] = []
+        monkeypatch.setattr(shared_logging_module, "configure_logging", lambda: calls.append(()))
 
         importlib.reload(main_module)
 
-        assert calls == [{"level": logging.INFO}]
+        assert calls == [()]
+
+    def it_attaches_an_ecs_json_handler_with_the_correlation_filter_to_the_root_logger(self) -> None:
+        importlib.reload(main_module)
+
+        handler = next(
+            h for h in logging.getLogger().handlers if isinstance(h.formatter, ecs_logging.StdlibFormatter)
+        )
+        assert any(isinstance(f, CorrelationIdFilter) for f in handler.filters)
+
+
+class DescribeCorrelationIdMiddlewareRegistration:
+    def it_returns_an_x_request_id_response_header_when_none_was_sent(self) -> None:
+        with TestClient(main_module.app) as client:
+            response = client.get("/health")
+
+        assert response.headers["x-request-id"]
+
+    def it_echoes_a_supplied_x_request_id_response_header(self) -> None:
+        with TestClient(main_module.app) as client:
+            response = client.get("/health", headers={"X-Request-ID": "caller-id"})
+
+        assert response.headers["x-request-id"] == "caller-id"
 
 
 class DescribeGetProducer:
