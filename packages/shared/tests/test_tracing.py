@@ -47,11 +47,23 @@ def _in_memory_tracer() -> tuple[trace.Tracer, InMemorySpanExporter]:
 
 
 class DescribeInitTracer:
-    def it_registers_a_tracer_provider_with_the_given_service_name(self) -> None:
+    def it_registers_a_tracer_provider_with_the_given_service_name(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Spies on trace.set_tracer_provider rather than asserting on the
+        # real global registry's current state: OTel's own set_tracer_
+        # provider() silently refuses every call after the first in a
+        # process, so asserting trace.get_tracer_provider() is provider
+        # would pass or fail depending on whichever other test/module in
+        # the same pytest run happened to register a provider first — this
+        # spy proves init_tracer made the call, independent of that.
+        registered: list[object] = []
+        monkeypatch.setattr(trace, "set_tracer_provider", registered.append)
+
         provider = init_tracer("reimbursement-analyzer-api", "http://apm-server:8200")
 
         try:
-            assert trace.get_tracer_provider() is provider
+            assert registered == [provider]
             assert provider.resource.attributes["service.name"] == "reimbursement-analyzer-api"
         finally:
             provider.shutdown()
