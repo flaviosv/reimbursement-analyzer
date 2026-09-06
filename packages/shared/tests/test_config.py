@@ -128,14 +128,14 @@ class DescribeDatabaseConfig:
 
 
 class DescribeLoggingConfig:
-    def it_defaults_the_raw_level_to_debug_when_log_level_is_unset(
+    def it_defaults_the_raw_level_to_info_when_log_level_is_unset(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.delenv("LOG_LEVEL", raising=False)
 
         config = load_config()
 
-        assert config.logging.level == "debug"
+        assert config.logging.level == "info"
 
     def it_reads_the_raw_log_level_value_verbatim_from_the_environment(
         self, monkeypatch: pytest.MonkeyPatch
@@ -148,6 +148,16 @@ class DescribeLoggingConfig:
         config = load_config()
 
         assert config.logging.level == "bogus"
+
+    def it_preserves_an_empty_log_level_string(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Distinct case from unset: LOG_LEVEL="" is explicitly empty, not absent.
+        monkeypatch.setenv("LOG_LEVEL", "")
+
+        config = load_config()
+
+        assert config.logging.level == ""
 
 
 class DescribeFailureLogConfig:

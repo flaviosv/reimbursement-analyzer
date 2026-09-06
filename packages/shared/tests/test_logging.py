@@ -161,25 +161,51 @@ class DescribeConfigureLogging:
 
         assert logging.getLogger().level == expected
 
-    def it_defaults_to_debug_when_log_level_is_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def it_defaults_to_info_when_log_level_is_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("LOG_LEVEL", raising=False)
 
         configure_logging()
 
-        assert logging.getLogger().level == logging.DEBUG
+        assert logging.getLogger().level == logging.INFO
 
-    def it_falls_back_to_debug_and_warns_once_on_an_invalid_level(
+    def it_falls_back_to_info_and_warns_once_on_an_invalid_level(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
         monkeypatch.setenv("LOG_LEVEL", "bogus")
 
         with caplog.at_level(logging.WARNING):
             configure_logging()
-            assert logging.getLogger().level == logging.DEBUG
+            assert logging.getLogger().level == logging.INFO
 
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
         assert len(warnings) == 1
         assert "bogus" in warnings[0].getMessage()
+
+    def it_rejects_empty_log_level_string(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setenv("LOG_LEVEL", "")
+
+        with caplog.at_level(logging.WARNING):
+            configure_logging()
+            assert logging.getLogger().level == logging.INFO
+
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        assert "" in warnings[0].getMessage()
+
+    def it_rejects_undocumented_stdlib_aliases_like_notset(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setenv("LOG_LEVEL", "notset")
+
+        with caplog.at_level(logging.WARNING):
+            configure_logging()
+            assert logging.getLogger().level == logging.INFO
+
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        assert "notset" in warnings[0].getMessage()
 
     def it_attaches_the_handler_only_once_across_repeated_calls(
         self, monkeypatch: pytest.MonkeyPatch

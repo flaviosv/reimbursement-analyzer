@@ -17,7 +17,8 @@ import ecs_logging
 from shared.config import load_config
 
 _FALLBACK_LOGGER_NAME = "reimbursementanalyzer.logging.fallback"
-_DEFAULT_LEVEL = "debug"
+_DEFAULT_LEVEL = "info"
+_VALID_LEVELS = {"debug", "info", "warning", "error", "critical"}
 
 logger = logging.getLogger(__name__)
 
@@ -85,12 +86,17 @@ def configure_logging() -> None:
         root.addHandler(_handler)
 
     raw_level = load_config().logging.level
-    resolved = logging.getLevelNamesMapping().get(raw_level.upper())
-    if resolved is None:
-        root.setLevel(logging.DEBUG)
-        logger.warning("invalid LOG_LEVEL %r received; falling back to debug", raw_level)
+    if raw_level.lower() not in _VALID_LEVELS:
+        fallback_level = logging.getLevelNamesMapping()[_DEFAULT_LEVEL.upper()]
+        root.setLevel(fallback_level)
+        logger.warning(
+            "invalid LOG_LEVEL %r received; must be one of %s; falling back to %s",
+            raw_level,
+            sorted(_VALID_LEVELS),
+            _DEFAULT_LEVEL,
+        )
     else:
-        root.setLevel(resolved)
+        root.setLevel(logging.getLevelNamesMapping()[raw_level.upper()])
 
 
 def log_event(logger: logging.Logger, level: int, event: str, **fields: Any) -> None:
