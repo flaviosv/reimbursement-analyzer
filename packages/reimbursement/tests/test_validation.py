@@ -4,9 +4,6 @@ from uuid import uuid4
 
 import pytest
 from agent_fakes import FakePool, FakeProducer
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from reimbursement.agent import agent
 from reimbursement.config import load_agent_config
 from reimbursement.models import Reimbursement
@@ -14,6 +11,7 @@ from reimbursement.validation import Dependencies, MessageOutcome, handle_messag
 from shared.config import REIMBURSEMENT_TOPIC, load_config
 from shared.logging import get_correlation_id
 from shared.models import AttemptError, ReimbursementEnvelope
+from shared.testing import in_memory_tracer
 
 pytestmark = pytest.mark.anyio
 
@@ -196,10 +194,7 @@ class DescribeHandleMessageParsing:
         assert any("reimbursement.malformed_message" in record.message for record in caplog.records)
 
     async def it_stamps_reimbursement_uuid_on_the_current_span_once_parsed(self) -> None:
-        exporter = InMemorySpanExporter()
-        provider = TracerProvider()
-        provider.add_span_processor(SimpleSpanProcessor(exporter))
-        tracer = provider.get_tracer(__name__)
+        tracer, exporter = in_memory_tracer()
         pool = FakePool(rows={})
         deps = _deps(pool=pool)
         uuid = uuid4()
@@ -213,10 +208,7 @@ class DescribeHandleMessageParsing:
         assert span.attributes["reimbursement.uuid"] == str(uuid)
 
     async def it_stamps_correlation_id_on_the_current_span_once_parsed(self) -> None:
-        exporter = InMemorySpanExporter()
-        provider = TracerProvider()
-        provider.add_span_processor(SimpleSpanProcessor(exporter))
-        tracer = provider.get_tracer(__name__)
+        tracer, exporter = in_memory_tracer()
         pool = FakePool(rows={})
         deps = _deps(pool=pool)
         envelope = _envelope(uuid=uuid4(), retry=0, correlation_id="corr-validation-1")
@@ -231,10 +223,7 @@ class DescribeHandleMessageParsing:
     async def it_leaves_no_correlation_id_span_attribute_when_the_envelope_carries_none(
         self,
     ) -> None:
-        exporter = InMemorySpanExporter()
-        provider = TracerProvider()
-        provider.add_span_processor(SimpleSpanProcessor(exporter))
-        tracer = provider.get_tracer(__name__)
+        tracer, exporter = in_memory_tracer()
         pool = FakePool(rows={})
         deps = _deps(pool=pool)
         envelope = _envelope(uuid=uuid4(), retry=0, correlation_id=None)

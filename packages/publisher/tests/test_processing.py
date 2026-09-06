@@ -8,12 +8,9 @@ from uuid import UUID
 import asyncpg
 import publisher.processing as processing
 import pytest
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from publisher.config import load_publisher_config
 from fakes import FakePool, FakeProducer, RealPool
-from shared.testing import valid_reimbursement_item
+from shared.testing import in_memory_tracer, valid_reimbursement_item
 from publisher.processing import (
     DUPLICATE_DROPPED_EVENT,
     EMPTY_PAYLOAD_EVENT,
@@ -360,10 +357,7 @@ class DescribeInsertThenPublish:
     async def it_stamps_reimbursement_uuid_on_the_current_span_once_published(self) -> None:
         item = valid_reimbursement_item("REQ-SPAN-ATTR")
         pool, producer = FakePool(), FakeProducer()
-        exporter = InMemorySpanExporter()
-        provider = TracerProvider()
-        provider.add_span_processor(SimpleSpanProcessor(exporter))
-        tracer = provider.get_tracer(__name__)
+        tracer, exporter = in_memory_tracer()
 
         with tracer.start_as_current_span("process_message"):
             outcome = await process_item(_deps(pool, producer), _envelope([item]), 0, item)
@@ -376,10 +370,7 @@ class DescribeInsertThenPublish:
     async def it_stamps_correlation_id_on_the_current_span_once_published(self) -> None:
         item = valid_reimbursement_item("REQ-SPAN-CORR")
         pool, producer = FakePool(), FakeProducer()
-        exporter = InMemorySpanExporter()
-        provider = TracerProvider()
-        provider.add_span_processor(SimpleSpanProcessor(exporter))
-        tracer = provider.get_tracer(__name__)
+        tracer, exporter = in_memory_tracer()
 
         with tracer.start_as_current_span("process_message"):
             outcome = await process_item(
@@ -389,6 +380,20 @@ class DescribeInsertThenPublish:
         assert outcome is ItemOutcome.PUBLISHED
         span = exporter.get_finished_spans()[0]
         assert span.attributes["correlation_id"] == "corr-publish-1"
+
+    async def it_leaves_no_correlation_id_span_attribute_when_the_envelope_carries_none(
+        self,
+    ) -> None:
+        item = valid_reimbursement_item("REQ-SPAN-NO-CORR")
+        pool, producer = FakePool(), FakeProducer()
+        tracer, exporter = in_memory_tracer()
+
+        with tracer.start_as_current_span("process_message"):
+            outcome = await process_item(_deps(pool, producer), _envelope([item]), 0, item)
+
+        assert outcome is ItemOutcome.PUBLISHED
+        span = exporter.get_finished_spans()[0]
+        assert "correlation_id" not in span.attributes
 
     async def it_leaves_no_row_behind_when_the_publish_fails(self, db: asyncpg.Connection) -> None:
         # No transaction to roll back anymore (AD-033) — the row is gone via
@@ -753,10 +758,7 @@ class DescribeTheRetryCeilingBoundary:
     ) -> None:
         item = valid_reimbursement_item("REQ-ESCALATE-SPAN-ATTR")
         producer = FakeProducer()
-        exporter = InMemorySpanExporter()
-        provider = TracerProvider()
-        provider.add_span_processor(SimpleSpanProcessor(exporter))
-        tracer = provider.get_tracer(__name__)
+        tracer, exporter = in_memory_tracer()
 
         with tracer.start_as_current_span("process_message"):
             outcomes = await handle_message(
@@ -778,10 +780,7 @@ class DescribeTheRetryCeilingBoundary:
     ) -> None:
         item = valid_reimbursement_item("REQ-ESCALATE-SPAN-CORR")
         producer = FakeProducer()
-        exporter = InMemorySpanExporter()
-        provider = TracerProvider()
-        provider.add_span_processor(SimpleSpanProcessor(exporter))
-        tracer = provider.get_tracer(__name__)
+        tracer, exporter = in_memory_tracer()
 
         with tracer.start_as_current_span("process_message"):
             outcomes = await handle_message(
@@ -799,6 +798,25 @@ class DescribeTheRetryCeilingBoundary:
         assert outcomes == [ItemOutcome.ESCALATED]
         span = exporter.get_finished_spans()[0]
         assert span.attributes["correlation_id"] == "corr-escalate-1"
+
+    async def it_leaves_no_correlation_id_span_attribute_when_the_envelope_carries_none(
+        self, db: asyncpg.Connection
+    ) -> None:
+        item = valid_reimbursement_item("REQ-ESCALATE-SPAN-NO-CORR")
+        producer = FakeProducer()
+        tracer, exporter = in_memory_tracer()
+
+        with tracer.start_as_current_span("process_message"):
+            outcomes = await handle_message(
+                _deps(RealPool(db), producer),
+                _envelope([item], retry=MAX_RETRY + 1, errors=_three_failures())
+                .model_dump_json()
+                .encode(),
+            )
+
+        assert outcomes == [ItemOutcome.ESCALATED]
+        span = exporter.get_finished_spans()[0]
+        assert "correlation_id" not in span.attributes
 
 
 class DescribeAMessagePastTheRetryCeiling:
