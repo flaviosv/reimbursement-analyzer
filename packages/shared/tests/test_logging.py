@@ -2,8 +2,10 @@ import asyncio
 import logging
 
 import pytest
+import shared.logging as shared_logging
 from shared.logging import (
     CorrelationIdFilter,
+    configure_logging,
     get_correlation_id,
     reset_correlation_id,
     set_correlation_id,
@@ -14,6 +16,23 @@ pytestmark = pytest.mark.anyio
 
 def _record() -> logging.LogRecord:
     return logging.LogRecord("test", logging.INFO, "path", 1, "message", None, None)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_root_logger(monkeypatch: pytest.MonkeyPatch):
+    # configure_logging() mutates process-wide state (the root logger's
+    # handlers/level and the module-level `_handler` sentinel) — without
+    # this, one test's call would leak a StreamHandler onto every other
+    # test's root logger for the rest of the run.
+    monkeypatch.setattr(shared_logging, "_handler", None)
+    root = logging.getLogger()
+    saved_handlers = list(root.handlers)
+    saved_level = root.level
+    yield
+    for handler in list(root.handlers):
+        if handler not in saved_handlers:
+            root.removeHandler(handler)
+    root.setLevel(saved_level)
 
 
 class DescribeContextVar:
@@ -116,3 +135,87 @@ class DescribeCorrelationIdFilter:
 
         assert results["a"].correlation_id == "req-a"
         assert results["b"].correlation_id == "req-b"
+
+
+class DescribeConfigureLogging:
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("debug", logging.DEBUG),
+            ("DEBUG", logging.DEBUG),
+            ("info", logging.INFO),
+            ("INFO", logging.INFO),
+            ("warning", logging.WARNING),
+            ("error", logging.ERROR),
+            ("critical", logging.CRITICAL),
+        ],
+    )
+    def it_sets_the_root_logger_to_each_valid_level_case_insensitively(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str, expected: int
+    ) -> None:
+        monkeypatch.setenv("LOG_LEVEL", raw)
+
+        configure_logging()
+
+        assert logging.getLogger().level == expected
+
+    def it_defaults_to_debug_when_log_level_is_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("LOG_LEVEL", raising=False)
+
+        configure_logging()
+
+        assert logging.getLogger().level == logging.DEBUG
+
+    def it_falls_back_to_debug_and_warns_once_on_an_invalid_level(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setenv("LOG_LEVEL", "bogus")
+
+        with caplog.at_level(logging.WARNING):
+            configure_logging()
+            assert logging.getLogger().level == logging.DEBUG
+
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        assert "bogus" in warnings[0].getMessage()
+
+    def it_attaches_the_handler_only_once_across_repeated_calls(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("LOG_LEVEL", "info")
+        root = logging.getLogger()
+        before = len(root.handlers)
+
+        configure_logging()
+        configure_logging()
+        configure_logging()
+
+        assert len(root.handlers) == before + 1
+
+    def it_re_resolves_the_level_on_every_call_so_it_can_change_mid_process(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from shared.config import load_config
+
+        monkeypatch.setenv("LOG_LEVEL", "error")
+        configure_logging()
+        assert logging.getLogger().level == logging.ERROR
+
+        monkeypatch.setenv("LOG_LEVEL", "info")
+        load_config.cache_clear()
+        configure_logging()
+        assert logging.getLogger().level == logging.INFO
+
+    def it_attaches_a_handler_carrying_the_ecs_formatter_and_the_correlation_filter(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import ecs_logging
+
+        monkeypatch.setenv("LOG_LEVEL", "info")
+
+        configure_logging()
+
+        handler = next(
+            h for h in logging.getLogger().handlers if isinstance(h.formatter, ecs_logging.StdlibFormatter)
+        )
+        assert any(isinstance(f, CorrelationIdFilter) for f in handler.filters)

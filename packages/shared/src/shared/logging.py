@@ -9,9 +9,17 @@ itself)."""
 import contextvars
 import json
 import logging
+import sys
 from typing import Any
 
+import ecs_logging
+
+from shared.config import load_config
+
 _FALLBACK_LOGGER_NAME = "reimbursementanalyzer.logging.fallback"
+_DEFAULT_LEVEL = "debug"
+
+logger = logging.getLogger(__name__)
 
 _correlation_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "correlation_id", default=None
@@ -53,6 +61,36 @@ class CorrelationIdFilter(logging.Filter):
         if correlation_id is not None:
             record.correlation_id = correlation_id
         return True
+
+
+_handler: logging.Handler | None = None
+
+
+def configure_logging() -> None:
+    """Every service's single logging entrypoint — replaces that service's
+    former `logging.basicConfig(level=logging.INFO)` call.
+
+    Attaches one ECS-JSON-formatting handler (carrying `CorrelationIdFilter`)
+    to the root logger, at most once per process — a module-level guard on
+    the handler instance, not a "first call wins" full early-return, since
+    `LOG_LEVEL` must stay changeable on every call (tests start a service,
+    or call this directly, under multiple different `LOG_LEVEL` values and
+    expect the level to actually change each time)."""
+    global _handler
+    root = logging.getLogger()
+    if _handler is None:
+        _handler = logging.StreamHandler(stream=sys.stdout)
+        _handler.setFormatter(ecs_logging.StdlibFormatter())
+        _handler.addFilter(CorrelationIdFilter())
+        root.addHandler(_handler)
+
+    raw_level = load_config().logging.level
+    resolved = logging.getLevelNamesMapping().get(raw_level.upper())
+    if resolved is None:
+        root.setLevel(logging.DEBUG)
+        logger.warning("invalid LOG_LEVEL %r received; falling back to debug", raw_level)
+    else:
+        root.setLevel(resolved)
 
 
 def log_event(logger: logging.Logger, level: int, event: str, **fields: Any) -> None:
