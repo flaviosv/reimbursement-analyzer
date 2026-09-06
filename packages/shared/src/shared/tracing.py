@@ -22,6 +22,9 @@ from opentelemetry.trace import Span, Tracer
 
 KafkaHeaders = list[tuple[str, bytes]]
 
+UUID_ATTRIBUTE = "reimbursement.uuid"
+CORRELATION_ID_ATTRIBUTE = "correlation_id"
+
 
 class _KafkaMessage(Protocol):
     """The subset of `confluent_kafka`'s consumed-message interface this
@@ -64,6 +67,21 @@ async def shutdown_tracer_async(provider: TracerProvider) -> None:
     Runs `TracerProvider.shutdown()` in an executor to avoid blocking on span export."""
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, provider.shutdown)
+
+
+def stamp_span(span: Span, *, uuid: object = None, correlation_id: str | None = None) -> None:
+    """Stamp the cross-hop identifiers this project's traceability NFR
+    requires onto `span`, wherever each is known — `reimbursement.uuid`
+    where a row's identity is known synchronously, `correlation_id` at
+    every hop (including `api`'s POST create route, the one hop
+    `reimbursement.uuid` can never reach). Centralizes the attribute-name
+    strings so every call site (api's create/get/update routes, publisher's
+    `process_item`/`escalate_item`, reimbursement's
+    `validation.handle_message`) sets exactly the same keys."""
+    if uuid is not None:
+        span.set_attribute(UUID_ATTRIBUTE, str(uuid))
+    if correlation_id is not None:
+        span.set_attribute(CORRELATION_ID_ATTRIBUTE, correlation_id)
 
 
 def inject_headers() -> KafkaHeaders:

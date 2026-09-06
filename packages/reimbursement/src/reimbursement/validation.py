@@ -25,6 +25,7 @@ from shared.models import AttemptError, ReimbursementEnvelope
 from shared.producer import publish
 from shared.reimbursement import repository
 from shared.reimbursement.use_cases.send_human_review import escalate_existing
+from shared.tracing import stamp_span
 
 from reimbursement.agent import agent
 from reimbursement.config import AgentConfig
@@ -83,10 +84,7 @@ async def handle_message(deps: Dependencies, raw: bytes) -> MessageOutcome:
         )
         return MessageOutcome.INVALID
 
-    span = trace.get_current_span()
-    span.set_attribute("reimbursement.uuid", str(envelope.uuid))
-    if envelope.correlation_id is not None:
-        span.set_attribute("correlation_id", envelope.correlation_id)
+    stamp_span(trace.get_current_span(), uuid=envelope.uuid, correlation_id=envelope.correlation_id)
 
     # Set for the duration of this one message's processing only: messages
     # are handled sequentially in one coroutine, so resetting in `finally` is

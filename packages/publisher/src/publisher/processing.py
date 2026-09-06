@@ -27,6 +27,7 @@ from shared.producer import publish
 from shared.reimbursement import repository
 from shared.reimbursement.use_cases.publish_pending import publish_pending
 from shared.reimbursement.use_cases.send_human_review import send_human_review
+from shared.tracing import stamp_span
 
 from publisher.config import PublisherConfig
 
@@ -215,10 +216,7 @@ async def process_item(
             _log_duplicate(envelope, item, exc)
             return ItemOutcome.DUPLICATE
         return await _requeue(deps, envelope, index, item, "db-insert", exc)
-    span = trace.get_current_span()
-    span.set_attribute("reimbursement.uuid", str(uuid))
-    if envelope.correlation_id is not None:
-        span.set_attribute("correlation_id", envelope.correlation_id)
+    stamp_span(trace.get_current_span(), uuid=uuid, correlation_id=envelope.correlation_id)
     log_event(logger, logging.INFO, ITEM_PUBLISHED_EVENT, request_id=_request_id(item), uuid=str(uuid))
     return ItemOutcome.PUBLISHED
 
@@ -241,10 +239,7 @@ async def escalate_item(
                 uuid = await send_human_review(
                     conn, item, envelope.errors, deps.config.failure_log.max_message_chars
                 )
-        span = trace.get_current_span()
-        span.set_attribute("reimbursement.uuid", str(uuid))
-        if envelope.correlation_id is not None:
-            span.set_attribute("correlation_id", envelope.correlation_id)
+        stamp_span(trace.get_current_span(), uuid=uuid, correlation_id=envelope.correlation_id)
     except Exception as exc:
         if repository.is_duplicate(exc):
             _log_duplicate(envelope, item, exc)

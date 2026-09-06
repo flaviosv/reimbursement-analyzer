@@ -15,6 +15,7 @@ from shared.errors import (
 from shared.logging import get_correlation_id, log_event
 from shared.reimbursement.use_cases.get_reimbursement import get_reimbursement
 from shared.reimbursement.use_cases.review_reimbursement import approve_reimbursement, reject_reimbursement
+from shared.tracing import stamp_span
 
 from api.dependencies import get_pool
 from api.errors import MessageResponse
@@ -50,11 +51,7 @@ async def put_reimbursement(
     -> respond. Every failure mode, including the uuid consistency check, is
     a raise of a typed exception from validation.py, this route, or the use
     case, caught by the app-wide handlers registered in errors.py."""
-    span = trace.get_current_span()
-    span.set_attribute("reimbursement.uuid", str(uuid))
-    correlation_id = get_correlation_id()
-    if correlation_id is not None:
-        span.set_attribute("correlation_id", correlation_id)
+    stamp_span(trace.get_current_span(), uuid=uuid, correlation_id=get_correlation_id())
     raw = await read_capped(request)
     review = validate_review(raw)
     if review.uuid is not None and review.uuid != uuid:
