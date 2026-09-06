@@ -129,21 +129,21 @@ Each requirement gets a unique ID for tracking across design, tasks, and validat
 
 | Requirement ID | Story | Phase | Status |
 | --- | --- | --- | --- |
-| OTEL-01 | P1: One linked distributed trace | Design | Pending |
-| OTEL-02 | P1: One linked distributed trace | Design | Pending |
-| OTEL-03 | P1: One linked distributed trace | Design | Pending |
-| OTEL-04 | P1: One linked distributed trace | Design | Pending |
-| OTEL-05 | P1: One linked distributed trace | Design | Pending |
-| OTEL-06 | P1: One linked distributed trace | Design | Pending |
-| OTEL-07 | P1: One linked distributed trace | Design | Pending |
-| OTEL-08 | P1: One linked distributed trace | Design | Pending |
-| OTEL-09 | P2: Span attributes for correlation | Design | Pending |
-| OTEL-10 | P2: Span attributes for correlation | Design | Pending |
-| OTEL-11 | P2: Span attributes for correlation | Design | Pending |
-| OTEL-12 | P3: Repo hygiene | Design | Pending |
-| OTEL-13 | P3: Repo hygiene | Design | Pending |
-| OTEL-14 | P3: Repo hygiene | Design | Pending |
-| OTEL-15 | P3: Repo hygiene | Design | Pending |
+| OTEL-01 | P1: One linked distributed trace | Tasks (T3, T7, T9, T11) | Implementing |
+| OTEL-02 | P1: One linked distributed trace | Tasks (T7, T9, T11) | Implementing |
+| OTEL-03 | P1: One linked distributed trace | Tasks (T7) | Implementing |
+| OTEL-04 | P1: One linked distributed trace | Tasks (T3, T4) | Implementing |
+| OTEL-05 | P1: One linked distributed trace | Tasks (T3, T10, T11) | Implementing |
+| OTEL-06 | P1: One linked distributed trace | Tasks (T10, T11) | Implementing |
+| OTEL-07 | P1: One linked distributed trace | Tasks (T12) | Implementing |
+| OTEL-08 | P1: One linked distributed trace | Tasks (T3, T12) | Implementing |
+| OTEL-09 | P2: Span attributes for correlation | Tasks (T3, T10, T11) | Implementing |
+| OTEL-10 | P2: Span attributes for correlation | Tasks (T8, T10, T11) | Implementing |
+| OTEL-11 | P2: Span attributes for correlation | Tasks (T11) | Implementing |
+| OTEL-12 | P3: Repo hygiene | Tasks (T1, T2) | Implementing |
+| OTEL-13 | P3: Repo hygiene | Tasks (T1) | Implementing |
+| OTEL-14 | P3: Repo hygiene | Tasks (T13) | Implementing |
+| OTEL-15 | P3: Repo hygiene | Tasks (T15) | Implementing |
 
 **ID mapping:** OTEL-01..08 = P1 AC1..8 (in order); OTEL-09..11 = P2 AC1..3; OTEL-12..15 = P3 AC1..4.
 
@@ -151,7 +151,7 @@ Each requirement gets a unique ID for tracking across design, tasks, and validat
 
 **Status values:** Pending → In Design → In Tasks → Implementing → Verified
 
-**Coverage:** 15 total, 0 mapped to tasks yet, 15 unmapped ⚠️ (expected at end of Specify — Tasks phase, if run, maps these)
+**Coverage:** 15 total, 15 mapped to tasks, 0 unmapped. All 15 tasks (T1-T15) committed; awaiting independent Verifier pass before marking Verified.
 
 ---
 
