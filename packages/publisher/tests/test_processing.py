@@ -613,6 +613,31 @@ class DescribeTheRetryCeilingBoundary:
         assert status == "human-review"
         assert producer.produced == []
 
+    async def it_stamps_reimbursement_uuid_on_the_current_span_once_escalated(
+        self, db: asyncpg.Connection
+    ) -> None:
+        item = valid_reimbursement_item("REQ-ESCALATE-SPAN-ATTR")
+        producer = FakeProducer()
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        tracer = provider.get_tracer(__name__)
+
+        with tracer.start_as_current_span("process_message"):
+            outcomes = await handle_message(
+                _deps(RealPool(db), producer),
+                _envelope([item], retry=MAX_RETRY + 1, errors=_three_failures())
+                .model_dump_json()
+                .encode(),
+            )
+
+        assert outcomes == [ItemOutcome.ESCALATED]
+        escalated_uuid = await db.fetchval(
+            "SELECT uuid FROM reimbursement WHERE request_id = $1", "REQ-ESCALATE-SPAN-ATTR"
+        )
+        span = exporter.get_finished_spans()[0]
+        assert span.attributes["reimbursement.uuid"] == str(escalated_uuid)
+
 
 class DescribeAMessagePastTheRetryCeiling:
     async def it_preserves_every_item_as_a_human_review_row_instead_of_the_normal_path(

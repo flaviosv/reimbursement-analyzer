@@ -226,9 +226,10 @@ async def escalate_item(
         # setup). It acts as a savepoint boundary, not an atomicity guard.
         async with deps.pool.acquire(timeout=deps.config.database.acquire_timeout_seconds) as conn:
             async with conn.transaction():
-                await send_human_review(
+                uuid = await send_human_review(
                     conn, item, envelope.errors, deps.config.failure_log.max_message_chars
                 )
+        trace.get_current_span().set_attribute("reimbursement.uuid", str(uuid))
     except Exception as exc:
         if repository.is_duplicate(exc):
             _log_duplicate(envelope, item, exc)
