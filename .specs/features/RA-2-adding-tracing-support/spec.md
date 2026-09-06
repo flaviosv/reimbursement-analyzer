@@ -129,21 +129,21 @@ Each requirement gets a unique ID for tracking across design, tasks, and validat
 
 | Requirement ID | Story | Phase | Status |
 | --- | --- | --- | --- |
-| OTEL-01 | P1: One linked distributed trace | Tasks (T3, T7, T9, T11) | Implementing |
-| OTEL-02 | P1: One linked distributed trace | Tasks (T7, T9, T11) | Implementing |
-| OTEL-03 | P1: One linked distributed trace | Tasks (T7) | Implementing |
-| OTEL-04 | P1: One linked distributed trace | Tasks (T3, T4) | Implementing |
-| OTEL-05 | P1: One linked distributed trace | Tasks (T3, T10, T11) | Implementing |
-| OTEL-06 | P1: One linked distributed trace | Tasks (T10, T11) | Implementing |
-| OTEL-07 | P1: One linked distributed trace | Tasks (T12) | Implementing |
-| OTEL-08 | P1: One linked distributed trace | Tasks (T3, T12) | Implementing |
-| OTEL-09 | P2: Span attributes for correlation | Tasks (T3, T10, T11) | Implementing |
-| OTEL-10 | P2: Span attributes for correlation | Tasks (T8, T10, T11) | Implementing |
-| OTEL-11 | P2: Span attributes for correlation | Tasks (T11) | Implementing |
-| OTEL-12 | P3: Repo hygiene | Tasks (T1, T2) | Implementing |
-| OTEL-13 | P3: Repo hygiene | Tasks (T1) | Implementing |
-| OTEL-14 | P3: Repo hygiene | Tasks (T13) | Implementing |
-| OTEL-15 | P3: Repo hygiene | Tasks (T15) | Implementing |
+| OTEL-01 | P1: One linked distributed trace | Tasks (T3, T7, T9, T11) | Verified (⚠️ minor: no dedicated publisher/reimbursement `_serve()` init test, see validation.md Gap #3) |
+| OTEL-02 | P1: One linked distributed trace | Tasks (T7, T9, T11) | Verified (⚠️ minor: same as OTEL-01, Gap #3) |
+| OTEL-03 | P1: One linked distributed trace | Tasks (T7) | Verified |
+| OTEL-04 | P1: One linked distributed trace | Tasks (T3, T4) | Verified |
+| OTEL-05 | P1: One linked distributed trace | Tasks (T3, T10, T11) | Verified |
+| OTEL-06 | P1: One linked distributed trace | Tasks (T10, T11) | Verified |
+| OTEL-07 | P1: One linked distributed trace | Tasks (T12) | Verified (⚠️ mechanism proven against a real Kafka broker; full 3-real-service-in-APM-Server proof is the separate live-infra verification step, see validation.md Gap #2) |
+| OTEL-08 | P1: One linked distributed trace | Tasks (T3, T12) | Verified |
+| OTEL-09 | P2: Span attributes for correlation | Tasks (T3, T10, T11) | Verified |
+| OTEL-10 | P2: Span attributes for correlation | Tasks (T8, T10, T11) | Verified (fixed post-Verifier, commit `ab382f9` — `escalate_item`'s uuid stamp) |
+| OTEL-11 | P2: Span attributes for correlation | Tasks (T11) | Verified |
+| OTEL-12 | P3: Repo hygiene | Tasks (T1, T2) | Verified |
+| OTEL-13 | P3: Repo hygiene | Tasks (T1) | Verified |
+| OTEL-14 | P3: Repo hygiene | Tasks (T13) | Verified |
+| OTEL-15 | P3: Repo hygiene | Tasks (T15) | Verified |
 
 **ID mapping:** OTEL-01..08 = P1 AC1..8 (in order); OTEL-09..11 = P2 AC1..3; OTEL-12..15 = P3 AC1..4.
 
@@ -151,7 +151,7 @@ Each requirement gets a unique ID for tracking across design, tasks, and validat
 
 **Status values:** Pending → In Design → In Tasks → Implementing → Verified
 
-**Coverage:** 15 total, 15 mapped to tasks, 0 unmapped. All 15 tasks (T1-T15) committed; awaiting independent Verifier pass before marking Verified.
+**Coverage:** 15 total, 15 verified (2 with a flagged, non-blocking caveat — see `validation.md`). Independent Verifier: PASS. See `.specs/features/RA-2-adding-tracing-support/validation.md` for full evidence.
 
 ---
 
