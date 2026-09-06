@@ -1358,7 +1358,7 @@ claim was checked, not assumed.
 ### AD-038 — `.env` is mounted read-only into every uv-workspace container at runtime; `docker-compose.yml`'s `environment:` blocks are pruned to Docker-network-topology values only
 
 **Date:** 2026-08-09
-**Status:** Active
+**Status:** superseded by AD-040
 
 `api`, `publisher`, `reimbursement`, and `migrate` each gain a runtime
 volume mount (`./.env:/app/.env:ro`) in `docker-compose.yml`, making their
@@ -1459,6 +1459,35 @@ error text raw, consistent with AD-014, rather than sanitize it (which
 would gut its diagnostic value for a human reviewer) or treat it as new
 scope for this PR. No code change; no new risk entry, the gap was already
 tracked.
+
+### AD-040 — `docker-compose.yml` removed entirely; AD-038's compose-mount convention retired with it
+
+**Date:** 2026-09-06
+**Status:** Active
+**Supersedes:** AD-038 (docker-compose.yml no longer exists to hold the convention)
+
+RA-2 (`adding-tracing-support`) removes `docker-compose.yml` and its
+README `## Run` section from the repo — real local development and
+verification now happen exclusively on the sibling `local-env` project's
+k3s/Tilt setup, the only place that reaches the real
+`apm-server.shared-services.svc.cluster.local:8200` Elastic APM Server this
+feature exports spans to. No new local ephemeral infra (compose or
+otherwise) replaces it.
+
+**Why:** decided during RA-2's grilling session (decision #5,
+user-confirmed): `docker-compose.yml` was already stale next to the real
+local dev path, and building another local listener/collector just to keep
+it "working" for this feature would be new infra with no consumer.
+AD-038's `.env`-mount-into-compose convention was itself only five weeks
+old, but it was a fix for a file this decision now deletes outright — there
+is nothing left for it to govern.
+
+**Implication:** any future guidance that assumed `docker-compose.yml` was
+the local dev entrypoint (AD-038's "any future uv-workspace service follows
+the same shape" line, and any docs referencing it) is stale and should
+point at the sibling `local-env` project instead. See
+`.specs/features/RA-2-adding-tracing-support/spec.md`'s P3 AC3 for the
+traceable requirement.
 
 ---
 
