@@ -9,6 +9,7 @@ requires-python = ">=3.14.7"
 dependencies = [
     "asyncpg>=0.31.0",
     "confluent-kafka>=2.15.0",
+    "ecs-logging>=2.3.0",
     # [email] pulls email-validator, which EmailStr requires at import time.
     "pydantic[email]>=2.13.4",
 ]

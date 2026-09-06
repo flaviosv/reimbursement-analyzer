@@ -6,8 +6,8 @@ requires-python = ">=3.14.7"
 members = [
     "api",
     "publisher",
-    "reimbursementanalyzer",
     "reimbursement",
+    "reimbursementanalyzer",
     "shared",
 ]
 
@@ -234,6 +234,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/88/7f/731ff914b0255d3d065f45fd4e626d4b8c95dbcbaada049f337a6ac16410/docker-7.2.0.tar.gz", hash = "sha256:cebb93773d334f778e023a7ee352a8d6e13ab1bd3b863a4d4a59dec897df43ac", size = 118731, upload-time = "2026-07-09T14:53:46.39Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/75/23/529140fe1aab80fc6992f93a706deec709140a6397439139a054e1515c45/docker-7.2.0-py3-none-any.whl", hash = "sha256:a3f45fdeb9165e2d25d9a1d02ddf3bc70fb572cf5ebbf9b58558c22caf29b71f", size = 148775, upload-time = "2026-07-09T14:53:45.224Z" },
+]
+
+[[package]]
+name = "ecs-logging"
+version = "2.3.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/41/9e/ea78919dd88d06a4bf622717e0127c763d3017bdb550e42d9f4b3e4007b1/ecs_logging-2.3.0.tar.gz", hash = "sha256:be7f618e71e10c33a61165aea58813ebd702f6c0044538155871cb9a1609ab4e", size = 11498, upload-time = "2026-01-19T10:28:29.032Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/16/6f/187826c34511e73c7b9f9595465fd8a029ed467c8c2e57ef76f7dbc8a810/ecs_logging-2.3.0-py3-none-any.whl", hash = "sha256:42da72191a98bd724d105e126ca8d7c81fc82b0d7bbbe4bb1584c34e61042cfc", size = 14791, upload-time = "2026-01-19T10:28:27.408Z" },
 ]
 
 [[package]]
@@ -960,35 +969,6 @@ wheels = [
 ]
 
 [[package]]
-name = "reimbursementanalyzer"
-version = "0.1.0"
-source = { virtual = "." }
-
-[package.dev-dependencies]
-dev = [
-    { name = "api", extra = ["migrations"] },
-    { name = "httpx" },
-    { name = "publisher" },
-    { name = "pylint" },
-    { name = "pytest" },
-    { name = "reimbursement" },
-    { name = "testcontainers" },
-]
-
-[package.metadata]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "api", extras = ["migrations"], editable = "packages/api" },
-    { name = "httpx", specifier = ">=0.28.1" },
-    { name = "publisher", editable = "packages/publisher" },
-    { name = "pylint", specifier = ">=4.0.6" },
-    { name = "pytest", specifier = ">=9.1.1" },
-    { name = "reimbursement", editable = "packages/reimbursement" },
-    { name = "testcontainers", extras = ["kafka", "postgres"], specifier = ">=4.15.0" },
-]
-
-[[package]]
 name = "reimbursement"
 version = "0.1.0"
 source = { editable = "packages/reimbursement" }
@@ -1017,6 +997,35 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "shared", editable = "packages/shared" },
     { name = "watchfiles", specifier = ">=1.2.0" },
+]
+
+[[package]]
+name = "reimbursementanalyzer"
+version = "0.1.0"
+source = { virtual = "." }
+
+[package.dev-dependencies]
+dev = [
+    { name = "api", extra = ["migrations"] },
+    { name = "httpx" },
+    { name = "publisher" },
+    { name = "pylint" },
+    { name = "pytest" },
+    { name = "reimbursement" },
+    { name = "testcontainers" },
+]
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "api", extras = ["migrations"], editable = "packages/api" },
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "publisher", editable = "packages/publisher" },
+    { name = "pylint", specifier = ">=4.0.6" },
+    { name = "pytest", specifier = ">=9.1.1" },
+    { name = "reimbursement", editable = "packages/reimbursement" },
+    { name = "testcontainers", extras = ["kafka", "postgres"], specifier = ">=4.15.0" },
 ]
 
 [[package]]
@@ -1053,6 +1062,7 @@ source = { editable = "packages/shared" }
 dependencies = [
     { name = "asyncpg" },
     { name = "confluent-kafka" },
+    { name = "ecs-logging" },
     { name = "pydantic", extra = ["email"] },
 ]
 
@@ -1060,6 +1070,7 @@ dependencies = [
 requires-dist = [
     { name = "asyncpg", specifier = ">=0.31.0" },
     { name = "confluent-kafka", specifier = ">=2.15.0" },
+    { name = "ecs-logging", specifier = ">=2.3.0" },
     { name = "pydantic", extras = ["email"], specifier = ">=2.13.4" },
 ]
 
