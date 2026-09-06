@@ -61,9 +61,10 @@ async def create_reimbursement(
     request IDs the response and error logging both need along the way —
     every failure mode is still a raise from one of the three collaborators,
     caught by the app-wide handlers registered in errors.py."""
+    span = trace.get_current_span()
     correlation_id = get_correlation_id()
     if correlation_id is not None:
-        trace.get_current_span().set_attribute("correlation_id", correlation_id)
+        span.set_attribute("correlation_id", correlation_id)
     raw = await read_capped(request)
     try:
         batch = validate_batch(raw)
