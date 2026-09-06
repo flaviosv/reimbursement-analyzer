@@ -19,6 +19,7 @@ from pydantic import ValidationError
 from shared import failure_log
 from shared.config import MAX_RETRY, REIMBURSEMENT_TOPIC, Config
 from shared.errors import PublishFailed, sanitize
+from shared.logging import reset_correlation_id, set_correlation_id
 from shared.models import AttemptError, ReimbursementEnvelope
 from shared.producer import publish
 from shared.reimbursement import repository
@@ -81,13 +82,20 @@ async def handle_message(deps: Dependencies, raw: bytes) -> MessageOutcome:
         )
         return MessageOutcome.INVALID
 
-    # Checked once, before the normal resolve flow: retry is message-level,
-    # and past the ceiling there is nothing left to retry (SCOPE.md's Agent
-    # Error Handling section, mirroring the publisher's own check-before-
-    # processing ordering).
-    if envelope.retry > MAX_RETRY:
-        return await _escalate(deps, envelope)
-    return await _resolve(deps, envelope)
+    # Set for the duration of this one message's processing only: messages
+    # are handled sequentially in one coroutine, so resetting in `finally` is
+    # what stops a stale value from bleeding into the next message's logs.
+    token = set_correlation_id(envelope.correlation_id)
+    try:
+        # Checked once, before the normal resolve flow: retry is
+        # message-level, and past the ceiling there is nothing left to
+        # retry (SCOPE.md's Agent Error Handling section, mirroring the
+        # publisher's own check-before-processing ordering).
+        if envelope.retry > MAX_RETRY:
+            return await _escalate(deps, envelope)
+        return await _resolve(deps, envelope)
+    finally:
+        reset_correlation_id(token)
 
 
 async def _escalate(deps: Dependencies, envelope: ReimbursementEnvelope) -> MessageOutcome:
