@@ -20,7 +20,12 @@ class DescribeReimbursementAgentDecisionDurationSeconds:
         ]
 
     def it_can_observe_a_positive_float(self) -> None:
+        before = sum(bucket.get() for bucket in reimbursement_agent_decision_duration_seconds._buckets)
+
         reimbursement_agent_decision_duration_seconds.observe(1.5)
+
+        after = sum(bucket.get() for bucket in reimbursement_agent_decision_duration_seconds._buckets)
+        assert after == before + 1
 
 
 class DescribeReimbursementTimeToDecisionSeconds:
@@ -42,7 +47,12 @@ class DescribeReimbursementTimeToDecisionSeconds:
         )
 
     def it_can_observe_a_positive_float(self) -> None:
+        before = sum(bucket.get() for bucket in reimbursement_time_to_decision_seconds._buckets)
+
         reimbursement_time_to_decision_seconds.observe(42.0)
+
+        after = sum(bucket.get() for bucket in reimbursement_time_to_decision_seconds._buckets)
+        assert after == before + 1
 
 
 class DescribeReimbursementAgentNodeDurationSeconds:
@@ -55,10 +65,22 @@ class DescribeReimbursementAgentNodeDurationSeconds:
         ]
 
     def it_can_observe_with_an_empty_model_label_for_non_llm_nodes(self) -> None:
-        reimbursement_agent_node_duration_seconds.labels("validate", "").observe(0.2)
+        child = reimbursement_agent_node_duration_seconds.labels("validate", "")
+        before = sum(bucket.get() for bucket in child._buckets)
+
+        child.observe(0.2)
+
+        after = sum(bucket.get() for bucket in child._buckets)
+        assert after == before + 1
 
     def it_can_observe_with_a_populated_model_label_for_llm_nodes(self) -> None:
-        reimbursement_agent_node_duration_seconds.labels("extract_fields", "llama-3.3-70b").observe(0.8)
+        child = reimbursement_agent_node_duration_seconds.labels("extract_fields", "llama-3.3-70b")
+        before = sum(bucket.get() for bucket in child._buckets)
+
+        child.observe(0.8)
+
+        after = sum(bucket.get() for bucket in child._buckets)
+        assert after == before + 1
 
 
 class DescribeReimbursementAgentLlmCallsTotal:
