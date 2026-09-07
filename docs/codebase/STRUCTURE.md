@@ -9,6 +9,7 @@
 ├── docs/
 │   ├── SCOPE.md              # Full requirements, approval policy, contracts
 │   ├── SCOPE_GAP_ANALYSIS.md
+│   ├── METRICS.md             # Prometheus metric catalog (16 metrics), PolicyRule enum, bucket rationale
 │   ├── original/sample.json  # Sample reimbursement request data
 │   ├── assets/                # Diagrams referenced from docs
 │   └── codebase/              # This context set
@@ -19,7 +20,8 @@
 │   │   │   ├── main.py            # App entrypoint, lifespan (producer + DB pool construction)
 │   │   │   ├── dependencies.py    # FastAPI route dependency accessors (get_producer, get_pool)
 │   │   │   ├── errors.py          # App-wide exception handlers, MessageResponse
-│   │   │   ├── middleware.py      # CorrelationIdMiddleware — mints/echoes X-Request-ID, scopes shared.logging's ContextVar per request
+│   │   │   ├── middleware.py      # CorrelationIdMiddleware, MetricsMiddleware (RED metrics per request)
+│   │   │   ├── metrics.py         # api-owned Prometheus metrics + refresh_status_gauge() (scrape-time DB read)
 │   │   │   ├── migrate.py         # Migration runner (advisory-lock serialised)
 │   │   │   ├── migrations/        # Plain SQL migrations (yoyo)
 │   │   │   └── reimbursement/
@@ -41,7 +43,8 @@
 │   │   ├── src/reimbursement/    # reimbursement's own modules, matching shared's nested src-layout shape
 │   │   │   ├── consumer.py         # Composition root: pool/producer/consumer lifecycle, offset commit
 │   │   │   ├── validation.py       # Decision tree: resolve, staleness guard, requeue, retry-ceiling escalation, decision-stage-failure escalation
-│   │   │   ├── config.py           # AgentConfig (consumer_group_id, ai: AIConfig, models: AgentModelsConfig), load_agent_config()
+│   │   │   ├── config.py           # AgentConfig (consumer_group_id, ai: AIConfig, models: AgentModelsConfig, metrics_port), load_agent_config()
+│   │   │   ├── metrics.py          # reimbursement-owned Prometheus metrics (decision-graph histograms, LLM/policy-rule counters)
 │   │   │   ├── schema.py           # State TypedDict — reimbursement: shared.models.Reimbursement
 │   │   │   └── agent/                # LangGraph decision graph — implemented, invoked from validation.py
 │   │   │       ├── agent.py            # StateGraph builder — 5 nodes wired with edges, compiled, LangFuse-traced
@@ -58,7 +61,8 @@
 │   ├── publisher/              # Consume Request, persist, publish Reimbursement — implemented
 │   │   ├── src/publisher/        # publisher's own modules, matching shared's nested src-layout shape (dotted-importable as publisher.*, AD-031 amended)
 │   │   │   ├── consumer.py         # Composition root: pool/producer/consumer lifecycle, offset commit
-│   │   │   └── processing.py       # Decision tree: insert+publish, retry/requeue, escalation, duplicates
+│   │   │   ├── processing.py       # Decision tree: insert+publish, retry/requeue, escalation, duplicates
+│   │   │   └── metrics.py          # publisher-owned Prometheus metrics (consumed/requeued/duplicate-dropped counters)
 │   │   └── tests/
 │   │       ├── conftest.py         # Publisher-local Kafka container fixture
 │   │       ├── fakes.py            # Test doubles as classes (FakeProducer, FakePool, RealPool)
@@ -72,6 +76,7 @@
 │           ├── errors.py          # Cross-service exception classes, sanitize()
 │           ├── failure_log.py     # Last-resort structured JSON log (critical level)
 │           ├── logging.py         # configure_logging() (ECS-JSON via ecs-logging), correlation-id ContextVar + CorrelationIdFilter, log_event()
+│           ├── metrics.py         # start_metrics_server(), reimbursement_status_transitions_total (the one cross-service metric)
 │           ├── models.py          # Cross-service pydantic models, AttemptError, ReimbursementEnvelope, Reimbursement
 │           ├── producer.py        # Generic Kafka publish + producer lifecycle
 │           └── reimbursement/     # Domain slice: persistence + use cases for the reimbursement/human_review tables
@@ -124,26 +129,26 @@
 
 ### `api` root (`packages/api/src/api/*.py`)
 
-- **Purpose:** app-wide infrastructure that no single vertical slice owns — FastAPI app construction, lifespan/producer wiring, the app-wide error contract, the correlation-id middleware, and the migration runner.
-- **Location:** `packages/api/src/api/{main,dependencies,errors,middleware,migrate}.py`.
+- **Purpose:** app-wide infrastructure that no single vertical slice owns — FastAPI app construction, lifespan/producer wiring, the app-wide error contract, the correlation-id + metrics middleware, the `GET /metrics` route, and the migration runner.
+- **Location:** `packages/api/src/api/{main,dependencies,errors,middleware,metrics,migrate}.py`.
 
 ### `shared`
 
 - **Purpose:** code genuinely reusable across `api`, `reimbursement`, and `publisher` — cross-service pydantic models, exception classes, Kafka config/publish primitives, the Postgres pool lifecycle, structured logging + correlation-id propagation, and the `reimbursement` domain's persistence + use-case layer (the largest slice: list/filter, the approve/reject review transaction, the insert+publish unit, and the original escalation path).
 - **Location:** `packages/shared/src/shared/`.
-- **Key files:** `config.py` (`load_config()` — single cached env-config entrypoint, incl. `LoggingConfig`), `db.py` (`managed_pool` — Postgres pool lifecycle), `logging.py` (`configure_logging()` — ECS-JSON root-logger setup; `get_correlation_id`/`set_correlation_id`/`reset_correlation_id`; `CorrelationIdFilter`; `log_event()`), `producer.py` (`managed_producer`, `publish` — technology-specific but domain-agnostic), `models.py` (`ReimbursementRequest`, `RequestEnvelope`, `ReimbursementEnvelope`, `Reimbursement`, `AttemptError`, `SampleMessage`, `HealthStatus`), `errors.py` (`PayloadTooLarge`, `BatchInvalid`, `PublishFailed`, `ReimbursementFilterInvalid`, `ReviewInvalid`, `ReimbursementNotFound`, `ReimbursementNotEligible`, `ReimbursementUuidMismatch`, `sanitize()`), `failure_log.py` (`write()` — last-resort structured log), `reimbursement/repository.py` (every SQL statement — insert, delete, fetch, approve, reject, record decision) + `reimbursement/use_cases/{send_human_review,publish_pending,list_reimbursements,review_reimbursement}.py` (the escalation action, the insert+publish unit, the list/filter gates, and the approve/reject transaction).
+- **Key files:** `config.py` (`load_config()` — single cached env-config entrypoint, incl. `LoggingConfig`), `db.py` (`managed_pool` — Postgres pool lifecycle), `logging.py` (`configure_logging()` — ECS-JSON root-logger setup; `get_correlation_id`/`set_correlation_id`/`reset_correlation_id`; `CorrelationIdFilter`; `log_event()`), `metrics.py` (`start_metrics_server()`, `reimbursement_status_transitions_total`), `producer.py` (`managed_producer`, `publish` — technology-specific but domain-agnostic), `models.py` (`ReimbursementRequest`, `RequestEnvelope`, `ReimbursementEnvelope`, `Reimbursement`, `AttemptError`, `SampleMessage`, `HealthStatus`), `errors.py` (`PayloadTooLarge`, `BatchInvalid`, `PublishFailed`, `ReimbursementFilterInvalid`, `ReviewInvalid`, `ReimbursementNotFound`, `ReimbursementNotEligible`, `ReimbursementUuidMismatch`, `sanitize()`), `failure_log.py` (`write()` — last-resort structured log), `reimbursement/repository.py` (every SQL statement — insert, delete, fetch, approve, reject, record decision) + `reimbursement/use_cases/{send_human_review,publish_pending,list_reimbursements,review_reimbursement}.py` (the escalation action, the insert+publish unit, the list/filter gates, and the approve/reject transaction).
 
 ### `publisher`
 
 - **Purpose:** consumes `Request`, creates one `reimbursement` row per item, and publishes one `Reimbursement` message per item — the middle link between `api`'s intake and `reimbursement`'s decision layer.
 - **Location:** `packages/publisher/src/publisher/{consumer,processing}.py`, installed via `uv_build`'s nested src-layout like `api`/`shared` (AD-031, amended).
-- **Key files:** `consumer.py` (Kafka consumer lifecycle, offset commit), `processing.py` (the decision tree — insert+publish via `shared.reimbursement.use_cases.publish_pending`, retry-with-requeue, `retry > 3` escalation, duplicate detection). Fully implemented and tested — see `TESTING.md`.
+- **Key files:** `consumer.py` (Kafka consumer lifecycle, offset commit, `start_metrics_server` call), `processing.py` (the decision tree — insert+publish via `shared.reimbursement.use_cases.publish_pending`, retry-with-requeue, `retry > 3` escalation, duplicate detection), `metrics.py` (consumed/requeued/duplicate-dropped counters). Fully implemented and tested — see `TESTING.md`.
 
 ### `reimbursement`
 
 - **Purpose:** consumes `Reimbursement`, resolves the row by `uuid`, and settles it into one of resolved / stale / ghost / requeued / escalated / logged / invalid — then, on resolve, hands the row to its own decision graph, which classifies it auto-approved / auto-rejected / human-review. Named `reimbursement`, not `agent` — renamed and flattened this branch (`ce80603`) to match `publisher`/`api`'s layout; "the agent" now refers to the LangGraph decision graph nested inside it, not the package itself.
 - **Location:** `packages/reimbursement/src/reimbursement/{consumer,validation,config,schema}.py` plus the `agent/` decision-graph subpackage — a real installed package via `uv_build`'s nested src-layout (AD-031, amended), like `api`/`publisher`/`shared`.
-- **Key files:** `consumer.py` (Kafka consumer lifecycle, offset commit), `validation.py` (the decision tree — `handle_message`, resolve-by-uuid, staleness guard, ghost tolerance (R-001), transient-failure requeue, `retry > 3` escalation reusing `shared.reimbursement.use_cases.send_human_review.escalate_existing`, then `agent.decide()` on resolve, a failure from which escalates the same way, immediately), `config.py` (`AgentConfig` — `ai: AIConfig`/`models: AgentModelsConfig`, AD-032), `schema.py` (`State` — the decision graph's `TypedDict`, `reimbursement: shared.models.Reimbursement`). Both the consume/resolve layer and the decision graph are implemented and tested — see `TESTING.md`. **`agent/` (the decision graph):** `agent.py` builds and compiles a `langgraph.StateGraph` wiring its five nodes with real edges/conditional routing, constructs two independent Groq-backed chat models (one per node, AD-032), and traces every LLM call via LangFuse; `nodes/{extract_fields,validate,apply_policies,analysis,apply_agent_decision}.py` each hold real logic (deterministic thresholds in `apply_policies`, an LLM-as-judge guardrail in `analysis`).
+- **Key files:** `consumer.py` (Kafka consumer lifecycle, offset commit, `start_metrics_server` call), `validation.py` (the decision tree — `handle_message`, resolve-by-uuid, staleness guard, ghost tolerance (R-001), transient-failure requeue, `retry > 3` escalation reusing `shared.reimbursement.use_cases.send_human_review.escalate_existing`, then `agent.decide()` on resolve, a failure from which escalates the same way, immediately), `config.py` (`AgentConfig` — `ai: AIConfig`/`models: AgentModelsConfig`/`metrics_port`, AD-032), `metrics.py` (decision-graph histograms, LLM-call/policy-rule counters), `schema.py` (`State` — the decision graph's `TypedDict`, `reimbursement: shared.models.Reimbursement`). Both the consume/resolve layer and the decision graph are implemented and tested — see `TESTING.md`. **`agent/` (the decision graph):** `agent.py` builds and compiles a `langgraph.StateGraph` wiring its five nodes with real edges/conditional routing, constructs two independent Groq-backed chat models (one per node, AD-032), and traces every LLM call via LangFuse; `nodes/{extract_fields,validate,apply_policies,analysis,apply_agent_decision}.py` each hold real logic (deterministic thresholds in `apply_policies`, an LLM-as-judge guardrail in `analysis`).
 
 ## Where Things Live
 

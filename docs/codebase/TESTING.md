@@ -86,6 +86,10 @@ No coverage tool or enforced target exists. Coverage is a byproduct of the `Desc
 | E2E cross-service pipeline (auto-approve + traceability, auto-reject, human-review + both PUT resolutions, retry-ceiling, ghost, stale) | E2E (`@pytest.mark.e2e`, real stack, real Groq) | `tests/e2e/test_{happy_path,auto_reject,human_review,retry_ghost_stale}.py` | `uv run pytest -m e2e` |
 | Structured logging (`configure_logging`, `log_event`, correlation-id ContextVar + filter) | Unit | `packages/shared/tests/test_logging.py` | `uv run pytest -m "not integration"` |
 | Correlation-id middleware (extract/generate from `X-Request-ID`, ContextVar scoping, response header echo) | Unit | `packages/api/tests/test_middleware.py` | same |
+| Shared metrics (`start_metrics_server`, cross-service `reimbursement_status_transitions_total`) | Unit | `packages/shared/tests/test_metrics.py` | `uv run pytest -m "not integration"` |
+| `api` metrics (`MetricsMiddleware`, `/metrics` route, `refresh_status_gauge` incl. DB-failure fallback) | Unit + route-level | `packages/api/tests/{test_metrics,test_metrics_middleware,test_metrics_route}.py` | same |
+| `publisher` metrics (consumed/requeued/duplicate-dropped counters) | Unit | `packages/publisher/tests/test_metrics.py` | same |
+| `reimbursement` metrics (decision-graph histograms, LLM-call/policy-rule counters, `PolicyRule` enum) | Unit | `packages/reimbursement/tests/test_metrics.py` | same |
 
 ## Parallelism Assessment
 

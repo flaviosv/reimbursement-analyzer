@@ -62,7 +62,7 @@ This starts the app's Postgres, Kafka (KRaft, single node), the LangFuse observa
 
 | Service | Address | Notes |
 | ------- | ------- | ----- |
-| API | http://localhost:8000 | Health check at `/health` |
+| API | http://localhost:8000 | Health check at `/health`; Prometheus metrics at `/metrics` (unauthenticated) |
 | App Postgres | `localhost:5433` | Remapped off the default `5432` so it doesn't clash with a locally-running Postgres |
 | Kafka | `localhost:9092` | Bootstrap address for a client running outside Compose |
 | LangFuse | http://localhost:3000 | Web UI; sign in with `admin@reimbursementanalyzer.local` / `LANGFUSE_INIT_USER_PASSWORD` |

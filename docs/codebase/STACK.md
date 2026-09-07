@@ -28,6 +28,7 @@
 | `testcontainers[kafka,postgres]` | >=4.15.0 | Ephemeral Postgres/Kafka containers for tests | `api`, `shared`, `publisher`, `reimbursement` |
 | `httpx` | >=0.28.1 | Used transitively by FastAPI's `TestClient` | `api` tests |
 | `pylint` | >=4.0.6 | Declared dev dependency, no `.pylintrc`/`[tool.pylint]` config and not run in any gate — a second, equally unconfigured linter alongside `ruff` (see `CONCERNS.md`) | workspace-wide (`dependency-groups.dev`) |
+| `prometheus-client` | >=0.24.1 | Prometheus metrics — `Counter`/`Gauge`/`Histogram` objects plus `start_http_server`/`generate_latest`, each service's own default registry, no shared/federated registry across processes | `shared`, `api`, `publisher`, `reimbursement` |
 
 ## Backend
 
@@ -48,6 +49,7 @@
 - Kafka — message backbone between `api`, `publisher`, and `reimbursement` (detail: `INTEGRATIONS.md`).
 - LangFuse (self-hosted, v4) — tracing backend for `reimbursement`'s LangGraph decision graph, wired via `langchain.CallbackHandler`; falls back to durable `failure_log` records when unreachable.
 - Groq — hosted LLM inference for `reimbursement`'s two decision-graph LLM nodes (`extract_fields`, `analysis`), each its own independently-configured chat model; configured via `GROQ_API_KEY`/`AI_TIMEOUT_SECONDS` (shared) and `EXTRACT_FIELDS_MODEL_NAME`/`EXTRACT_FIELDS_TEMPERATURE`/`ANALYSIS_MODEL_NAME`/`ANALYSIS_TEMPERATURE` (per node) — replaces the self-hosted Ollama host-machine setup (AD-032).
+- Prometheus — scrapes `/metrics` on all three services independently (`api`'s main HTTP port; `publisher`/`reimbursement`'s own `METRICS_PORT`); inbound-only, no outbound client call from this codebase (detail: `INTEGRATIONS.md`, metric catalog: `docs/METRICS.md`).
 
 ## Commands
 
@@ -88,6 +90,7 @@
 | `ANALYSIS_TEMPERATURE` | `analysis`'s model temperature — optional, defaults to `0.0` |
 | `DATABASE_POOL_MAX_SIZE` | Shared Postgres pool's max size (default `20`) — raise this in step with `PUBLISHER_ITEM_CONCURRENCY` to avoid connection starvation under load (R-005) |
 | `LOG_LEVEL` | Root logger level for all three services — one of `debug`/`info`/`warning`/`error`/`critical`, case-insensitive; optional, defaults to `debug`; an invalid value falls back to `debug` with a warning |
+| `METRICS_PORT` | Standalone `/metrics` HTTP port `publisher` (default `9101`) and `reimbursement` (default `9102`) each bind at startup via `shared.metrics.start_metrics_server`; `api` has no such var — its `/metrics` rides the existing FastAPI app port instead. No auth on either (see `CONCERNS.md`) |
 | `LANGFUSE_POSTGRES_PASSWORD`, `SALT`, `ENCRYPTION_KEY`, `NEXTAUTH_SECRET`, `CLICKHOUSE_PASSWORD`, `REDIS_AUTH`, `MINIO_ROOT_PASSWORD`, `LANGFUSE_S3_*_SECRET_ACCESS_KEY` | LangFuse stack's own infra credentials |
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | LangFuse project key pair `reimbursement`'s decision graph authenticates with — read by `langfuse.langchain.CallbackHandler()` straight from the process environment. `LANGFUSE_PUBLIC_KEY` must stay in sync with `docker-compose.yml`'s `x-langfuse-public-key` anchor, enforced by `packages/api/tests/test_dotenv_config_parity.py` |
 | `LANGFUSE_INIT_PROJECT_SECRET_KEY`, `LANGFUSE_INIT_USER_PASSWORD` | LangFuse first-boot bootstrap credentials for the `langfuse-web` service |

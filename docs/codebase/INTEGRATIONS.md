@@ -47,6 +47,15 @@
 - Location: `packages/reimbursement/src/reimbursement/config.py` (`AgentConfig.ai: AIConfig`, `AgentConfig.models: AgentModelsConfig`), `packages/reimbursement/src/reimbursement/agent/agent.py` (`build_graph()`)
 - Authentication: `GROQ_API_KEY` — required, fails fast at config-load time if unset (unlike Ollama's no-auth local default). Reaches the `reimbursement` container via the `.env` file mounted read-only at runtime, not a `docker-compose.yml` entry — `.dockerignore` keeps `.env` out of the image itself, so the key never lands in a build layer
 
+**Prometheus (metrics scraping):**
+
+- Type: observability/monitoring
+- Purpose: 16 metrics (1 Gauge, 5 Histograms, 10 Counters) across `api`, `publisher`, `reimbursement` — HTTP RED metrics, reimbursement status/review-wait, agent decision latency/LLM calls/policy-rule triggers, and Kafka consume/requeue/duplicate counts. Full catalog: `docs/METRICS.md`
+- Data flow: inbound only — Prometheus pulls; no outbound call from this codebase. Each service exposes its own `/metrics` off its own process's default `prometheus_client` registry, with no shared registry or federation layer between them (deliberate MVP scope choice)
+- Protocol: HTTP, Prometheus text exposition format (`prometheus_client.generate_latest`)
+- Location: `packages/shared/src/shared/metrics.py` (`start_metrics_server`, the one cross-service metric `reimbursement_status_transitions_total`), `packages/api/src/api/metrics.py` (+ `api/middleware.py`'s `MetricsMiddleware`, `GET /metrics` route in `api/main.py`), `packages/publisher/src/publisher/metrics.py`, `packages/reimbursement/src/reimbursement/metrics.py`
+- Authentication: none on any of the 3 `/metrics` endpoints — `api`'s rides its existing unauthenticated HTTP port; `publisher`/`reimbursement` each bind a standalone `METRICS_PORT` (default `9101`/`9102`) with no auth of its own (see `CONCERNS.md` Security Considerations)
+
 ## Background Jobs
 
 | Job | Frequency | Purpose |
