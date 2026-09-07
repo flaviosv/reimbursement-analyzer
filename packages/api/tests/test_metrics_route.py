@@ -40,7 +40,9 @@ class DescribeMetricsRoute:
         assert "# TYPE api_http_requests_total counter" in body
         assert "# TYPE reimbursement_status_count gauge" in body
 
-    async def it_updates_the_status_gauge_from_the_current_db_state(self, db) -> None:
+    async def it_updates_the_status_gauge_from_the_current_db_state(
+        self, db, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         # httpx.AsyncClient + ASGITransport, not TestClient: TestClient drives
         # the ASGI app from a separate thread with its own event loop, and
         # the real asyncpg connection FakePool wraps is bound to *this*
@@ -67,6 +69,11 @@ class DescribeMetricsRoute:
 
             await seed_reimbursement(db, "REQ-METRICS-GAUGE-1", status="human-review")
 
+            # Simulates a second scrape arriving after refresh_status_gauge's
+            # own min-interval throttle (api/metrics.py) has elapsed — this
+            # test asserts on two genuinely distinct scrapes, not two scrapes
+            # seconds apart in real time.
+            monkeypatch.setattr("api.metrics._last_refreshed_at", 0.0)
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
                 after_response = await client.get("/metrics")
 
