@@ -23,6 +23,7 @@ class PublisherConfig:
     # starvation under load (R-005).
     item_concurrency: int = 10
     consume_timeout_seconds: float = 1.0
+    metrics_port: int = 9101
     # AD-013's "~400x headroom" was derived from a ~15ms happy-path per-item
     # estimate only. The failure path is tighter: 500 items / 10 concurrent
     # * a full 10s publish_timeout_seconds each (broker down, every publish
@@ -52,4 +53,5 @@ def load_publisher_config() -> PublisherConfig:
     return PublisherConfig(
         consumer_group_id=os.getenv("PUBLISHER_CONSUMER_GROUP_ID", "publisher"),
         item_concurrency=int(os.getenv("PUBLISHER_ITEM_CONCURRENCY", "10")),
+        metrics_port=int(os.getenv("METRICS_PORT", "9101")),
     )

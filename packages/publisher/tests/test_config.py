@@ -28,6 +28,26 @@ class DescribePublisherConfig:
 
         assert config.consumer_group_id == "publisher-canary"
 
+    def it_defaults_metrics_port_to_9101_when_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("METRICS_PORT", raising=False)
+
+        config = load_publisher_config()
+
+        assert config.metrics_port == 9101
+
+    def it_reads_metrics_port_from_the_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("METRICS_PORT", "9200")
+
+        config = load_publisher_config()
+
+        assert config.metrics_port == 9200
+
+    def it_raises_when_metrics_port_is_not_numeric(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("METRICS_PORT", "not_a_number")
+
+        with pytest.raises(ValueError):
+            load_publisher_config()
+
 
 class DescribePublisherConfigToConsumerConfig:
     def it_never_lets_librdkafka_commit_offsets_on_a_timer(self) -> None:
