@@ -4,6 +4,7 @@ from typing import Any
 import pytest
 from api.metrics import UNMATCHED_PATH_LABEL, api_http_request_duration_seconds, api_http_requests_total
 from api.middleware import MetricsMiddleware
+from shared.testing import histogram_sample_count, metric_value
 
 pytestmark = pytest.mark.anyio
 
@@ -33,16 +34,11 @@ def _http_scope(method: str = "GET") -> Scope:
 
 
 def _counter_value(method: str, path: str, status_code: str) -> float:
-    return api_http_requests_total.labels(method, path, status_code)._value.get()
+    return metric_value(api_http_requests_total, method, path, status_code)
 
 
 def _histogram_count(method: str, path: str) -> float:
-    # prometheus_client stores each bucket's own (non-cumulative) count
-    # internally — cumulative summing happens at collect()/exposition time —
-    # so summing every bucket gives the total observation count, since each
-    # observation increments exactly one bucket.
-    child = api_http_request_duration_seconds.labels(method, path)
-    return sum(bucket.get() for bucket in child._buckets)
+    return histogram_sample_count(api_http_request_duration_seconds, method, path)
 
 
 def _app_setting_route(path: str, status: int = 200) -> Callable[[Scope, Callable, Callable], Awaitable[None]]:
