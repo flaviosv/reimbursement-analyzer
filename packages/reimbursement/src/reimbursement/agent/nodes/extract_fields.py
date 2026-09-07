@@ -11,6 +11,7 @@ from typing import Any
 from langchain_core.runnables import Runnable, RunnableConfig
 from pydantic import BaseModel
 
+from reimbursement.metrics import reimbursement_agent_llm_calls_total
 from reimbursement.schema import ExtractedFields, State
 from reimbursement.agent.prompts.extract_fields import get_extract_fields_prompt
 
@@ -45,7 +46,12 @@ class ExtractFields:
         prompt_payload = {key: value for key, value in payload.items() if key != "submitted_by"}
 
         messages = [get_extract_fields_prompt(prompt_payload)]
-        result = await self._model.ainvoke(messages)
+        try:
+            result = await self._model.ainvoke(messages)
+        except Exception:
+            reimbursement_agent_llm_calls_total.labels(self._model_name, "failure").inc()
+            raise
+        reimbursement_agent_llm_calls_total.labels(self._model_name, "success").inc()
 
         extracted: ExtractedFields = {
             "value": result.value,

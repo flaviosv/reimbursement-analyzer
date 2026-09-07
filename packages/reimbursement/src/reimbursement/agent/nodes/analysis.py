@@ -7,6 +7,7 @@ from typing import Any, Literal
 from langchain_core.runnables import Runnable, RunnableConfig
 from pydantic import BaseModel
 
+from reimbursement.metrics import reimbursement_agent_llm_calls_total
 from reimbursement.schema import State
 from reimbursement.agent.prompts.analysis import get_analysis_prompt
 
@@ -48,7 +49,12 @@ class Analysis:
         request_data = {key: value for key, value in payload.items() if key != "submitted_by"}
 
         messages = [get_analysis_prompt(request_data, found_data)]
-        verdict = await self._model.ainvoke(messages)
+        try:
+            verdict = await self._model.ainvoke(messages)
+        except Exception:
+            reimbursement_agent_llm_calls_total.labels(self._model_name, "failure").inc()
+            raise
+        reimbursement_agent_llm_calls_total.labels(self._model_name, "success").inc()
 
         guardrail_verdict = verdict.status == "auto-approved"
         logger.info(
