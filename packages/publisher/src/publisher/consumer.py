@@ -15,9 +15,11 @@ from dotenv import load_dotenv
 from shared.config import REQUEST_TOPIC, Config, load_config
 from shared.db import managed_pool
 from shared.logging import configure_logging
+from shared.metrics import start_metrics_server
 from shared.producer import managed_producer
 
 from publisher.config import PublisherConfig, load_publisher_config
+from publisher.metrics import publisher_messages_consumed_total
 from publisher.processing import MESSAGE_HANDLED_EVENT, Dependencies, _LazyJSON, handle_message
 
 logger = logging.getLogger(__name__)
@@ -88,6 +90,7 @@ async def run(deps: Dependencies, consumer: AIOConsumer, stopping: asyncio.Event
             logger.error("consumer error, message skipped: %s", error)
             continue
 
+        publisher_messages_consumed_total.labels(REQUEST_TOPIC).inc()
         try:
             outcomes = await handle_message(deps, message.value())
         except Exception:
@@ -141,6 +144,7 @@ async def _serve() -> None:
 def main() -> None:
     load_dotenv()
     configure_logging()
+    start_metrics_server(load_publisher_config().metrics_port)
     asyncio.run(_serve())
 
 

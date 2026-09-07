@@ -12,6 +12,7 @@ from publisher.config import PublisherConfig, load_publisher_config
 from publisher.consumer import _install_signal_handlers, check_startup_config, managed_consumer, run
 from fakes import FakePool, FakeProducer
 from shared.testing import valid_reimbursement_item
+from publisher.metrics import publisher_messages_consumed_total
 from publisher.processing import Dependencies
 from shared.config import REIMBURSEMENT_TOPIC, REQUEST_TOPIC, Config, load_config
 from shared.models import RequestEnvelope
@@ -402,3 +403,58 @@ class DescribeTheLoop:
         await run(_deps(FakePool(), FakeProducer()), consumer, stopping)
 
         assert len(consumer.commits) == 2
+
+
+class DescribeMessagesConsumedMetric:
+    async def it_increments_once_per_genuinely_delivered_message(self) -> None:
+        stopping = asyncio.Event()
+        consumer = FakeConsumer([[_message(["REQ-1"])]], stopping=stopping, stop_after=2)
+        before = publisher_messages_consumed_total.labels(REQUEST_TOPIC)._value.get()
+
+        await run(_deps(FakePool(), FakeProducer()), consumer, stopping)
+
+        after = publisher_messages_consumed_total.labels(REQUEST_TOPIC)._value.get()
+        assert after == before + 1
+
+    async def it_does_not_increment_on_a_protocol_level_error_message(self) -> None:
+        stopping = asyncio.Event()
+        consumer = FakeConsumer(
+            [[FakeMessage(error="broker: partition eof")]], stopping=stopping, stop_after=2
+        )
+        before = publisher_messages_consumed_total.labels(REQUEST_TOPIC)._value.get()
+
+        await run(_deps(FakePool(), FakeProducer()), consumer, stopping)
+
+        assert publisher_messages_consumed_total.labels(REQUEST_TOPIC)._value.get() == before
+
+    async def it_does_not_increment_when_no_message_was_available(self) -> None:
+        stopping = asyncio.Event()
+        consumer = FakeConsumer([[]], stopping=stopping, stop_after=2)
+        before = publisher_messages_consumed_total.labels(REQUEST_TOPIC)._value.get()
+
+        await run(_deps(FakePool(), FakeProducer()), consumer, stopping)
+
+        assert publisher_messages_consumed_total.labels(REQUEST_TOPIC)._value.get() == before
+
+
+class DescribeMain:
+    def it_starts_the_metrics_server_with_the_configured_port_before_serving(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        started: list[int] = []
+        ran: list[bool] = []
+
+        monkeypatch.setattr(consumer_module, "start_metrics_server", lambda port: started.append(port))
+        monkeypatch.setattr(consumer_module, "load_dotenv", lambda: None)
+        monkeypatch.setattr(consumer_module, "configure_logging", lambda: None)
+
+        def _fake_run(coro: Any) -> None:
+            coro.close()
+            ran.append(True)
+
+        monkeypatch.setattr(consumer_module.asyncio, "run", _fake_run)
+
+        consumer_module.main()
+
+        assert started == [load_publisher_config().metrics_port]
+        assert ran == [True]
