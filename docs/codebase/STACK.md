@@ -29,6 +29,9 @@
 | `httpx` | >=0.28.1 | Used transitively by FastAPI's `TestClient` | `api` tests |
 | `pylint` | >=4.0.6 | Declared dev dependency, no `.pylintrc`/`[tool.pylint]` config and not run in any gate — a second, equally unconfigured linter alongside `ruff` (see `CONCERNS.md`) | workspace-wide (`dependency-groups.dev`) |
 | `prometheus-client` | >=0.24.1 | Prometheus metrics — `Counter`/`Gauge`/`Histogram` objects plus `start_http_server`/`generate_latest`, each service's own default registry, no shared/federated registry across processes | `shared`, `api`, `publisher`, `reimbursement` |
+| `opentelemetry-sdk` | >=1.44.0 | `TracerProvider`/`BatchSpanProcessor` SDK backing `shared.tracing` | `shared` (all services transitively) |
+| `opentelemetry-exporter-otlp-proto-http` | >=1.44.0 | OTLP/HTTP span exporter, exports every service's spans to the Elastic APM Server | `shared` |
+| `opentelemetry-instrumentation-fastapi` | >=0.65b0 | Auto-instruments `api`'s HTTP layer (`FastAPIInstrumentor.instrument_app(app)` in `main.py`) | `api` |
 
 ## Backend
 
@@ -50,6 +53,7 @@
 - LangFuse (self-hosted, v4) — tracing backend for `reimbursement`'s LangGraph decision graph, wired via `langchain.CallbackHandler`; falls back to durable `failure_log` records when unreachable.
 - Groq — hosted LLM inference for `reimbursement`'s two decision-graph LLM nodes (`extract_fields`, `analysis`), each its own independently-configured chat model; configured via `GROQ_API_KEY`/`AI_TIMEOUT_SECONDS` (shared) and `EXTRACT_FIELDS_MODEL_NAME`/`EXTRACT_FIELDS_TEMPERATURE`/`ANALYSIS_MODEL_NAME`/`ANALYSIS_TEMPERATURE` (per node) — replaces the self-hosted Ollama host-machine setup (AD-032).
 - Prometheus — scrapes `/metrics` on all three services independently (`api`'s main HTTP port; `publisher`/`reimbursement`'s own `METRICS_PORT`); inbound-only, no outbound client call from this codebase (detail: `INTEGRATIONS.md`, metric catalog: `docs/METRICS.md`).
+- Elastic APM Server — OTLP/HTTP trace-export destination for all three services' spans (`shared.tracing.init_tracer`); default endpoint `http://apm-server.shared-services.svc.cluster.local:8200` (a k3s cluster-internal address), overridable via `OTEL_EXPORTER_OTLP_ENDPOINT`; detail: `INTEGRATIONS.md`.
 
 ## Commands
 
@@ -57,8 +61,6 @@
 | ---- | ------- |
 | Install everything | `uv sync --all-packages` |
 | Copy local env defaults | `cp .env.sample .env` |
-| Run the full stack | `docker compose up -d` |
-| Stop the stack | `docker compose down -v` |
 | Run all tests | `uv run pytest` |
 | Run tests without Docker-heavy ones | `uv run pytest -m "not integration"` |
 | Point tests at a supplied Postgres | `TEST_DATABASE_URL=postgresql://user:pw@host:5432/postgres uv run pytest` |
@@ -67,19 +69,15 @@
 
 ## Local Development Setup
 
-- `docker compose up -d` starts: the app's own Postgres (port 5433), Kafka KRaft (port 9092), the full LangFuse stack (its own Postgres/ClickHouse/Redis/MinIO), a one-shot `migrate` job, and the three workspace services (`api`, `reimbursement`, `publisher`).
-- `api`, `reimbursement`, and `publisher` bind-mount their own `packages/<pkg>` directory plus `packages/shared` for hot reload in the `dev` Docker target.
-- API: `http://localhost:8000` (`/health`). LangFuse: `http://localhost:3000`.
-- Test suite needs no running stack — `testcontainers` starts and tears down its own throwaway Postgres/Kafka.
-- `.env` is bind-mounted read-only into `api`/`publisher`/`reimbursement` at container runtime (`./.env:/app/.env:ro`) — deliberately not into `migrate`, which only reads `DATABASE_URL`, already supplied via its own compose `environment:` block. Each service's own `docker-compose.yml` `environment:` block is otherwise pruned to a topology-only allowlist (values like `kafka:19092` that are only ever correct inside the Docker network) — see `INTEGRATIONS.md` for the full per-integration breakdown.
+`docker-compose.yml` was removed from this repo entirely (AD-040, `.specs/STATE.md`) — real local development and verification (including reaching the real Elastic APM Server) now happens exclusively on a sibling, out-of-repo `local-env` project's k3s/Tilt setup, not part of this codebase. Test suite needs no running stack — `testcontainers` starts and tears down its own throwaway Postgres/Kafka.
 
 ## Environment Configuration
 
 | Variable | Description |
 | -------- | ----------- |
 | `POSTGRES_PASSWORD` | App Postgres password |
-| `DATABASE_URL` | Full app Postgres DSN (compose sets this per-service; local runs must set it manually) |
-| `KAFKA_BOOTSTRAP_SERVERS` | Kafka bootstrap address (`kafka:19092` inside compose, `localhost:9092` default outside it) |
+| `DATABASE_URL` | Full app Postgres DSN — must be set manually now that `docker-compose.yml` (which previously set this per-service) was removed, AD-040 |
+| `KAFKA_BOOTSTRAP_SERVERS` | Kafka bootstrap address — `localhost:9092` default; the `kafka:19092` in-container value previously set by `docker-compose.yml` no longer applies (removed, AD-040) |
 | `KAFKA_SECURITY_PROTOCOL`, `KAFKA_SASL_MECHANISM`, `KAFKA_SASL_USERNAME`, `KAFKA_SASL_PASSWORD`, `KAFKA_SSL_CA_LOCATION` | Optional Kafka SASL/TLS — unset means PLAINTEXT |
 | `AGENT_CONSUMER_GROUP_ID` | `reimbursement`'s Kafka consumer group id (var name and default `"agent"` unchanged by the package rename) |
 | `GROQ_API_KEY` | Groq credential shared by both LLM nodes' models — required, fails fast if unset (AD-032) |
@@ -92,6 +90,7 @@
 | `LOG_LEVEL` | Root logger level for all three services — one of `debug`/`info`/`warning`/`error`/`critical`, case-insensitive; optional, defaults to `debug`; an invalid value falls back to `debug` with a warning |
 | `METRICS_PORT` | Standalone `/metrics` HTTP port `publisher` (default `9101`) and `reimbursement` (default `9102`) each bind at startup via `shared.metrics.start_metrics_server`; `api` has no such var — its `/metrics` rides the existing FastAPI app port instead. No auth on either (see `CONCERNS.md`) |
 | `LANGFUSE_POSTGRES_PASSWORD`, `SALT`, `ENCRYPTION_KEY`, `NEXTAUTH_SECRET`, `CLICKHOUSE_PASSWORD`, `REDIS_AUTH`, `MINIO_ROOT_PASSWORD`, `LANGFUSE_S3_*_SECRET_ACCESS_KEY` | LangFuse stack's own infra credentials |
-| `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | LangFuse project key pair `reimbursement`'s decision graph authenticates with — read by `langfuse.langchain.CallbackHandler()` straight from the process environment. `LANGFUSE_PUBLIC_KEY` must stay in sync with `docker-compose.yml`'s `x-langfuse-public-key` anchor, enforced by `packages/api/tests/test_dotenv_config_parity.py` |
+| `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | LangFuse project key pair `reimbursement`'s decision graph authenticates with — read by `langfuse.langchain.CallbackHandler()` straight from the process environment. The `docker-compose.yml` anchor and the parity test that previously kept `LANGFUSE_PUBLIC_KEY` in sync with it were both removed this branch (AD-040) — no automated check remains for this pair today |
 | `LANGFUSE_INIT_PROJECT_SECRET_KEY`, `LANGFUSE_INIT_USER_PASSWORD` | LangFuse first-boot bootstrap credentials for the `langfuse-web` service |
 | `TEST_DATABASE_URL` | Points the test suite at a supplied Postgres server instead of a throwaway container |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP/HTTP endpoint every service exports spans to — optional, defaults to `http://apm-server.shared-services.svc.cluster.local:8200` (a k3s-internal address) |

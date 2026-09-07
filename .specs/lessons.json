@@ -3,7 +3,7 @@
   "promote_threshold": 2,
   "window_days": 45,
   "quarantine_threshold": 2,
-  "next_id": 24,
+  "next_id": 27,
   "lessons": [
     {
       "id": "L-001",
@@ -405,6 +405,60 @@
     },
     {
       "id": "L-023",
+      "key": "spec_precision_gap::when a spec requires stamping an attribute at every hop where a value becomes known check every branch of that hop s handler including escalation error branches not just the primary success path a use case return value that is discarded is a common place this slips",
+      "text": "When a spec requires stamping an attribute at every hop where a value becomes known, check every branch of that hop's handler including escalation/error branches, not just the primary success path — a use-case return value that is discarded is a common place this slips.",
+      "signal": "spec_precision_gap",
+      "scope": "tracing",
+      "status": "candidate",
+      "features": [
+        "RA-2-adding-tracing-support"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "P2 AC2 / packages/publisher/src/publisher/processing.py:214-254 (tracing)"
+      ],
+      "created": "2026-09-06T17:09:17Z",
+      "last_seen": "2026-09-06T17:09:17Z"
+    },
+    {
+      "id": "L-024",
+      "key": "spec_precision_gap::when a process wide tracer provider singleton blocks running multiple real service entrypoints together in one test process a hand simulated multi hop test proves only the propagation mechanism not the full real service lifecycle treat the full lifecycle acceptance criterion as still open until proven against real entrypoints or live infra",
+      "text": "When a process-wide tracer/provider singleton blocks running multiple real service entrypoints together in one test process, a hand-simulated multi-hop test proves only the propagation mechanism, not the full real-service lifecycle — treat the full-lifecycle acceptance criterion as still open until proven against real entrypoints or live infra.",
+      "signal": "spec_precision_gap",
+      "scope": "tracing",
+      "status": "candidate",
+      "features": [
+        "RA-2-adding-tracing-support"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "P1 AC7 / packages/publisher/tests/test_trace_propagation_integration.py:1-17 (tracing)"
+      ],
+      "created": "2026-09-06T17:09:17Z",
+      "last_seen": "2026-09-06T17:09:17Z"
+    },
+    {
+      "id": "L-025",
+      "key": "ac_gap::when a task s own tests field promises a test mirroring an already built sibling test verify that test was actually added before marking the task done a promised but missing unit test for a composition root call site is easy to lose track of",
+      "text": "When a task's own Tests field promises a test mirroring an already-built sibling test, verify that test was actually added before marking the task done — a promised-but-missing unit test for a composition-root call site is easy to lose track of.",
+      "signal": "ac_gap",
+      "scope": "testing",
+      "status": "candidate",
+      "features": [
+        "RA-2-adding-tracing-support"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "T9 Done-when / packages/publisher/src/publisher/consumer.py:126,145 (testing)"
+      ],
+      "created": "2026-09-06T17:09:17Z",
+      "last_seen": "2026-09-06T17:09:17Z"
+    },
+    {
+      "id": "L-026",
       "key": "spec_precision_gap::when an ac requires a response header behavior on both success and error paths add a test that triggers a registered error handler and asserts the behavior a happy path only test does not prove the error branch",
       "text": "When an AC requires a response header/behavior on both success and error paths, add a test that triggers a registered error handler and asserts the behavior — a happy-path-only test does not prove the error branch.",
       "signal": "spec_precision_gap",

@@ -3,7 +3,7 @@ import json
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from shared.testing import valid_reimbursement_item
+from shared.testing import in_memory_tracer, valid_reimbursement_item
 
 from api.dependencies import get_producer
 from api.errors import register_handlers
@@ -139,6 +139,38 @@ class DescribeCreateReimbursement:
 
         assert response.status_code == 500
         assert response.json() == {"msg": "failed to publish request"}
+
+    def it_stamps_correlation_id_on_the_current_span_when_available(
+        self, immediate_fake_producer_class, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        tracer, exporter = in_memory_tracer()
+        fake = immediate_fake_producer_class()
+        client = _build_client(fake)
+        monkeypatch.setattr(
+            "api.reimbursement.create.route.get_correlation_id", lambda: "req-post-corr-id"
+        )
+
+        with tracer.start_as_current_span("test-span"):
+            response = client.post("/api/v1/reimbursement", json=[VALID_ITEM])
+
+        assert response.status_code == 201
+        span = exporter.get_finished_spans()[0]
+        assert span.attributes["correlation_id"] == "req-post-corr-id"
+
+    def it_does_not_stamp_a_span_attribute_when_no_correlation_id_is_available(
+        self, immediate_fake_producer_class, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        tracer, exporter = in_memory_tracer()
+        fake = immediate_fake_producer_class()
+        client = _build_client(fake)
+        monkeypatch.setattr("api.reimbursement.create.route.get_correlation_id", lambda: None)
+
+        with tracer.start_as_current_span("test-span"):
+            response = client.post("/api/v1/reimbursement", json=[VALID_ITEM])
+
+        assert response.status_code == 201
+        span = exporter.get_finished_spans()[0]
+        assert "correlation_id" not in span.attributes
 
 
 class DescribeTheRealApp:

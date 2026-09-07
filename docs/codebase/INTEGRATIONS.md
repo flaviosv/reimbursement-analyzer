@@ -2,21 +2,30 @@
 
 ## Integrations
 
+**Elastic APM Server (OTLP):**
+
+- Type: observability/tracing backend
+- Purpose: OTLP/HTTP trace-export destination for every service's OpenTelemetry spans (`api`, `publisher`, `reimbursement`) — one `TracerProvider` per process, initialized at each service's own composition-root startup via `shared.tracing.init_tracer()`
+- Data flow: outbound only — each service batches and exports its own spans; nothing is received back
+- Protocol: OTLP/HTTP (`opentelemetry-exporter-otlp-proto-http`'s `OTLPSpanExporter`, endpoint suffixed with `/v1/traces`)
+- Location: `packages/shared/src/shared/tracing.py` (`init_tracer`/`shutdown_tracer`/`shutdown_tracer_async`), `packages/shared/src/shared/config.py` (`TracingConfig.otlp_endpoint`), each service's composition root (`api/main.py`'s module scope + `lifespan`, `publisher`/`reimbursement`'s `_serve()`)
+- Authentication: none configured — default endpoint (`http://apm-server.shared-services.svc.cluster.local:8200`) is a k3s cluster-internal address, not exposed externally; overridable via `OTEL_EXPORTER_OTLP_ENDPOINT`
+
 **Kafka (`Request` topic):**
 
 - Type: message broker
 - Purpose: durable transport for reimbursement requests between `api` and `publisher`
 - Data flow: outbound from `api` (publish), inbound to `publisher` (consume — implemented) — a failed item is also republished here with `retry` incremented
-- Protocol: Kafka native protocol via `confluent_kafka` — async producer (`confluent_kafka.aio.AIOProducer`) and async consumer (`confluent_kafka.aio.AIOConsumer`)
+- Protocol: Kafka native protocol via `confluent_kafka` — async producer (`confluent_kafka.aio.AIOProducer`) and async consumer (`confluent_kafka.aio.AIOConsumer`). Message headers also carry W3C trace-context (`traceparent`) alongside the envelope payload, injected by `shared.producer.publish` (`shared.tracing.inject_headers()`) and extracted by `publisher`'s consumer via `shared.tracing.traced_message_span()`.
 - Location: `packages/shared/src/shared/producer.py` (generic `publish`/`managed_producer`), `packages/api/src/api/reimbursement/create/producer.py` (envelope building), `packages/publisher/src/publisher/consumer.py` (consume lifecycle), `packages/publisher/src/publisher/processing.py` (requeue)
-- Authentication: PLAINTEXT by default (local); SASL/TLS supported via `KAFKA_SECURITY_PROTOCOL` + related env vars, read once through `shared.config.load_config().kafka`. Inside a container these reach `api`/`publisher`/`reimbursement` via the `.env` file mounted read-only at runtime (`load_dotenv()`), not a `docker-compose.yml` passthrough — only `KAFKA_BOOTSTRAP_SERVERS` itself stays compose-set, since it's a Docker-network-topology address (`kafka:19092`) a shared `.env` value can't be correct for both in-container and on-host use
+- Authentication: PLAINTEXT by default (local); SASL/TLS supported via `KAFKA_SECURITY_PROTOCOL` + related env vars, read once through `shared.config.load_config().kafka`, populated from `.env` via `load_dotenv()` at process startup. `docker-compose.yml` (and its container-topology `.env` mount / compose-set `KAFKA_BOOTSTRAP_SERVERS` override) was removed from this repo entirely this branch (AD-040) — local containerized topology, where used, is now the sibling `local-env` project's concern, not documented here
 
 **Kafka (`Reimbursement` topic):**
 
 - Type: message broker
 - Purpose: durable handoff from `publisher` to `reimbursement`'s resolve layer — one message per `reimbursement` row, carrying only its `uuid`
 - Data flow: outbound from `publisher`, inbound to `reimbursement` (consumed — resolves the row by `uuid` into `shared.models.Reimbursement`, then hands it to the `reimbursement/agent/` decision graph via `agent.decide()`). A transient resolve failure is also republished here by `reimbursement` with `retry` incremented, same requeue-to-own-topic shape `publisher` uses on `Request`.
-- Protocol: same as above, message contract `shared.models.ReimbursementEnvelope` (`uuid`, `retry`, `published_at`, `correlation_id`, `errors`)
+- Protocol: same as above, message contract `shared.models.ReimbursementEnvelope` (`uuid`, `retry`, `published_at`, `correlation_id`, `errors`). Message headers also carry W3C trace-context (`traceparent`) alongside the envelope payload, injected by `shared.producer.publish` (`shared.tracing.inject_headers()`) and extracted by `reimbursement`'s consumer via `shared.tracing.traced_message_span()`.
 - Location: `packages/publisher/src/publisher/processing.py` (`_insert_and_publish` → `shared.reimbursement.use_cases.publish_pending`), `packages/reimbursement/src/reimbursement/consumer.py` (consume lifecycle), `packages/reimbursement/src/reimbursement/validation.py` (resolve, requeue)
 - Authentication: same as the `Request` topic
 
@@ -35,8 +44,8 @@
 - Purpose: tracing backend for `reimbursement`'s LangGraph decision graph (the `agent/` subpackage) — one trace per reimbursement invocation, via `agent.agent._langfuse_handlers()`
 - Data flow: `agent.decide()` passes a memoized `langchain.CallbackHandler` into `graph.ainvoke`'s `callbacks` config on every invocation, alongside `metadata={"langfuse_session_id": str(reimbursement.uuid), "correlation_id": ...}` (the latter read from `shared.logging.get_correlation_id()`, omitted when `None`) — so a trace is filterable both by the reimbursement's uuid and by the originating request's correlation id; if the package is missing or the handler can't be constructed, a durable `failure_log` record (`reimbursement.langfuse_fallback`) is written instead — no invocation runs trace-less and unlogged
 - Protocol: LangFuse's LangChain callback integration (OTLP under the hood)
-- Location: `docker-compose.yml` (`langfuse-web`, `langfuse-worker`, and their own Postgres/ClickHouse/Redis/MinIO); client wiring in `packages/reimbursement/src/reimbursement/agent/agent.py`
-- Authentication: project public/secret key pair, auto-provisioned on first boot. `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` reach `reimbursement` via the `.env` file mounted read-only into the container (`langfuse.langchain.CallbackHandler()` reads them straight from the process environment — no compose passthrough); `LANGFUSE_HOST` stays compose-set (`http://langfuse-web:3000`, a Docker-network-topology address a shared `.env` value can't be correct for both in-container and on-host use)
+- Location: client wiring in `packages/reimbursement/src/reimbursement/agent/agent.py`; the LangFuse stack itself (`langfuse-web`, `langfuse-worker`, and their own Postgres/ClickHouse/Redis/MinIO) was previously provisioned by this repo's `docker-compose.yml`, removed entirely this branch (AD-040) — local LangFuse provisioning, where used, is now the sibling `local-env` project's concern
+- Authentication: project public/secret key pair, auto-provisioned on first boot. `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` are resolved via `.env`/`load_dotenv()` (`langfuse.langchain.CallbackHandler()` reads them straight from the process environment). The container-mount and compose-set-`LANGFUSE_HOST` details this previously described were part of this repo's now-removed `docker-compose.yml` (AD-040) — container-level delivery, where used, is now the sibling `local-env` project's concern
 
 **Groq (LLM inference):**
 
@@ -45,7 +54,7 @@
 - Data flow: outbound HTTPS calls from `build_graph()`'s two chat models to Groq's cloud API; no inbound calls into `reimbursement`. Real data-residency shift from the prior Ollama setup: prompt payloads (including `raw_ocr_text`, which can carry incidental PII) now leave the local Docker network for a third-party cloud API — see `docs/codebase/CONCERNS.md`'s Security Considerations
 - Protocol: HTTPS (Groq's REST API)
 - Location: `packages/reimbursement/src/reimbursement/config.py` (`AgentConfig.ai: AIConfig`, `AgentConfig.models: AgentModelsConfig`), `packages/reimbursement/src/reimbursement/agent/agent.py` (`build_graph()`)
-- Authentication: `GROQ_API_KEY` — required, fails fast at config-load time if unset (unlike Ollama's no-auth local default). Reaches the `reimbursement` container via the `.env` file mounted read-only at runtime, not a `docker-compose.yml` entry — `.dockerignore` keeps `.env` out of the image itself, so the key never lands in a build layer
+- Authentication: `GROQ_API_KEY` — required, fails fast at config-load time if unset (unlike Ollama's no-auth local default). Resolved via `.env`/`load_dotenv()` wherever the process runs; `.dockerignore` keeps `.env` out of the image itself, so the key never lands in a build layer. The read-only runtime container mount this previously described was part of this repo's now-removed `docker-compose.yml` (AD-040) — container-level delivery, where used, is now the sibling `local-env` project's concern
 
 **Prometheus (metrics scraping):**
 
@@ -60,8 +69,8 @@
 
 | Job | Frequency | Purpose |
 | --- | --------- | ------- |
-| `migrate` | Once per stack startup (one-shot compose service) | Applies pending SQL migrations before `api`/`reimbursement`/`publisher` start; every dependent service waits on `service_completed_successfully` |
+| `migrate` | Previously once per stack startup (one-shot compose service); `docker-compose.yml` was removed this branch (AD-040), so `migrate.py` is now invoked manually — see `STACK.md`'s Commands table | Applies pending SQL migrations before `api`/`reimbursement`/`publisher` start |
 
-Unlike `api`/`publisher`/`reimbursement`, `migrate` does NOT receive the `.env` read-only bind mount — it only ever reads `DATABASE_URL`, already supplied directly via its own `docker-compose.yml` `environment:` block, so mounting the full `.env` secret set into a one-shot container would be unnecessary exposure (security-scoping fix).
+`migrate` previously did not receive the `.env` read-only bind mount that `api`/`publisher`/`reimbursement` did in the now-removed `docker-compose.yml` — it only ever read `DATABASE_URL`. That compose-specific detail no longer applies; `migrate.py` is run manually per `STACK.md`'s Commands table.
 
-No recurring/scheduled jobs exist. `migrate` is not a queue-backed job — it is a single compose service, gated by dependency ordering, not a cron/queue system.
+No recurring/scheduled jobs exist. `migrate` is not a queue-backed job — it is a manually-invoked one-shot script, not a cron/queue system.

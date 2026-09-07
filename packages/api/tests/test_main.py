@@ -6,6 +6,7 @@ import pytest
 import shared.logging as shared_logging_module
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
+from shared.config import load_config
 from shared.logging import CorrelationIdFilter
 
 import api.main as main_module
@@ -129,3 +130,56 @@ class DescribeGetProducer:
             response = client.get("/producer-identity-check")
 
         assert response.json() == {"is_app_state_producer": True}
+
+
+class DescribeTracingIntegration:
+    """The tracer provider is built inside `lifespan` (like every other
+    per-request-lifetime resource in this file) rather than at module scope,
+    so every test below builds its own throwaway app instead of reading
+    `main_module.app`'s shared one. Span-export failures at runtime (as
+    opposed to startup, covered below) are OTel's own `BatchSpanProcessor`
+    responsibility to swallow, not app-level resilience code this suite
+    tests further — best-effort infra tracing, not the LangFuse
+    decision-audit-trail the traceability NFR is primarily about."""
+
+    def it_initializes_a_tracer_provider_with_the_api_service_name_and_configured_endpoint(
+        self,
+    ) -> None:
+        app = _build_app()
+
+        with TestClient(app):
+            provider = app.state.tracer_provider
+            assert provider.resource.attributes["service.name"] == "reimbursement-analyzer-api"
+            processor = provider._active_span_processor._span_processors[0]
+            expected_endpoint = f"{load_config().tracing.otlp_endpoint.rstrip('/')}/v1/traces"
+            assert processor.span_exporter._endpoint == expected_endpoint
+
+    def it_shuts_down_the_tracer_on_lifespan_shutdown(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls: list[object] = []
+
+        async def mock_shutdown(provider: object) -> None:
+            calls.append(provider)
+
+        monkeypatch.setattr(main_module, "shutdown_tracer_async", mock_shutdown)
+        app = _build_app()
+
+        with TestClient(app):
+            assert calls == []
+            provider = app.state.tracer_provider
+
+        assert calls == [provider]
+
+    def it_instruments_the_app_with_fastapi_instrumentor(self) -> None:
+        # instrument_app's own documented, stable signal — set exactly once,
+        # at import time, with no per-route code (AC3's scope-out).
+        assert main_module.app._is_instrumented_by_opentelemetry is True
+
+    def it_does_not_fail_to_start_when_the_apm_server_is_unreachable(self) -> None:
+        # The default/otel-configured endpoint is unreachable in this test
+        # environment already (no live APM Server); every test in this class
+        # (and this file) builds its app the same way, so this only names
+        # the guarantee explicitly rather than leaving it implicit.
+        with TestClient(main_module.app) as client:
+            response = client.get("/health")
+
+        assert response.status_code == 200

@@ -4,39 +4,22 @@ A module rather than conftest fixtures because these are classes tests
 construct with arguments, not resources pytest manages. Reachable by bare
 name through the root pyproject's `pythonpath`, the same mechanism
 `src/api/tests/helpers.py` already uses.
+
+`FakeProducer` is re-exported from `shared.testing` — it models a contract
+`shared.producer` owns, and duplicating it here was a maintenance burden.
+Reimbursement's own test doubles follow this pattern (see agent_fakes.py).
 """
 
 import asyncio
-import json
+from concurrent.futures import ThreadPoolExecutor
 from types import TracebackType
 from typing import Any, Self
 from uuid import UUID, uuid4
 
 import asyncpg
+from shared.testing import FakeProducer
 
-
-class FakeProducer:
-    """Records every produced message. `errors` maps a topic to the exception
-    its delivery future carries, so a Reimbursement failure and a requeue
-    failure can be injected independently."""
-
-    def __init__(self, *, errors: dict[str, Exception] | None = None) -> None:
-        self.errors = errors or {}
-        self.produced: list[tuple[str, bytes]] = []
-
-    async def produce(self, topic: str, value: bytes, **kwargs: object) -> asyncio.Future:
-        await asyncio.sleep(0)
-        self.produced.append((topic, value))
-        future = asyncio.get_running_loop().create_future()
-        error = self.errors.get(topic)
-        if error is not None:
-            future.set_exception(error)
-        else:
-            future.set_result(object())
-        return future
-
-    def messages(self, topic: str) -> list[dict[str, Any]]:
-        return [json.loads(value) for produced, value in self.produced if produced == topic]
+__all__ = ["FakeProducer", "FakePool", "FakeConnection", "RealPool"]
 
 
 class _FakeAcquisition:

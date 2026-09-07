@@ -1358,7 +1358,7 @@ claim was checked, not assumed.
 ### AD-038 — `.env` is mounted read-only into every uv-workspace container at runtime; `docker-compose.yml`'s `environment:` blocks are pruned to Docker-network-topology values only
 
 **Date:** 2026-08-09
-**Status:** Active
+**Status:** superseded by AD-040
 
 `api`, `publisher`, `reimbursement`, and `migrate` each gain a runtime
 volume mount (`./.env:/app/.env:ro`) in `docker-compose.yml`, making their
@@ -1459,6 +1459,84 @@ error text raw, consistent with AD-014, rather than sanitize it (which
 would gut its diagnostic value for a human reviewer) or treat it as new
 scope for this PR. No code change; no new risk entry, the gap was already
 tracked.
+
+### AD-040 — `docker-compose.yml` removed entirely; AD-038's compose-mount convention retired with it
+
+**Date:** 2026-09-06
+**Status:** Active
+**Supersedes:** AD-038 (docker-compose.yml no longer exists to hold the convention)
+
+RA-2 (`adding-tracing-support`) removes `docker-compose.yml` and its
+README `## Run` section from the repo — real local development and
+verification now happen exclusively on the sibling `local-env` project's
+k3s/Tilt setup, the only place that reaches the real
+`apm-server.shared-services.svc.cluster.local:8200` Elastic APM Server this
+feature exports spans to. No new local ephemeral infra (compose or
+otherwise) replaces it.
+
+**Why:** decided during RA-2's grilling session (decision #5,
+user-confirmed): `docker-compose.yml` was already stale next to the real
+local dev path, and building another local listener/collector just to keep
+it "working" for this feature would be new infra with no consumer.
+AD-038's `.env`-mount-into-compose convention was itself only five weeks
+old, but it was a fix for a file this decision now deletes outright — there
+is nothing left for it to govern.
+
+**Implication:** any future guidance that assumed `docker-compose.yml` was
+the local dev entrypoint (AD-038's "any future uv-workspace service follows
+the same shape" line, and any docs referencing it) is stale and should
+point at the sibling `local-env` project instead. See
+`.specs/features/RA-2-adding-tracing-support/spec.md`'s P3 AC3 for the
+traceable requirement.
+
+### AD-041 — RA-2's `reimbursement.uuid` span-attribute convention gains `correlation_id` alongside it everywhere the latter is now available (post-RA-1 merge); kept, never replaced, wherever a span already resolves `reimbursement.uuid` too
+
+**Date:** 2026-09-06
+**Status:** Active
+**Supersedes:** none (extends RA-2's OTEL-* span-attribute convention; RA-2's own spec.md flagged this migration as a known forward-looking gap — see grilling-session.md decision #2's note)
+
+RA-2 (`adding-tracing-support`) stamped `reimbursement.uuid` as the
+cross-span correlation attribute at every hop where that value was known
+— `api`'s GET/PUT request spans, `publisher`'s `process_message` span
+(`process_item`/`escalate_item`), and `reimbursement`'s `process_message`
+span. At RA-2 design time no better identifier existed, and the uuid
+itself doesn't exist until `publisher` inserts the row — which is why
+RA-2's spec.md explicitly scoped `api`'s `POST /api/v1/reimbursement`
+create-route span *out*: the uuid isn't mintable that early.
+
+Merging `main` (RA-1, `json-structured-logging`) brings in `correlation_id`
+— sourced from the inbound `X-Request-ID` header (or generated) at `api`'s
+very first hop, threaded through `shared.logging`'s ContextVar,
+`RequestEnvelope`/`ReimbursementEnvelope`, and every downstream consumer.
+Unlike `reimbursement.uuid`, it is available from the first hop onward,
+closing RA-2's own flagged gap.
+
+**Decision:** every span that stamped `reimbursement.uuid` now also stamps
+`correlation_id` (read from `shared.logging.get_correlation_id()` where
+only the ContextVar is in scope — `api`'s GET/PUT/POST routes — or directly
+from the envelope where it's already a local variable — `publisher`'s
+`process_item`/`escalate_item`, `reimbursement`'s `validation.handle_message`).
+`reimbursement.uuid` is kept, not replaced, on every span that already
+resolves it: it stays independently useful there (e.g. a direct DB lookup
+by uuid), and stamping both is one extra `set_attribute` call on a span
+already open — cheap and non-redundant. `api`'s `POST /api/v1/reimbursement`
+create-route span now stamps `correlation_id` only, since `reimbursement.uuid`
+still isn't known at that hop — this is the gap spec.md flagged as
+impossible at RA-2 design time, now closed.
+
+**Why not replace `reimbursement.uuid` outright:** a direct DB/log
+correlation by `reimbursement.uuid` is a distinct, still-common query shape
+(e.g. "find every span for this row") that `correlation_id` doesn't
+substitute for — it correlates a request/message chain, not a specific
+reimbursement row once one exists. Dropping it would regress that lookup
+path for no cost saving (the attribute is already free to add once the
+span and the value are both in scope).
+
+**Implication:** any new agent/LLM or Kafka-consumer code path this
+project adds must stamp `correlation_id` at its own first opportunity
+(mirroring `CLAUDE.md`'s Distributed Tracing standing requirement), and
+keep `reimbursement.uuid` alongside it wherever that value is also
+resolved at that span — never one or the other by default.
 
 ---
 

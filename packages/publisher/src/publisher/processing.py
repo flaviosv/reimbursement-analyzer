@@ -16,6 +16,7 @@ from uuid import UUID
 
 import asyncpg
 from confluent_kafka.aio import AIOProducer
+from opentelemetry import trace
 from pydantic import ValidationError
 from shared import failure_log
 from shared.config import MAX_RETRY, REQUEST_TOPIC, Config
@@ -26,6 +27,7 @@ from shared.producer import publish
 from shared.reimbursement import repository
 from shared.reimbursement.use_cases.publish_pending import publish_pending
 from shared.reimbursement.use_cases.send_human_review import send_human_review
+from shared.tracing import stamp_span
 
 from publisher.config import PublisherConfig
 from publisher.metrics import publisher_duplicate_dropped_total, publisher_messages_requeued_total
@@ -215,6 +217,7 @@ async def process_item(
             _log_duplicate(envelope, item, exc)
             return ItemOutcome.DUPLICATE
         return await _requeue(deps, envelope, index, item, "db-insert", exc)
+    stamp_span(trace.get_current_span(), uuid=uuid, correlation_id=envelope.correlation_id)
     log_event(logger, logging.INFO, ITEM_PUBLISHED_EVENT, request_id=_request_id(item), uuid=str(uuid))
     return ItemOutcome.PUBLISHED
 
@@ -234,9 +237,10 @@ async def escalate_item(
         # setup). It acts as a savepoint boundary, not an atomicity guard.
         async with deps.pool.acquire(timeout=deps.config.database.acquire_timeout_seconds) as conn:
             async with conn.transaction():
-                await send_human_review(
+                uuid = await send_human_review(
                     conn, item, envelope.errors, deps.config.failure_log.max_message_chars
                 )
+        stamp_span(trace.get_current_span(), uuid=uuid, correlation_id=envelope.correlation_id)
     except Exception as exc:
         if repository.is_duplicate(exc):
             _log_duplicate(envelope, item, exc)

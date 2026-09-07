@@ -3,10 +3,12 @@ from uuid import UUID
 
 import asyncpg
 from fastapi import APIRouter, Depends
+from opentelemetry import trace
 from shared.config import load_config
 from shared.errors import ReimbursementNotFound
-from shared.logging import log_event
+from shared.logging import get_correlation_id, log_event
 from shared.reimbursement.use_cases.get_reimbursement import get_reimbursement
+from shared.tracing import stamp_span
 
 from api.dependencies import get_pool
 from api.errors import MessageResponse
@@ -33,6 +35,7 @@ async def get_reimbursement_by_uuid(
     """Delegate -> shape -> respond. A malformed uuid never reaches here —
     FastAPI's own path coercion raises RequestValidationError first, caught
     by the app-wide handler in errors.py."""
+    stamp_span(trace.get_current_span(), uuid=uuid, correlation_id=get_correlation_id())
     async with pool.acquire(timeout=load_config().database.acquire_timeout_seconds) as conn:
         try:
             row = await get_reimbursement(conn, uuid)

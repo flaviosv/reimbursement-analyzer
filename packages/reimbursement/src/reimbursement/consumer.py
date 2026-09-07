@@ -11,18 +11,21 @@ from contextlib import asynccontextmanager
 
 from confluent_kafka.aio import AIOConsumer
 from dotenv import load_dotenv
+from opentelemetry import trace
 from shared.config import REIMBURSEMENT_TOPIC, Config, load_config
 from shared.db import managed_pool
 from shared.logging import configure_logging
 from shared.metrics import start_metrics_server
 from shared.producer import managed_producer
 from shared.signals import install_shutdown_handlers
+from shared.tracing import init_tracer, shutdown_tracer_async, traced_message_span
 
 from reimbursement.config import AgentConfig, load_agent_config
 from reimbursement.metrics import reimbursement_messages_consumed_total
 from reimbursement.validation import Dependencies, handle_message
 
 logger = logging.getLogger(__name__)
+tracer = trace.get_tracer(__name__)
 
 
 def check_startup_config(config: Config) -> None:
@@ -69,24 +72,27 @@ async def run(deps: Dependencies, consumer: AIOConsumer, stopping: asyncio.Event
         logger.info("consumer received message: %s", messages[0].value())
 
         message = messages[0]
-        error = message.error()
-        if error is not None:
-            logger.error("consumer error, message skipped: %s", error)
-            continue
+        with traced_message_span(tracer, message):
+            error = message.error()
+            if error is not None:
+                logger.error("consumer error, message skipped: %s", error)
+                continue
 
-        reimbursement_messages_consumed_total.labels(REIMBURSEMENT_TOPIC).inc()
-        await handle_message(deps, message.value())
-        # Only now. A crash before this point redelivers the whole message,
-        # and whatever already happened (a ghost drop, a resolved log, an
-        # escalation) is safely re-run — the read-then-conditionally-write
-        # shape is naturally idempotent, unlike the publisher's INSERT path.
-        await consumer.commit(message=message, asynchronous=False)
+            reimbursement_messages_consumed_total.labels(REIMBURSEMENT_TOPIC).inc()
+            await handle_message(deps, message.value())
+            # Only now. A crash before this point redelivers the whole
+            # message, and whatever already happened (a ghost drop, a
+            # resolved log, an escalation) is safely re-run — the
+            # read-then-conditionally-write shape is naturally idempotent,
+            # unlike the publisher's INSERT path.
+            await consumer.commit(message=message, asynchronous=False)
 
 
 async def _serve() -> None:
     config = load_config()
     agent = load_agent_config()
     check_startup_config(config)
+    tracer_provider = init_tracer("reimbursement-analyzer-reimbursement", config.tracing.otlp_endpoint)
 
     stopping = asyncio.Event()
     install_shutdown_handlers(stopping)
@@ -99,6 +105,7 @@ async def _serve() -> None:
         logger.info("agent consuming %s", REIMBURSEMENT_TOPIC)
         deps = Dependencies(config=config, agent=agent, pool=pool, producer=producer)
         await run(deps, consumer, stopping)
+        await shutdown_tracer_async(tracer_provider)
 
 
 def main() -> None:

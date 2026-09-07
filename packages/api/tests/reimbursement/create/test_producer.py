@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -18,9 +19,21 @@ pytestmark = pytest.mark.anyio
 SAMPLE_JSON_PATH = Path(__file__).resolve().parents[5] / "docs" / "original" / "sample.json"
 
 
+class _NeverResolvesFakeSyncProducer:
+    """The delivery callback never fires; flush() reports the message still
+    queued after the timeout elapses."""
+
+    def produce(self, *, topic: str, value: bytes | None = None, **kwargs: object) -> None:
+        pass
+
+    def flush(self, timeout: float) -> int:
+        return 1
+
+
 class _NeverResolvesFakeProducer:
-    async def produce(self, topic: str, value: bytes | None = None, **kwargs: object):
-        return asyncio.get_running_loop().create_future()
+    def __init__(self) -> None:
+        self._producer = _NeverResolvesFakeSyncProducer()
+        self.executor = ThreadPoolExecutor(max_workers=4)
 
 
 class DescribeBuildEnvelope:
@@ -159,7 +172,11 @@ class DescribePublish:
     ) -> None:
         fake = immediate_fake_producer_class(error=RuntimeError("Local: Message timed out"))
 
-        with pytest.raises(PublishFailed, match="RuntimeError: Local: Message timed out"):
+        # No "RuntimeError:" prefix in the match: shared.producer.publish now
+        # wraps delivery errors as KafkaException(err) before formatting
+        # f"{type(exc).__name__}: {exc}", so the original exception's type
+        # name genuinely no longer appears.
+        with pytest.raises(PublishFailed, match="Local: Message timed out"):
             await publish(fake, b"[]", ["REQ-1"], kafka_config)
 
     async def it_forwards_the_configured_publish_timeout(self, kafka_config: KafkaConfig) -> None:
