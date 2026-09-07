@@ -119,6 +119,8 @@ _RECORD_HUMAN_REVIEW_DECISION = """
 
 _DELETE_PENDING = "DELETE FROM reimbursement WHERE uuid = $1 AND status = 'pending'"
 
+_COUNT_BY_STATUS = "SELECT status, count(*) AS count FROM reimbursement GROUP BY status"
+
 
 def _columns(item: dict[str, Any]) -> tuple[Any, ...]:
     # The three identity columns come from the *validated* model, not the
@@ -271,6 +273,13 @@ async def delete_pending(conn: asyncpg.Connection, uuid: UUID) -> bool:
     `UPDATE n`."""
     result = await conn.execute(_DELETE_PENDING, uuid)
     return result == "DELETE 1"
+
+
+async def count_by_status(conn: asyncpg.Connection) -> list[asyncpg.Record]:
+    """One row per status currently present; a status with zero rows is
+    simply absent — the caller (api.metrics.refresh_status_gauge)
+    zero-fills against the full CHECK-constraint status list."""
+    return await conn.fetch(_COUNT_BY_STATUS)
 
 
 def is_duplicate(exc: BaseException) -> bool:
