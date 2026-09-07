@@ -7,8 +7,10 @@ from agent_fakes import FakeAcquirePool, FakeApplyDecision
 from reimbursement.agent.nodes import apply_policies as apply_policies_module
 from reimbursement.agent.nodes.apply_policies import (
     ApplyPolicies,
+    PolicyRule,
     route_after_apply_policies,
 )
+from reimbursement.metrics import reimbursement_policy_rule_triggered_total
 from reimbursement.models import Reimbursement
 
 pytestmark = pytest.mark.anyio
@@ -175,6 +177,93 @@ class DescribeApplyPolicies:
         result = await node(state, _config(object()))
 
         assert result["status"] == "auto-rejected"
+
+
+class DescribePolicyRuleTriggeredMetric:
+    async def it_increments_the_stale_receipt_reject_label_when_that_rule_fires(self) -> None:
+        fake = FakeApplyDecision(result=uuid4())
+        node = ApplyPolicies(apply_decision=fake)
+        state = _state(value=5000, receipts_date=date(2026, 1, 9))  # 91 days old
+        before = reimbursement_policy_rule_triggered_total.labels(
+            PolicyRule.STALE_RECEIPT_REJECT.value
+        )._value.get()
+
+        result = await node(state, _config(object()))
+
+        assert result["status"] == "auto-rejected"
+        after = reimbursement_policy_rule_triggered_total.labels(
+            PolicyRule.STALE_RECEIPT_REJECT.value
+        )._value.get()
+        assert after == before + 1
+
+    async def it_increments_the_low_value_auto_approve_label_when_that_rule_fires(self) -> None:
+        fake = FakeApplyDecision(result=uuid4())
+        node = ApplyPolicies(apply_decision=fake)
+        state = _state(value=150, receipts_date=date(2026, 4, 1))
+        before = reimbursement_policy_rule_triggered_total.labels(
+            PolicyRule.LOW_VALUE_AUTO_APPROVE.value
+        )._value.get()
+
+        result = await node(state, _config(object()))
+
+        assert result["status"] == "auto-approved"
+        after = reimbursement_policy_rule_triggered_total.labels(
+            PolicyRule.LOW_VALUE_AUTO_APPROVE.value
+        )._value.get()
+        assert after == before + 1
+
+    async def it_increments_the_high_value_human_review_label_when_that_rule_fires(self) -> None:
+        fake = FakeApplyDecision(result=uuid4())
+        node = ApplyPolicies(apply_decision=fake)
+        state = _state(value=2000.01, receipts_date=date(2026, 4, 1))
+        before = reimbursement_policy_rule_triggered_total.labels(
+            PolicyRule.HIGH_VALUE_HUMAN_REVIEW.value
+        )._value.get()
+
+        result = await node(state, _config(object()))
+
+        assert result["status"] == "human-review"
+        after = reimbursement_policy_rule_triggered_total.labels(
+            PolicyRule.HIGH_VALUE_HUMAN_REVIEW.value
+        )._value.get()
+        assert after == before + 1
+
+    async def it_does_not_increment_any_rule_label_on_the_llm_judgment_path(self) -> None:
+        fake = FakeApplyDecision(result=uuid4())
+        node = ApplyPolicies(apply_decision=fake)
+        state = _state(value=1000, receipts_date=date(2026, 4, 1))
+        before = {
+            rule.value: reimbursement_policy_rule_triggered_total.labels(rule.value)._value.get()
+            for rule in PolicyRule
+        }
+
+        result = await node(state, _config(object()))
+
+        assert result == {"requires_llm_judgment": True}
+        for rule in PolicyRule:
+            assert (
+                reimbursement_policy_rule_triggered_total.labels(rule.value)._value.get()
+                == before[rule.value]
+            )
+
+    async def it_increments_exactly_once_regardless_of_the_dbs_write_outcome(self) -> None:
+        # A ghost apply_decision write (persisted=False) still means the
+        # rule genuinely fired — the counter tracks rule evaluation, not the
+        # DB write's success.
+        fake = FakeApplyDecision(result=None)
+        node = ApplyPolicies(apply_decision=fake)
+        state = _state(value=150, receipts_date=date(2026, 4, 1))
+        before = reimbursement_policy_rule_triggered_total.labels(
+            PolicyRule.LOW_VALUE_AUTO_APPROVE.value
+        )._value.get()
+
+        result = await node(state, _config(object()))
+
+        assert result["persisted"] is False
+        after = reimbursement_policy_rule_triggered_total.labels(
+            PolicyRule.LOW_VALUE_AUTO_APPROVE.value
+        )._value.get()
+        assert after == before + 1
 
 
 class DescribeRouteAfterApplyPolicies:
