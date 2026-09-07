@@ -2,8 +2,8 @@
 
 ## Run State
 
-- status: in-progress
-- last_completed_step: 11
+- status: complete
+- last_completed_step: 15
 - worktree_path: .claude/worktrees/RA-3-prometheus-metrics-mvp
 - branch: feature/RA-3_prometheus-metrics-mvp
 - base_branch: main
@@ -32,3 +32,7 @@
 - Step 9 (execute): done — 19/19 tasks committed; Verifier: PASS (27/27 ACs, 3/3 mutations killed, 754 passed/3 pre-existing failures confirmed unrelated)
 - Step 10 (push + PR description): done — pushed 19 commits (60811b2..d4eeb00), PR #3 description rewritten with problem/what-was-done/test-results
 - Step 11 (complete-review, subagent): done — 21 findings published as pending review (5 High, 9 Medium, 7 Low); review submitted by this skill (human_review=no)
+- Step 12 (fix-review, subagent): done — 13 fixed+resolved, 0 answered-only, 0 rejected, 8 blocked (deferred, design-choice items, no reply required per spec) — verified via independent GraphQL re-fetch: 21 total, 13 resolved, 8 open
+- Step 13 (architecture-evaluate, Incremental): done — 6 files updated (ARCHITECTURE, STACK, INTEGRATIONS, TESTING, STRUCTURE, README), committed e980496 and pushed
+- Step 14 (design-sync handoff, nothing run here): done — skipped (no .design-sync/config.json)
+- Step 15 (merge check + mark ready): done — merge_check: resolved (9 files, merge commit 733695b) ; ready: done
