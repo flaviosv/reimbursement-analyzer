@@ -23,6 +23,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import Tracer
+from prometheus_client import Counter, Gauge, Histogram
 
 
 class ThreadSafeAsyncEvent:
@@ -98,6 +99,31 @@ def in_memory_tracer() -> tuple[Tracer, InMemorySpanExporter]:
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     return provider.get_tracer(__name__), exporter
+
+
+def metric_value(metric: Counter | Gauge, *labels: str) -> float:
+    """Current value of a Counter or Gauge — or, if `labels` is given, of one
+    of its label children — read from the same public `.collect()` sample
+    `/metrics` itself serializes, instead of the private `._value` internal.
+    Previously hand-copied as `<metric>.labels(...)._value.get()` across
+    every service's metrics tests."""
+    child = metric.labels(*labels) if labels else metric
+    (family,) = child.collect()
+    (sample,) = (s for s in family.samples if not s.name.endswith("_created"))
+    return sample.value
+
+
+def histogram_sample_count(histogram: Histogram, *labels: str) -> float:
+    """Total number of `.observe()` calls recorded so far on a Histogram —
+    or, if `labels` is given, on one of its label children — read from the
+    same public `_count` sample `/metrics` itself serializes, instead of
+    summing the private per-bucket `_buckets` internals. Previously
+    duplicated (as `_histogram_count`/`_observation_count`) across four
+    services' own metrics tests."""
+    child = histogram.labels(*labels) if labels else histogram
+    (family,) = child.collect()
+    (count_sample,) = (s for s in family.samples if s.name.endswith("_count"))
+    return count_sample.value
 
 
 def valid_reimbursement_item(request_id: str = "REQ-0001", **extra: object) -> dict:
