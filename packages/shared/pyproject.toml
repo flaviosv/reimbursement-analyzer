@@ -12,6 +12,7 @@ dependencies = [
     "ecs-logging>=2.3.0",
     # [email] pulls email-validator, which EmailStr requires at import time.
     "pydantic[email]>=2.13.4",
+    "prometheus-client>=0.24.1",
 ]
 
 [build-system]
