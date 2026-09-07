@@ -41,16 +41,26 @@ class DescribeStartMetricsServer:
         port = _free_port()
 
         with caplog.at_level(logging.INFO, logger="shared.metrics"):
-            start_metrics_server(port)
-
-        assert any(
-            record.levelno == logging.INFO and str(port) in record.getMessage()
-            for record in caplog.records
-        )
+            server, thread = start_metrics_server(port)
+        try:
+            assert any(
+                record.levelno == logging.INFO and str(port) in record.getMessage()
+                for record in caplog.records
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=1)
 
     def it_raises_when_the_port_is_already_in_use(self) -> None:
-        port = _free_port()
-        start_metrics_server(port)
+        # A plain bound socket already occupies the port — this exercises
+        # the same OSError-on-bind-failure path without starting a second
+        # real prometheus_client HTTP server (and its background thread)
+        # just to make it collide with the first.
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as blocker:
+            blocker.bind(("0.0.0.0", 0))
+            blocker.listen(1)
+            port = blocker.getsockname()[1]
 
-        with pytest.raises(OSError):
-            start_metrics_server(port)
+            with pytest.raises(OSError):
+                start_metrics_server(port)

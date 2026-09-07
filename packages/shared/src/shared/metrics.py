@@ -7,6 +7,8 @@ import time — never per-request/per-call — so re-importing this module never
 raises `prometheus_client`'s duplicate-registration error."""
 
 import logging
+import threading
+from wsgiref.simple_server import WSGIServer
 
 from prometheus_client import Counter, start_http_server
 
@@ -25,11 +27,16 @@ reimbursement_status_transitions_total = Counter(
 )
 
 
-def start_metrics_server(port: int) -> None:
+def start_metrics_server(port: int) -> tuple[WSGIServer, threading.Thread]:
     """Starts a dedicated Prometheus metrics HTTP server on `port`, serving
     `/metrics` off the process's default registry. Raises on bind failure
     (e.g. port already in use) rather than swallowing it — consistent with
     `check_startup_config()`'s existing fail-fast-at-boot convention in both
-    `publisher` and `reimbursement`."""
-    start_http_server(port)
+    `publisher` and `reimbursement`. Returns the underlying (server, thread)
+    pair so a caller that needs to tear it down — a test, chiefly, since
+    production entrypoints let it run for the life of the process — can call
+    `server.shutdown()` / `server.server_close()` instead of leaking the
+    socket and thread."""
+    server, thread = start_http_server(port)
     logger.info("metrics server listening on port %s", port)
+    return server, thread
