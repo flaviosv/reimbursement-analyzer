@@ -28,6 +28,7 @@ from shared.reimbursement.use_cases.publish_pending import publish_pending
 from shared.reimbursement.use_cases.send_human_review import send_human_review
 
 from publisher.config import PublisherConfig
+from publisher.metrics import publisher_duplicate_dropped_total, publisher_messages_requeued_total
 
 logger = logging.getLogger(__name__)
 
@@ -362,6 +363,7 @@ async def _requeue(
             ),
         )
         return ItemOutcome.LOGGED
+    publisher_messages_requeued_total.labels(REQUEST_TOPIC).inc()
     return ItemOutcome.REQUEUED
 
 
@@ -369,6 +371,7 @@ def _log_duplicate(envelope: RequestEnvelope, item: dict[str, Any], exc: BaseExc
     """Emit the drop as a countable structured event: a system discarding
     thousands of requests must not look identical to one discarding none
     (R-004's interim mitigation)."""
+    publisher_duplicate_dropped_total.inc()
     logger.info(
         "%s",
         _LazyJSON(

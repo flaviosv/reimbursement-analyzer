@@ -30,6 +30,7 @@ from shared.logging import get_correlation_id
 from shared.models import AttemptError, RequestEnvelope, Stage
 from shared.reimbursement.repository import insert_pending
 import shared.reimbursement.use_cases.publish_pending as publish_pending_module
+from publisher.metrics import publisher_duplicate_dropped_total, publisher_messages_requeued_total
 
 pytestmark = pytest.mark.anyio
 
@@ -649,6 +650,62 @@ class DescribeTheRequeue:
         assert outcome is ItemOutcome.REQUEUED
         errors = producer.messages(REQUEST_TOPIC)[0]["errors"]
         assert errors[0]["error_type"] == "RuntimeError"
+
+
+class DescribeMessageLifecycleMetrics:
+    async def it_increments_duplicate_dropped_when_a_duplicate_is_detected(
+        self, db: asyncpg.Connection
+    ) -> None:
+        await insert_pending(db, valid_reimbursement_item("REQ-METRIC-DUP"))
+        item = valid_reimbursement_item("REQ-METRIC-DUP")
+        before = publisher_duplicate_dropped_total._value.get()
+
+        outcome = await process_item(
+            _deps(RealPool(db), FakeProducer()), _envelope([item]), 0, item
+        )
+
+        assert outcome is ItemOutcome.DUPLICATE
+        assert publisher_duplicate_dropped_total._value.get() == before + 1
+
+    async def it_increments_duplicate_dropped_exactly_once_via_the_escalation_path_too(
+        self, db: asyncpg.Connection
+    ) -> None:
+        await insert_pending(db, valid_reimbursement_item("REQ-METRIC-DUP-ESCALATE"))
+        item = valid_reimbursement_item("REQ-METRIC-DUP-ESCALATE")
+        before = publisher_duplicate_dropped_total._value.get()
+
+        outcome = await processing.escalate_item(
+            _deps(RealPool(db), FakeProducer()), _envelope([item]), 0, item
+        )
+
+        assert outcome is ItemOutcome.DUPLICATE
+        assert publisher_duplicate_dropped_total._value.get() == before + 1
+
+    async def it_increments_messages_requeued_with_the_request_topic_label_on_a_transient_failure(
+        self,
+    ) -> None:
+        item = valid_reimbursement_item("REQ-METRIC-REQUEUE")
+        pool = FakePool(insert_errors={"REQ-METRIC-REQUEUE": asyncpg.PostgresConnectionError("reset")})
+        before = publisher_messages_requeued_total.labels(REQUEST_TOPIC)._value.get()
+
+        outcome = await process_item(_deps(pool, FakeProducer()), _envelope([item]), 0, item)
+
+        assert outcome is ItemOutcome.REQUEUED
+        after = publisher_messages_requeued_total.labels(REQUEST_TOPIC)._value.get()
+        assert after == before + 1
+
+    async def it_does_not_increment_messages_requeued_when_the_requeue_publish_itself_fails(
+        self,
+    ) -> None:
+        item = valid_reimbursement_item("REQ-METRIC-REQUEUE-FAIL")
+        pool = FakePool(insert_errors={"REQ-METRIC-REQUEUE-FAIL": asyncpg.PostgresConnectionError("reset")})
+        producer = FakeProducer(errors={REQUEST_TOPIC: RuntimeError("broker unreachable")})
+        before = publisher_messages_requeued_total.labels(REQUEST_TOPIC)._value.get()
+
+        outcome = await process_item(_deps(pool, producer), _envelope([item]), 0, item)
+
+        assert outcome is ItemOutcome.LOGGED
+        assert publisher_messages_requeued_total.labels(REQUEST_TOPIC)._value.get() == before
 
 
 def _invalid_item(request_id: str = "REQ-INVALID") -> dict[str, Any]:
