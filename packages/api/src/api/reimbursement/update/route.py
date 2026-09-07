@@ -121,8 +121,12 @@ async def put_reimbursement(
     from_status = decision_row["from_status"]
     reimbursement_status_transitions_total.labels(from_status, row["status"]).inc()
     if from_status == "human-review":
+        # Clamped to 0 for the same reason as reimbursement_time_to_decision_seconds
+        # (reimbursement/validation.py): clock skew or a malformed
+        # from_updated_at could otherwise silently record a negative-latency
+        # observation — Prometheus does not reject it.
         wait_seconds = (datetime.now(UTC) - decision_row["from_updated_at"]).total_seconds()
-        reimbursement_review_wait_seconds.observe(wait_seconds)
+        reimbursement_review_wait_seconds.observe(max(0.0, wait_seconds))
 
     log_event(
         logger,

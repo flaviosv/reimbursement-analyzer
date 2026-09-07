@@ -126,6 +126,16 @@ def histogram_sample_count(histogram: Histogram, *labels: str) -> float:
     return count_sample.value
 
 
+def histogram_sample_sum(histogram: Histogram, *labels: str) -> float:
+    """Sum of every value `.observe()`d so far on a Histogram — or, if
+    `labels` is given, on one of its label children — read from the public
+    `_sum` sample `/metrics` itself serializes."""
+    child = histogram.labels(*labels) if labels else histogram
+    (family,) = child.collect()
+    (sum_sample,) = (s for s in family.samples if s.name.endswith("_sum"))
+    return sum_sample.value
+
+
 def valid_reimbursement_item(request_id: str = "REQ-0001", **extra: object) -> dict:
     """The canonical minimal-valid POST /api/v1/reimbursement item shape —
     a single source of truth across api's, publisher's, and reimbursement's

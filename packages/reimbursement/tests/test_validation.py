@@ -16,7 +16,7 @@ from reimbursement.validation import Dependencies, MessageOutcome, handle_messag
 from shared.config import REIMBURSEMENT_TOPIC, load_config
 from shared.logging import get_correlation_id
 from shared.models import AttemptError, ReimbursementEnvelope
-from shared.testing import in_memory_tracer
+from shared.testing import histogram_sample_count, histogram_sample_sum, in_memory_tracer
 
 pytestmark = pytest.mark.anyio
 
@@ -737,7 +737,7 @@ class DescribeDecideIntegration:
 
 
 def _histogram_count(histogram: object) -> float:
-    return sum(bucket.get() for bucket in histogram._buckets)
+    return histogram_sample_count(histogram)
 
 
 class DescribeMessageLifecycleMetrics:
@@ -775,6 +775,24 @@ class DescribeMessageLifecycleMetrics:
 
         assert outcome == MessageOutcome.RESOLVED
         assert _histogram_count(reimbursement_time_to_decision_seconds) == before
+
+    async def it_clamps_time_to_decision_to_zero_when_created_at_is_in_the_future(self) -> None:
+        # Clock skew across containers (or a malformed created_at) could put
+        # created_at after now() — this must not silently feed a negative
+        # value into .observe().
+        uuid = uuid4()
+        future_created_at = datetime(2099, 1, 1, tzinfo=UTC)
+        pool = FakePool(rows={uuid: _row(uuid=uuid, created_at=future_created_at)})
+        deps = _deps(pool=pool)
+        envelope = _envelope(uuid=uuid, retry=0, published_at=future_created_at)
+        count_before = _histogram_count(reimbursement_time_to_decision_seconds)
+        sum_before = histogram_sample_sum(reimbursement_time_to_decision_seconds)
+
+        outcome = await handle_message(deps, envelope.model_dump_json().encode())
+
+        assert outcome == MessageOutcome.RESOLVED
+        assert _histogram_count(reimbursement_time_to_decision_seconds) == count_before + 1
+        assert histogram_sample_sum(reimbursement_time_to_decision_seconds) == sum_before
 
     async def it_increments_failure_escalations_exactly_once_on_a_decision_stage_failure(
         self, monkeypatch: pytest.MonkeyPatch

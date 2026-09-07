@@ -219,9 +219,12 @@ async def _decide(
         )
     )
     if final_state.get("persisted"):
-        reimbursement_time_to_decision_seconds.observe(
-            (datetime.now(UTC) - row["created_at"]).total_seconds()
-        )
+        # Clamped to 0: clock skew across containers, or a malformed
+        # created_at, could otherwise feed a negative value into .observe()
+        # — Prometheus does not reject it, so it would silently record a
+        # nonsensical negative-latency point.
+        time_to_decision_seconds = (datetime.now(UTC) - row["created_at"]).total_seconds()
+        reimbursement_time_to_decision_seconds.observe(max(0.0, time_to_decision_seconds))
     return MessageOutcome.RESOLVED
 
 
