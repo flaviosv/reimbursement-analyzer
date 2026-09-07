@@ -64,7 +64,7 @@ Copied verbatim from `grilling-session.md`'s approved table. No metric here may 
 | 8 | `reimbursement_agent_node_duration_seconds` | Histogram | reimbursement | node, model | Per-node latency inside the decision graph; `model` populated only for `extract_fields`/`analysis` |
 | 9 | `reimbursement_agent_llm_calls_total` | Counter | reimbursement | model, outcome | LLM invocations, by model and success/failure |
 | 10 | `reimbursement_policy_rule_triggered_total` | Counter | reimbursement | rule | Which deterministic policy rule fired |
-| 11 | `reimbursement_decision_failure_escalations_total` | Counter | reimbursement | — | Decisions force-escalated to human-review after the LLM/agent pipeline failed and retries were exhausted |
+| 11 | `reimbursement_decision_failure_escalations_total` | Counter | reimbursement | — | Decisions force-escalated to human-review because a single decision-pipeline attempt failed — never retried |
 | 12 | `reimbursement_messages_consumed_total` | Counter | reimbursement | topic | Kafka messages consumed |
 | 13 | `reimbursement_messages_requeued_total` | Counter | reimbursement | topic | Messages requeued after a transient processing failure |
 | 14 | `publisher_messages_consumed_total` | Counter | publisher | topic | Kafka messages consumed |

@@ -1,14 +1,11 @@
-"""Establishes the request's `correlation_id` for the full span of the
-request — before the route handler runs, and before any error handler that
-might run instead of it.
+"""Raw ASGI middleware classes used by the app's main factory, avoiding
+`BaseHTTPMiddleware`/`@app.middleware("http")` due to Starlette's documented
+edge cases with ContextVar propagation and streaming responses.
 
-A raw ASGI middleware class, not `BaseHTTPMiddleware`/`@app.middleware
-("http")`: Starlette's `BaseHTTPMiddleware` has a documented history of
-subtle `ContextVar` propagation edge cases around its internal task-group/
-streaming-response handling, which this feature's CORR-06 (never leak one
-request's correlation_id onto another's logs) cannot risk. This class sets
-the ContextVar directly in the same coroutine that awaits the downstream
-app, with no intermediate task-group hop."""
+- `CorrelationIdMiddleware`: Establishes the request's `correlation_id` for
+  the full span, never leaking one request's correlation_id onto another's logs.
+- `MetricsMiddleware`: Records HTTP RED metrics (`requests_total`,
+  `request_duration_seconds`) for every request."""
 
 import time
 import uuid
@@ -25,6 +22,7 @@ Receive = Callable[[], Awaitable[Message]]
 Send = Callable[[Message], Awaitable[None]]
 
 _HEADER_NAME = b"x-request-id"
+_KNOWN_METHODS = frozenset(("GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"))
 
 
 def _extract_or_generate_correlation_id(scope: Scope) -> str:
@@ -84,7 +82,7 @@ class MetricsMiddleware:
             await self.app(scope, receive, send)
             return
 
-        method = scope["method"]
+        method = scope["method"] if scope["method"] in _KNOWN_METHODS else UNMATCHED_PATH_LABEL
         # Defensive fallback: `errors.py`'s `add_exception_handler(Exception,
         # ...)` catch-all means nearly every response, including unhandled
         # exceptions, already produces a clean `http.response.start` before

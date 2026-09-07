@@ -23,7 +23,7 @@ Metric Catalog — no renames, no additions, no omissions.
 | 8 | `reimbursement_agent_node_duration_seconds` | Histogram | reimbursement | node, model | Per-node latency inside the decision graph; `model` populated only for `extract_fields`/`analysis` | `reimbursement`'s `METRICS_PORT` (default `9102`) |
 | 9 | `reimbursement_agent_llm_calls_total` | Counter | reimbursement | model, outcome | LLM invocations, by model and success/failure | `reimbursement`'s `METRICS_PORT` (default `9102`) |
 | 10 | `reimbursement_policy_rule_triggered_total` | Counter | reimbursement | rule | Which deterministic policy rule fired | `reimbursement`'s `METRICS_PORT` (default `9102`) |
-| 11 | `reimbursement_decision_failure_escalations_total` | Counter | reimbursement | — | Decisions force-escalated to human-review after the LLM/agent pipeline failed and retries were exhausted | `reimbursement`'s `METRICS_PORT` (default `9102`) |
+| 11 | `reimbursement_decision_failure_escalations_total` | Counter | reimbursement | — | Decisions force-escalated to human-review because a single decision-pipeline attempt failed — never retried | `reimbursement`'s `METRICS_PORT` (default `9102`) |
 | 12 | `reimbursement_messages_consumed_total` | Counter | reimbursement | topic | Kafka messages consumed | `reimbursement`'s `METRICS_PORT` (default `9102`) |
 | 13 | `reimbursement_messages_requeued_total` | Counter | reimbursement | topic | Messages requeued after a transient processing failure | `reimbursement`'s `METRICS_PORT` (default `9102`) |
 | 14 | `publisher_messages_consumed_total` | Counter | publisher | topic | Kafka messages consumed | `publisher`'s `METRICS_PORT` (default `9101`) |

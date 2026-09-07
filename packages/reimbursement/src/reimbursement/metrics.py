@@ -49,7 +49,7 @@ reimbursement_policy_rule_triggered_total = Counter(
 
 reimbursement_decision_failure_escalations_total = Counter(
     "reimbursement_decision_failure_escalations",
-    "Decisions force-escalated to human-review after the LLM/agent pipeline failed and retries were exhausted",
+    "Decisions force-escalated to human-review because a single decision-pipeline attempt failed — never retried",
 )
 
 reimbursement_messages_consumed_total = Counter(
