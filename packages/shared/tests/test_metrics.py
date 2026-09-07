@@ -3,6 +3,7 @@ import socket
 
 import pytest
 from shared.metrics import reimbursement_status_transitions_total, start_metrics_server
+from shared.testing import metric_value
 
 
 def _free_port() -> int:
@@ -18,19 +19,19 @@ class DescribeReimbursementStatusTransitionsTotal:
     def it_accepts_positional_labels_in_from_to_order(self) -> None:
         # `from` is a Python reserved word — every call site must use
         # positional .labels(value, value), never .labels(from=..., to=...).
-        before = reimbursement_status_transitions_total.labels("pending", "auto-approved")._value.get()
+        before = metric_value(reimbursement_status_transitions_total, "pending", "auto-approved")
 
         reimbursement_status_transitions_total.labels("pending", "auto-approved").inc()
 
-        after = reimbursement_status_transitions_total.labels("pending", "auto-approved")._value.get()
+        after = metric_value(reimbursement_status_transitions_total, "pending", "auto-approved")
         assert after == before + 1
 
     def it_increments_on_inc(self) -> None:
-        before = reimbursement_status_transitions_total.labels("pending", "auto-rejected")._value.get()
+        before = metric_value(reimbursement_status_transitions_total, "pending", "auto-rejected")
 
         reimbursement_status_transitions_total.labels("pending", "auto-rejected").inc()
 
-        after = reimbursement_status_transitions_total.labels("pending", "auto-rejected")._value.get()
+        after = metric_value(reimbursement_status_transitions_total, "pending", "auto-rejected")
         assert after == before + 1
 
 

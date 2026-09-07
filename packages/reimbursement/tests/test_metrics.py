@@ -8,6 +8,7 @@ from reimbursement.metrics import (
     reimbursement_policy_rule_triggered_total,
     reimbursement_time_to_decision_seconds,
 )
+from shared.testing import histogram_sample_count, metric_value
 
 
 class DescribeReimbursementAgentDecisionDurationSeconds:
@@ -20,11 +21,11 @@ class DescribeReimbursementAgentDecisionDurationSeconds:
         ]
 
     def it_can_observe_a_positive_float(self) -> None:
-        before = sum(bucket.get() for bucket in reimbursement_agent_decision_duration_seconds._buckets)
+        before = histogram_sample_count(reimbursement_agent_decision_duration_seconds)
 
         reimbursement_agent_decision_duration_seconds.observe(1.5)
 
-        after = sum(bucket.get() for bucket in reimbursement_agent_decision_duration_seconds._buckets)
+        after = histogram_sample_count(reimbursement_agent_decision_duration_seconds)
         assert after == before + 1
 
 
@@ -47,11 +48,11 @@ class DescribeReimbursementTimeToDecisionSeconds:
         )
 
     def it_can_observe_a_positive_float(self) -> None:
-        before = sum(bucket.get() for bucket in reimbursement_time_to_decision_seconds._buckets)
+        before = histogram_sample_count(reimbursement_time_to_decision_seconds)
 
         reimbursement_time_to_decision_seconds.observe(42.0)
 
-        after = sum(bucket.get() for bucket in reimbursement_time_to_decision_seconds._buckets)
+        after = histogram_sample_count(reimbursement_time_to_decision_seconds)
         assert after == before + 1
 
 
@@ -66,20 +67,20 @@ class DescribeReimbursementAgentNodeDurationSeconds:
 
     def it_can_observe_with_an_empty_model_label_for_non_llm_nodes(self) -> None:
         child = reimbursement_agent_node_duration_seconds.labels("validate", "")
-        before = sum(bucket.get() for bucket in child._buckets)
+        before = histogram_sample_count(child)
 
         child.observe(0.2)
 
-        after = sum(bucket.get() for bucket in child._buckets)
+        after = histogram_sample_count(child)
         assert after == before + 1
 
     def it_can_observe_with_a_populated_model_label_for_llm_nodes(self) -> None:
         child = reimbursement_agent_node_duration_seconds.labels("extract_fields", "llama-3.3-70b")
-        before = sum(bucket.get() for bucket in child._buckets)
+        before = histogram_sample_count(child)
 
         child.observe(0.8)
 
-        after = sum(bucket.get() for bucket in child._buckets)
+        after = histogram_sample_count(child)
         assert after == before + 1
 
 
@@ -88,11 +89,11 @@ class DescribeReimbursementAgentLlmCallsTotal:
         assert reimbursement_agent_llm_calls_total._labelnames == ("model", "outcome")
 
     def it_increments_with_labels(self) -> None:
-        before = reimbursement_agent_llm_calls_total.labels("model-a", "success")._value.get()
+        before = metric_value(reimbursement_agent_llm_calls_total, "model-a", "success")
 
         reimbursement_agent_llm_calls_total.labels("model-a", "success").inc()
 
-        after = reimbursement_agent_llm_calls_total.labels("model-a", "success")._value.get()
+        after = metric_value(reimbursement_agent_llm_calls_total, "model-a", "success")
         assert after == before + 1
 
 
@@ -101,11 +102,11 @@ class DescribeReimbursementPolicyRuleTriggeredTotal:
         assert reimbursement_policy_rule_triggered_total._labelnames == ("rule",)
 
     def it_increments_with_a_label(self) -> None:
-        before = reimbursement_policy_rule_triggered_total.labels("stale-receipt-reject")._value.get()
+        before = metric_value(reimbursement_policy_rule_triggered_total, "stale-receipt-reject")
 
         reimbursement_policy_rule_triggered_total.labels("stale-receipt-reject").inc()
 
-        after = reimbursement_policy_rule_triggered_total.labels("stale-receipt-reject")._value.get()
+        after = metric_value(reimbursement_policy_rule_triggered_total, "stale-receipt-reject")
         assert after == before + 1
 
 
@@ -114,11 +115,11 @@ class DescribeReimbursementDecisionFailureEscalationsTotal:
         assert reimbursement_decision_failure_escalations_total._labelnames == ()
 
     def it_increments_without_labels(self) -> None:
-        before = reimbursement_decision_failure_escalations_total._value.get()
+        before = metric_value(reimbursement_decision_failure_escalations_total)
 
         reimbursement_decision_failure_escalations_total.inc()
 
-        after = reimbursement_decision_failure_escalations_total._value.get()
+        after = metric_value(reimbursement_decision_failure_escalations_total)
         assert after == before + 1
 
 
@@ -127,11 +128,11 @@ class DescribeReimbursementMessagesConsumedTotal:
         assert reimbursement_messages_consumed_total._labelnames == ("topic",)
 
     def it_increments_with_a_label(self) -> None:
-        before = reimbursement_messages_consumed_total.labels("Reimbursement")._value.get()
+        before = metric_value(reimbursement_messages_consumed_total, "Reimbursement")
 
         reimbursement_messages_consumed_total.labels("Reimbursement").inc()
 
-        after = reimbursement_messages_consumed_total.labels("Reimbursement")._value.get()
+        after = metric_value(reimbursement_messages_consumed_total, "Reimbursement")
         assert after == before + 1
 
 
@@ -140,9 +141,9 @@ class DescribeReimbursementMessagesRequeuedTotal:
         assert reimbursement_messages_requeued_total._labelnames == ("topic",)
 
     def it_increments_with_a_label(self) -> None:
-        before = reimbursement_messages_requeued_total.labels("Reimbursement")._value.get()
+        before = metric_value(reimbursement_messages_requeued_total, "Reimbursement")
 
         reimbursement_messages_requeued_total.labels("Reimbursement").inc()
 
-        after = reimbursement_messages_requeued_total.labels("Reimbursement")._value.get()
+        after = metric_value(reimbursement_messages_requeued_total, "Reimbursement")
         assert after == before + 1

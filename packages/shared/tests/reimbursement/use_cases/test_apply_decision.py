@@ -7,7 +7,7 @@ import pytest
 from shared.metrics import reimbursement_status_transitions_total
 from shared.reimbursement.repository import insert_pending
 from shared.reimbursement.use_cases.apply_decision import apply_decision
-from shared.testing import valid_reimbursement_item
+from shared.testing import metric_value, valid_reimbursement_item
 
 pytestmark = pytest.mark.anyio
 
@@ -90,21 +90,21 @@ class DescribeApplyDecisionStatusTransitionsMetric:
         self, db: asyncpg.Connection
     ) -> None:
         uuid = await insert_pending(db, valid_reimbursement_item("REQ-APPLY-METRIC-INC"))
-        before = reimbursement_status_transitions_total.labels("pending", "auto-approved")._value.get()
+        before = metric_value(reimbursement_status_transitions_total, "pending", "auto-approved")
 
         result = await apply_decision(db, uuid, "auto-approved", "value 150 <= 200 threshold")
 
         assert result == uuid
-        after = reimbursement_status_transitions_total.labels("pending", "auto-approved")._value.get()
+        after = metric_value(reimbursement_status_transitions_total, "pending", "auto-approved")
         assert after == before + 1
 
     async def it_does_not_increment_status_transitions_total_for_a_ghost_uuid(
         self, db: asyncpg.Connection
     ) -> None:
-        before = reimbursement_status_transitions_total.labels("pending", "human-review")._value.get()
+        before = metric_value(reimbursement_status_transitions_total, "pending", "human-review")
 
         result = await apply_decision(db, uuid4(), "human-review", "unreachable reason")
 
         assert result is None
-        after = reimbursement_status_transitions_total.labels("pending", "human-review")._value.get()
+        after = metric_value(reimbursement_status_transitions_total, "pending", "human-review")
         assert after == before

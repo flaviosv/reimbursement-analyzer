@@ -7,6 +7,7 @@ from reimbursement.agent.nodes.analysis import Analysis, GuardrailVerdict
 from reimbursement.agent.prompts.analysis import get_analysis_prompt
 from reimbursement.metrics import reimbursement_agent_llm_calls_total
 from reimbursement.models import Reimbursement
+from shared.testing import metric_value
 
 pytestmark = pytest.mark.anyio
 
@@ -111,15 +112,15 @@ class DescribeAnalysis:
     async def it_increments_the_llm_calls_counter_with_outcome_success(self) -> None:
         model = FakeStructuredModel(result=GuardrailVerdict(status="auto-approved", reason="ok"))
         node = Analysis(model=model, model_name=DEFAULT_TEST_MODEL_NAME)
-        before = reimbursement_agent_llm_calls_total.labels(
+        before = metric_value(reimbursement_agent_llm_calls_total, 
             DEFAULT_TEST_MODEL_NAME, "success"
-        )._value.get()
+        )
 
         await node(_state(), {"configurable": None})
 
-        after = reimbursement_agent_llm_calls_total.labels(
+        after = metric_value(reimbursement_agent_llm_calls_total, 
             DEFAULT_TEST_MODEL_NAME, "success"
-        )._value.get()
+        )
         assert after == before + 1
 
     async def it_increments_the_llm_calls_counter_with_outcome_failure_and_still_raises(
@@ -127,16 +128,16 @@ class DescribeAnalysis:
     ) -> None:
         model = FakeStructuredModel(error=RuntimeError("groq unreachable"))
         node = Analysis(model=model, model_name=DEFAULT_TEST_MODEL_NAME)
-        before = reimbursement_agent_llm_calls_total.labels(
+        before = metric_value(reimbursement_agent_llm_calls_total, 
             DEFAULT_TEST_MODEL_NAME, "failure"
-        )._value.get()
+        )
 
         with pytest.raises(RuntimeError, match="groq unreachable"):
             await node(_state(), {"configurable": None})
 
-        after = reimbursement_agent_llm_calls_total.labels(
+        after = metric_value(reimbursement_agent_llm_calls_total, 
             DEFAULT_TEST_MODEL_NAME, "failure"
-        )._value.get()
+        )
         assert after == before + 1
 
     async def it_includes_found_datas_mapped_values_in_the_rendered_prompt(self) -> None:

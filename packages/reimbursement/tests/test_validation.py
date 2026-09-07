@@ -16,7 +16,7 @@ from reimbursement.validation import Dependencies, MessageOutcome, handle_messag
 from shared.config import REIMBURSEMENT_TOPIC, load_config
 from shared.logging import get_correlation_id
 from shared.models import AttemptError, ReimbursementEnvelope
-from shared.testing import histogram_sample_count, histogram_sample_sum, in_memory_tracer
+from shared.testing import histogram_sample_count, histogram_sample_sum, in_memory_tracer, metric_value
 
 pytestmark = pytest.mark.anyio
 
@@ -803,12 +803,12 @@ class DescribeMessageLifecycleMetrics:
         deps = _deps(pool=pool)
         envelope = _envelope(uuid=uuid, retry=0, published_at=row_updated_at)
         monkeypatch.setattr(agent, "decide", _failing_decide)
-        before = reimbursement_decision_failure_escalations_total._value.get()
+        before = metric_value(reimbursement_decision_failure_escalations_total)
 
         outcome = await handle_message(deps, envelope.model_dump_json().encode())
 
         assert outcome == MessageOutcome.ESCALATED
-        after = reimbursement_decision_failure_escalations_total._value.get()
+        after = metric_value(reimbursement_decision_failure_escalations_total)
         assert after == before + 1
 
     async def it_does_not_increment_failure_escalations_on_the_retry_ceiling_path(self) -> None:
@@ -819,12 +819,12 @@ class DescribeMessageLifecycleMetrics:
         pool = FakePool(rows={uuid: {"status": "pending"}})
         envelope = _envelope(uuid=uuid, retry=4, errors=[_error(1), _error(2), _error(3), _error(4)])
         deps = _deps(pool=pool)
-        before = reimbursement_decision_failure_escalations_total._value.get()
+        before = metric_value(reimbursement_decision_failure_escalations_total)
 
         outcome = await handle_message(deps, envelope.model_dump_json().encode())
 
         assert outcome == MessageOutcome.ESCALATED
-        assert reimbursement_decision_failure_escalations_total._value.get() == before
+        assert metric_value(reimbursement_decision_failure_escalations_total) == before
 
     async def it_increments_messages_requeued_on_a_successful_republish(self) -> None:
         uuid = uuid4()
@@ -832,12 +832,12 @@ class DescribeMessageLifecycleMetrics:
         producer = FakeProducer()
         deps = _deps(pool=pool, producer=producer)
         envelope = _envelope(uuid=uuid, retry=0, errors=[])
-        before = reimbursement_messages_requeued_total.labels(REIMBURSEMENT_TOPIC)._value.get()
+        before = metric_value(reimbursement_messages_requeued_total, REIMBURSEMENT_TOPIC)
 
         outcome = await handle_message(deps, envelope.model_dump_json().encode())
 
         assert outcome == MessageOutcome.REQUEUED
-        after = reimbursement_messages_requeued_total.labels(REIMBURSEMENT_TOPIC)._value.get()
+        after = metric_value(reimbursement_messages_requeued_total, REIMBURSEMENT_TOPIC)
         assert after == before + 1
 
     async def it_does_not_increment_messages_requeued_when_the_requeue_publish_itself_fails(
@@ -848,9 +848,9 @@ class DescribeMessageLifecycleMetrics:
         producer = FakeProducer(errors={REIMBURSEMENT_TOPIC: Exception("broker unreachable")})
         deps = _deps(pool=pool, producer=producer)
         envelope = _envelope(uuid=uuid, retry=0)
-        before = reimbursement_messages_requeued_total.labels(REIMBURSEMENT_TOPIC)._value.get()
+        before = metric_value(reimbursement_messages_requeued_total, REIMBURSEMENT_TOPIC)
 
         outcome = await handle_message(deps, envelope.model_dump_json().encode())
 
         assert outcome == MessageOutcome.LOGGED
-        assert reimbursement_messages_requeued_total.labels(REIMBURSEMENT_TOPIC)._value.get() == before
+        assert metric_value(reimbursement_messages_requeued_total, REIMBURSEMENT_TOPIC) == before

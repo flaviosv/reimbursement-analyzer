@@ -10,6 +10,7 @@ from api.metrics import (
     reimbursement_status_count,
     refresh_status_gauge,
 )
+from shared.testing import metric_value
 
 pytestmark = pytest.mark.anyio
 
@@ -99,8 +100,8 @@ class DescribeRefreshStatusGauge:
 
         await refresh_status_gauge(_FakePool(conn=object()))
 
-        assert reimbursement_status_count.labels("pending")._value.get() == 3
-        assert reimbursement_status_count.labels("auto-approved")._value.get() == 5
+        assert metric_value(reimbursement_status_count, "pending") == 3
+        assert metric_value(reimbursement_status_count, "auto-approved") == 5
 
     async def it_zero_fills_statuses_absent_from_the_query_result(
         self, monkeypatch: pytest.MonkeyPatch
@@ -114,7 +115,7 @@ class DescribeRefreshStatusGauge:
 
         for status in ALL_STATUSES:
             if status != "pending":
-                assert reimbursement_status_count.labels(status)._value.get() == 0
+                assert metric_value(reimbursement_status_count, status) == 0
 
     async def it_logs_a_warning_and_returns_without_raising_on_db_failure(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture

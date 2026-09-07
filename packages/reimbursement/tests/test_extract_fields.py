@@ -10,6 +10,7 @@ from reimbursement.agent.nodes.extract_fields import (
 )
 from reimbursement.metrics import reimbursement_agent_llm_calls_total
 from reimbursement.models import Reimbursement
+from shared.testing import metric_value
 
 pytestmark = pytest.mark.anyio
 
@@ -120,15 +121,15 @@ class DescribeExtractFields:
             result=ExtractedFieldsSchema(value=93.5, currency="BRL", receipts_date=date(2026, 4, 9))
         )
         node = ExtractFields(model=model, model_name=DEFAULT_TEST_MODEL_NAME)
-        before = reimbursement_agent_llm_calls_total.labels(
+        before = metric_value(reimbursement_agent_llm_calls_total, 
             DEFAULT_TEST_MODEL_NAME, "success"
-        )._value.get()
+        )
 
         await node(_state(_PAYLOAD), {"configurable": {}})
 
-        after = reimbursement_agent_llm_calls_total.labels(
+        after = metric_value(reimbursement_agent_llm_calls_total, 
             DEFAULT_TEST_MODEL_NAME, "success"
-        )._value.get()
+        )
         assert after == before + 1
 
     async def it_increments_the_llm_calls_counter_with_outcome_failure_and_still_raises(
@@ -136,16 +137,16 @@ class DescribeExtractFields:
     ) -> None:
         model = FakeStructuredModel(error=RuntimeError("groq unreachable"))
         node = ExtractFields(model=model, model_name=DEFAULT_TEST_MODEL_NAME)
-        before = reimbursement_agent_llm_calls_total.labels(
+        before = metric_value(reimbursement_agent_llm_calls_total, 
             DEFAULT_TEST_MODEL_NAME, "failure"
-        )._value.get()
+        )
 
         with pytest.raises(RuntimeError, match="groq unreachable"):
             await node(_state(_PAYLOAD), {"configurable": {}})
 
-        after = reimbursement_agent_llm_calls_total.labels(
+        after = metric_value(reimbursement_agent_llm_calls_total, 
             DEFAULT_TEST_MODEL_NAME, "failure"
-        )._value.get()
+        )
         assert after == before + 1
 
     async def it_instructs_the_iso_date_format_in_the_rendered_prompt(self) -> None:

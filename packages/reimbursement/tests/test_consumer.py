@@ -20,7 +20,7 @@ from confluent_kafka.aio import AIOConsumer
 from shared.config import REIMBURSEMENT_TOPIC, Config, load_config
 from shared.models import ReimbursementEnvelope
 from shared.signals import install_shutdown_handlers
-from shared.testing import ThreadSafeAsyncEvent, in_memory_tracer
+from shared.testing import ThreadSafeAsyncEvent, in_memory_tracer, metric_value
 from shared.tracing import inject_headers
 
 pytestmark = pytest.mark.anyio
@@ -364,11 +364,11 @@ class DescribeMessagesConsumedMetric:
     async def it_increments_once_per_genuinely_delivered_message(self) -> None:
         stopping = asyncio.Event()
         consumer = FakeConsumer([[_message()]], stopping=stopping, stop_after=2)
-        before = reimbursement_messages_consumed_total.labels(REIMBURSEMENT_TOPIC)._value.get()
+        before = metric_value(reimbursement_messages_consumed_total, REIMBURSEMENT_TOPIC)
 
         await run(_deps(FakePool(), FakeProducer()), consumer, stopping)
 
-        after = reimbursement_messages_consumed_total.labels(REIMBURSEMENT_TOPIC)._value.get()
+        after = metric_value(reimbursement_messages_consumed_total, REIMBURSEMENT_TOPIC)
         assert after == before + 1
 
     async def it_does_not_increment_on_a_protocol_level_error_message(self) -> None:
@@ -376,20 +376,20 @@ class DescribeMessagesConsumedMetric:
         consumer = FakeConsumer(
             [[FakeMessage(error="broker: partition eof")]], stopping=stopping, stop_after=2
         )
-        before = reimbursement_messages_consumed_total.labels(REIMBURSEMENT_TOPIC)._value.get()
+        before = metric_value(reimbursement_messages_consumed_total, REIMBURSEMENT_TOPIC)
 
         await run(_deps(FakePool(), FakeProducer()), consumer, stopping)
 
-        assert reimbursement_messages_consumed_total.labels(REIMBURSEMENT_TOPIC)._value.get() == before
+        assert metric_value(reimbursement_messages_consumed_total, REIMBURSEMENT_TOPIC) == before
 
     async def it_does_not_increment_when_no_message_was_available(self) -> None:
         stopping = asyncio.Event()
         consumer = FakeConsumer([[]], stopping=stopping, stop_after=2)
-        before = reimbursement_messages_consumed_total.labels(REIMBURSEMENT_TOPIC)._value.get()
+        before = metric_value(reimbursement_messages_consumed_total, REIMBURSEMENT_TOPIC)
 
         await run(_deps(FakePool(), FakeProducer()), consumer, stopping)
 
-        assert reimbursement_messages_consumed_total.labels(REIMBURSEMENT_TOPIC)._value.get() == before
+        assert metric_value(reimbursement_messages_consumed_total, REIMBURSEMENT_TOPIC) == before
 
 
 class DescribeMain:
