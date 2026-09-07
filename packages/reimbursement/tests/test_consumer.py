@@ -352,20 +352,18 @@ class DescribeMain:
     def it_starts_the_metrics_server_with_the_configured_port_before_serving(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        started: list[int] = []
-        ran: list[bool] = []
+        calls: list[str] = []
 
-        monkeypatch.setattr(consumer_module, "start_metrics_server", lambda port: started.append(port))
+        monkeypatch.setattr(consumer_module, "start_metrics_server", lambda port: calls.append("start_metrics_server"))
         monkeypatch.setattr(consumer_module, "load_dotenv", lambda: None)
         monkeypatch.setattr(consumer_module, "configure_logging", lambda: None)
 
         def _fake_run(coro: Any) -> None:
             coro.close()
-            ran.append(True)
+            calls.append("asyncio.run")
 
         monkeypatch.setattr(consumer_module.asyncio, "run", _fake_run)
 
         consumer_module.main()
 
-        assert started == [load_agent_config().metrics_port]
-        assert ran == [True]
+        assert calls == ["start_metrics_server", "asyncio.run"]

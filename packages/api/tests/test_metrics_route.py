@@ -48,17 +48,35 @@ class DescribeMetricsRoute:
         # asyncpg rejects outright (see helpers.py::_build_client). No
         # lifespan needed here either: get_pool is overridden, so the route
         # never touches the lifespan-created pool.
-        await seed_reimbursement(db, "REQ-METRICS-GAUGE-1", status="human-review")
         real_app.dependency_overrides[get_pool] = lambda: FakePool(db)
         try:
             transport = httpx.ASGITransport(app=real_app)
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-                response = await client.get("/metrics")
+                before_response = await client.get("/metrics")
+
+            # Delta-based assertions: migrated_db is shared across tests, so we
+            # can't assert absolute values like "pending=0.0" without flakiness.
+            def _extract_gauge_value(text: str, status: str) -> float:
+                for line in text.split("\n"):
+                    if f'reimbursement_status_count{{status="{status}"}}' in line:
+                        return float(line.split()[-1])
+                return 0.0
+
+            before_hr = _extract_gauge_value(before_response.text, "human-review")
+            before_pending = _extract_gauge_value(before_response.text, "pending")
+
+            await seed_reimbursement(db, "REQ-METRICS-GAUGE-1", status="human-review")
+
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                after_response = await client.get("/metrics")
+
+            after_hr = _extract_gauge_value(after_response.text, "human-review")
+            after_pending = _extract_gauge_value(after_response.text, "pending")
+
+            assert after_hr == before_hr + 1.0
+            assert after_pending == before_pending
         finally:
             real_app.dependency_overrides.clear()
-
-        assert 'reimbursement_status_count{status="human-review"} 1.0' in response.text
-        assert 'reimbursement_status_count{status="pending"} 0.0' in response.text
 
     def it_records_a_404_with_the_unmatched_path_label(self) -> None:
         with TestClient(real_app) as client:

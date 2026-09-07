@@ -18,9 +18,12 @@ class DescribeReimbursementStatusTransitionsTotal:
     def it_accepts_positional_labels_in_from_to_order(self) -> None:
         # `from` is a Python reserved word — every call site must use
         # positional .labels(value, value), never .labels(from=..., to=...).
-        child = reimbursement_status_transitions_total.labels("pending", "auto-approved")
+        before = reimbursement_status_transitions_total.labels("pending", "auto-approved")._value.get()
 
-        assert child is not None
+        reimbursement_status_transitions_total.labels("pending", "auto-approved").inc()
+
+        after = reimbursement_status_transitions_total.labels("pending", "auto-approved")._value.get()
+        assert after == before + 1
 
     def it_increments_on_inc(self) -> None:
         before = reimbursement_status_transitions_total.labels("pending", "auto-rejected")._value.get()
