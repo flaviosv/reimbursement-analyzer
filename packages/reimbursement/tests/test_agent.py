@@ -25,6 +25,7 @@ from reimbursement.metrics import (
 )
 from reimbursement.models import Reimbursement
 from shared.logging import reset_correlation_id, set_correlation_id
+from shared.testing import histogram_sample_count
 
 pytestmark = pytest.mark.anyio
 
@@ -85,8 +86,7 @@ def _flow_lines(caplog: pytest.LogCaptureFixture) -> list[str]:
 
 
 def _observation_count(node: str, model: str) -> float:
-    child = reimbursement_agent_node_duration_seconds.labels(node, model)
-    return sum(bucket.get() for bucket in child._buckets)
+    return histogram_sample_count(reimbursement_agent_node_duration_seconds, node, model)
 
 
 class DescribeGetGraphSingleton:
@@ -555,9 +555,7 @@ class DescribeDecide:
                 return {"status": "auto-approved"}
 
         monkeypatch.setattr(agent, "get_graph", lambda: _FakeGraph())
-        before = sum(
-            bucket.get() for bucket in reimbursement_agent_decision_duration_seconds._buckets
-        )
+        before = histogram_sample_count(reimbursement_agent_decision_duration_seconds)
 
         await agent.decide(
             Reimbursement(uuid=uuid4(), original_payload={}),
@@ -565,9 +563,7 @@ class DescribeDecide:
             acquire_timeout_seconds=5.0,
         )
 
-        after = sum(
-            bucket.get() for bucket in reimbursement_agent_decision_duration_seconds._buckets
-        )
+        after = histogram_sample_count(reimbursement_agent_decision_duration_seconds)
         assert after == before + 1
 
     async def it_observes_the_decision_duration_even_when_ainvoke_raises(
@@ -578,9 +574,7 @@ class DescribeDecide:
                 raise RuntimeError("graph failed")
 
         monkeypatch.setattr(agent, "get_graph", lambda: _FailingGraph())
-        before = sum(
-            bucket.get() for bucket in reimbursement_agent_decision_duration_seconds._buckets
-        )
+        before = histogram_sample_count(reimbursement_agent_decision_duration_seconds)
 
         with pytest.raises(RuntimeError, match="graph failed"):
             await agent.decide(
@@ -589,7 +583,22 @@ class DescribeDecide:
                 acquire_timeout_seconds=5.0,
             )
 
-        after = sum(
-            bucket.get() for bucket in reimbursement_agent_decision_duration_seconds._buckets
-        )
+        after = histogram_sample_count(reimbursement_agent_decision_duration_seconds)
         assert after == before + 1
+
+
+class DescribeTimedNode:
+    async def it_still_observes_duration_and_reraises_when_the_wrapped_node_raises(self) -> None:
+        # DescribeDecide above only covers decide()'s own outer try/finally
+        # around graph.ainvoke() — this covers _timed_node itself, the
+        # per-node wrapper every graph node actually runs through.
+        async def failing_node(state: dict, config: dict) -> dict:
+            raise RuntimeError("node failed")
+
+        wrapped = agent._timed_node("extract_fields", failing_node, "")
+        before = _observation_count("extract_fields", "")
+
+        with pytest.raises(RuntimeError, match="node failed"):
+            await wrapped({}, {})
+
+        assert _observation_count("extract_fields", "") == before + 1
