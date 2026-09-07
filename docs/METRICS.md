@@ -48,6 +48,17 @@ A value strictly between `200` and `2000` fires no deterministic rule and
 falls through to the `analysis` node's LLM-as-judge step instead — no rule
 label is incremented for that path.
 
+**Semantic:** `reimbursement_policy_rule_triggered_total` counts rule
+*evaluation* at decision time, not confirmed DB *persistence* of the outcome
+(contrast with `reimbursement_status_transitions_total`, which only increments
+when the write actually persists a row transition). If a rule fires but the
+subsequent write to persist the decision fails, the rule counter reflects the
+evaluated rule, and the transitions counter reflects the failed write. The two
+counters should correlate 1:1 under normal operation, but may diverge briefly
+on DB failures; operators should not treat divergence as a sign of the rule
+itself failing, but rather as evidence of DB write failures during that
+incident.
+
 ## The Decision-Latency Histogram Split
 
 Three separate histograms measure three different things in the decision
