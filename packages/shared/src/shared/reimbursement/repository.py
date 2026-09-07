@@ -81,7 +81,16 @@ _FETCH_REIMBURSEMENT_BY_UUID = f"""
 # Column is `currency`, not `receipts_currency` — the parameter/keyword stays
 # `receipts_currency` to match the payload field name (SCOPE.md/spec.md), the
 # repository maps it onto the real column here.
+# The `old` CTE and the main UPDATE share one statement-level snapshot, so
+# `old` reliably reads the pre-update row even though both run in the same
+# round trip — no separate `SELECT ... FOR UPDATE` needed. from_status/
+# from_updated_at feed reimbursement_status_transitions_total's `from` label
+# and reimbursement_review_wait_seconds respectively (api.reimbursement.
+# update.route) — SELECT-only projections, not new persisted columns.
 _APPROVE = """
+    WITH old AS (
+        SELECT status, updated_at FROM reimbursement WHERE uuid = $1
+    )
     UPDATE reimbursement
     SET status = 'human-approved',
         receipts_value = $3,
@@ -90,10 +99,13 @@ _APPROVE = """
         decision_reason = $6,
         updated_at = now()
     WHERE uuid = $1 AND status = ANY($2::text[])
-    RETURNING *
+    RETURNING *, (SELECT status FROM old) AS from_status, (SELECT updated_at FROM old) AS from_updated_at
 """
 
 _REJECT = """
+    WITH old AS (
+        SELECT status, updated_at FROM reimbursement WHERE uuid = $1
+    )
     UPDATE reimbursement
     SET status = 'human-rejected',
         decision_reason = $3,
@@ -102,7 +114,7 @@ _REJECT = """
         currency = COALESCE($6, currency),
         updated_at = now()
     WHERE uuid = $1 AND status = ANY($2::text[])
-    RETURNING *
+    RETURNING *, (SELECT status FROM old) AS from_status, (SELECT updated_at FROM old) AS from_updated_at
 """
 
 _FIND_REIMBURSEMENT_STATE = """

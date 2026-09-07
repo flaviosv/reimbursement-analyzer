@@ -7,6 +7,7 @@ import asyncpg
 import pytest
 from shared.reimbursement.repository import (
     approve,
+    count_by_status,
     delete_pending,
     fetch_reimbursement_by_uuid,
     fetch_reimbursement_page,
@@ -388,6 +389,31 @@ class DescribeFetchReimbursementByUuid:
         assert row is None
 
 
+class DescribeCountByStatus:
+    async def it_groups_rows_by_status_with_accurate_counts(self, db: asyncpg.Connection) -> None:
+        # Delta-based, not exact-set: this shared migrated_db carries real,
+        # committed rows from other integration tests outside this test's
+        # own rolled-back transaction (see DescribeFetchReimbursementPage's
+        # own comments above) — asserting an absolute count would be flaky.
+        before = {row["status"]: row["count"] for row in await count_by_status(db)}
+        await seed_reimbursement(db, "REQ-COUNT-HR-1", status="human-review")
+        await seed_reimbursement(db, "REQ-COUNT-HR-2", status="human-review")
+        await seed_reimbursement(db, "REQ-COUNT-AA-1", status="auto-approved")
+
+        after = {row["status"]: row["count"] for row in await count_by_status(db)}
+
+        assert after["human-review"] == before.get("human-review", 0) + 2
+        assert after["auto-approved"] == before.get("auto-approved", 0) + 1
+
+    async def it_returns_status_and_count_columns_per_row(self, db: asyncpg.Connection) -> None:
+        await seed_reimbursement(db, "REQ-COUNT-SHAPE", status="auto-rejected")
+
+        rows = await count_by_status(db)
+        by_status = {row["status"]: row["count"] for row in rows}
+
+        assert by_status["auto-rejected"] >= 1
+
+
 class DescribeApprove:
     async def it_succeeds_on_an_eligible_row_and_returns_the_updated_row(
         self, db: asyncpg.Connection
@@ -409,6 +435,26 @@ class DescribeApprove:
         assert row["receipts_date"] == date(2026, 1, 5)
         assert row["currency"] == "BRL"
         assert row["decision_reason"] == "looks good"
+
+    async def it_returns_the_pre_write_status_and_updated_at_via_the_cte(
+        self, db: asyncpg.Connection
+    ) -> None:
+        uuid = await seed_reimbursement(db, "REQ-APPROVE-FROM-STATUS", status="human-review")
+        before_row = await db.fetchrow("SELECT updated_at FROM reimbursement WHERE uuid = $1", uuid)
+
+        row = await approve(
+            db,
+            uuid,
+            eligible_statuses=_ELIGIBLE_STATUSES,
+            receipts_value=Decimal("50.00"),
+            receipts_date=date(2026, 1, 5),
+            receipts_currency="BRL",
+            reason="looks good",
+        )
+
+        assert row["from_status"] == "human-review"
+        assert row["from_updated_at"] == before_row["updated_at"]
+        assert row["status"] == "human-approved"
 
     async def it_returns_none_on_an_ineligible_status(self, db: asyncpg.Connection) -> None:
         uuid = await seed_reimbursement(db, "REQ-APPROVE-INELIGIBLE", status="human-approved")
@@ -476,6 +522,18 @@ class DescribeReject:
         assert row["receipts_value"] == Decimal("100.00")
         assert row["receipts_date"] == date(2026, 1, 1)
         assert row["currency"] == "BRL"
+
+    async def it_returns_the_pre_write_status_and_updated_at_via_the_cte(
+        self, db: asyncpg.Connection
+    ) -> None:
+        uuid = await seed_reimbursement(db, "REQ-REJECT-FROM-STATUS", status="auto-rejected")
+        before_row = await db.fetchrow("SELECT updated_at FROM reimbursement WHERE uuid = $1", uuid)
+
+        row = await reject(db, uuid, eligible_statuses=_ELIGIBLE_STATUSES, reason="bad receipt")
+
+        assert row["from_status"] == "auto-rejected"
+        assert row["from_updated_at"] == before_row["updated_at"]
+        assert row["status"] == "human-rejected"
 
 
 class DescribeFindReimbursementState:
