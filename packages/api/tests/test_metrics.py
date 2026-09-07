@@ -87,6 +87,10 @@ class DescribeAllStatuses:
 
 
 class DescribeRefreshStatusGauge:
+    @pytest.fixture(autouse=True)
+    def _reset_refresh_throttle(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("api.metrics._last_refreshed_at", 0.0)
+
     async def it_sets_the_gauge_from_the_queried_counts(self, monkeypatch: pytest.MonkeyPatch) -> None:
         async def fake_count_by_status(conn: object) -> list[dict]:
             return [{"status": "pending", "count": 3}, {"status": "auto-approved", "count": 5}]
@@ -124,3 +128,20 @@ class DescribeRefreshStatusGauge:
             await refresh_status_gauge(_FakePool(conn=object()))
 
         assert any(record.levelno == logging.WARNING for record in caplog.records)
+
+    async def it_skips_the_db_query_when_called_again_within_the_min_interval(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = 0
+
+        async def counting_count_by_status(conn: object) -> list[dict]:
+            nonlocal calls
+            calls += 1
+            return [{"status": "pending", "count": 1}]
+
+        monkeypatch.setattr("api.metrics.repository.count_by_status", counting_count_by_status)
+
+        await refresh_status_gauge(_FakePool(conn=object()))
+        await refresh_status_gauge(_FakePool(conn=object()))
+
+        assert calls == 1

@@ -6,6 +6,7 @@ import time — never per-request/per-call — so re-importing this module
 never raises `prometheus_client`'s duplicate-registration error."""
 
 import logging
+import time
 
 import asyncpg
 from prometheus_client import Counter, Gauge, Histogram
@@ -64,13 +65,28 @@ reimbursement_review_wait_seconds = Histogram(
 )
 
 
+# Bounds how often a scrape re-runs the underlying DB query, independent of
+# how often /metrics is actually scraped: an unauthenticated, unrated-limited
+# endpoint (docs/codebase/CONCERNS.md) must not let scrape frequency alone
+# dictate load on the same pool POST/GET/PUT /api/v1/reimbursement depend on.
+_GAUGE_REFRESH_MIN_INTERVAL_SECONDS = 5.0
+_last_refreshed_at = 0.0
+
+
 async def refresh_status_gauge(pool: asyncpg.Pool) -> None:
-    """Refreshes `reimbursement_status_count` from the current DB state at
-    scrape time — not incrementally maintained in memory. On any failure
+    """Refreshes `reimbursement_status_count` from the current DB state, at
+    most once per `_GAUGE_REFRESH_MIN_INTERVAL_SECONDS` regardless of scrape
+    frequency — not incrementally maintained in memory. On any failure
     (e.g. the DB is unreachable), logs one warning and returns without
     raising: a metrics scrape is not a reimbursement decision, so the rest
     of `/metrics` should still return the other 15 metrics rather than the
     whole endpoint failing over one query (spec.md Assumption 6)."""
+    global _last_refreshed_at
+    now = time.monotonic()
+    if now - _last_refreshed_at < _GAUGE_REFRESH_MIN_INTERVAL_SECONDS:
+        return
+    _last_refreshed_at = now
+
     try:
         async with pool.acquire(timeout=load_config().database.acquire_timeout_seconds) as conn:
             rows = await repository.count_by_status(conn)
