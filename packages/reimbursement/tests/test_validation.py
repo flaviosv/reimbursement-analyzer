@@ -6,6 +6,11 @@ import pytest
 from agent_fakes import FakePool, FakeProducer
 from reimbursement.agent import agent
 from reimbursement.config import load_agent_config
+from reimbursement.metrics import (
+    reimbursement_decision_failure_escalations_total,
+    reimbursement_messages_requeued_total,
+    reimbursement_time_to_decision_seconds,
+)
 from reimbursement.models import Reimbursement
 from reimbursement.validation import Dependencies, MessageOutcome, handle_message
 from shared.config import REIMBURSEMENT_TOPIC, load_config
@@ -66,6 +71,9 @@ def _row(**overrides: object) -> dict[str, object]:
     defaults: dict[str, object] = {
         "status": "pending",
         "updated_at": datetime(2026, 4, 10, 9, 0, 0, tzinfo=UTC),
+        # 1 hour before updated_at — the RESOLVED path (_decide) reads this
+        # to observe reimbursement_time_to_decision_seconds (T16).
+        "created_at": datetime(2026, 4, 10, 8, 0, 0, tzinfo=UTC),
         # JSON text, matching Reimbursement.from_record's json.loads decode
         # (T1) — only the RESOLVED path (_decide) ever reads this key.
         "original_payload": "{}",
@@ -683,3 +691,105 @@ class DescribeDecideIntegration:
         assert outcome == MessageOutcome.ESCALATED
         assert pool.rows[uuid]["status"] == "human-review"
         assert any("reimbursement.decision_failed" in r.message for r in caplog.records)
+
+
+def _histogram_count(histogram: object) -> float:
+    return sum(bucket.get() for bucket in histogram._buckets)
+
+
+class DescribeMessageLifecycleMetrics:
+    async def it_observes_time_to_decision_when_a_decision_persists(self) -> None:
+        uuid = uuid4()
+        row_updated_at = datetime(2026, 4, 10, 9, 0, 0, tzinfo=UTC)
+        pool = FakePool(rows={uuid: _row(uuid=uuid, updated_at=row_updated_at)})
+        deps = _deps(pool=pool)
+        envelope = _envelope(uuid=uuid, retry=0, published_at=row_updated_at)
+        before = _histogram_count(reimbursement_time_to_decision_seconds)
+
+        outcome = await handle_message(deps, envelope.model_dump_json().encode())
+
+        assert outcome == MessageOutcome.RESOLVED
+        assert _histogram_count(reimbursement_time_to_decision_seconds) == before + 1
+
+    async def it_does_not_observe_time_to_decision_when_the_decision_never_persisted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        uuid = uuid4()
+        row_updated_at = datetime(2026, 4, 10, 9, 0, 0, tzinfo=UTC)
+        pool = FakePool(rows={uuid: _row(uuid=uuid, updated_at=row_updated_at)})
+        deps = _deps(pool=pool)
+        envelope = _envelope(uuid=uuid, retry=0, published_at=row_updated_at)
+
+        async def _fake_decide(
+            reimbursement: Reimbursement, pool: object, *, acquire_timeout_seconds: float
+        ) -> dict[str, object]:
+            return {"status": "human-review", "decision_reason": "unresolved value", "persisted": False}
+
+        monkeypatch.setattr(agent, "decide", _fake_decide)
+        before = _histogram_count(reimbursement_time_to_decision_seconds)
+
+        outcome = await handle_message(deps, envelope.model_dump_json().encode())
+
+        assert outcome == MessageOutcome.RESOLVED
+        assert _histogram_count(reimbursement_time_to_decision_seconds) == before
+
+    async def it_increments_failure_escalations_exactly_once_on_a_decision_stage_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        uuid = uuid4()
+        row_updated_at = datetime(2026, 4, 10, 9, 0, 0, tzinfo=UTC)
+        pool = FakePool(rows={uuid: _row(uuid=uuid, updated_at=row_updated_at)})
+        deps = _deps(pool=pool)
+        envelope = _envelope(uuid=uuid, retry=0, published_at=row_updated_at)
+        monkeypatch.setattr(agent, "decide", _failing_decide)
+        before = reimbursement_decision_failure_escalations_total._value.get()
+
+        outcome = await handle_message(deps, envelope.model_dump_json().encode())
+
+        assert outcome == MessageOutcome.ESCALATED
+        after = reimbursement_decision_failure_escalations_total._value.get()
+        assert after == before + 1
+
+    async def it_does_not_increment_failure_escalations_on_the_retry_ceiling_path(self) -> None:
+        # AD-039 precedent: only agent.decide() failing counts as a
+        # decision-stage failure — a resolve-stage retry-ceiling exhaustion
+        # is a different failure class and must never increment this counter.
+        uuid = uuid4()
+        pool = FakePool(rows={uuid: {"status": "pending"}})
+        envelope = _envelope(uuid=uuid, retry=4, errors=[_error(1), _error(2), _error(3), _error(4)])
+        deps = _deps(pool=pool)
+        before = reimbursement_decision_failure_escalations_total._value.get()
+
+        outcome = await handle_message(deps, envelope.model_dump_json().encode())
+
+        assert outcome == MessageOutcome.ESCALATED
+        assert reimbursement_decision_failure_escalations_total._value.get() == before
+
+    async def it_increments_messages_requeued_on_a_successful_republish(self) -> None:
+        uuid = uuid4()
+        pool = FakePool(get_errors={uuid: RuntimeError("connection reset")})
+        producer = FakeProducer()
+        deps = _deps(pool=pool, producer=producer)
+        envelope = _envelope(uuid=uuid, retry=0, errors=[])
+        before = reimbursement_messages_requeued_total.labels(REIMBURSEMENT_TOPIC)._value.get()
+
+        outcome = await handle_message(deps, envelope.model_dump_json().encode())
+
+        assert outcome == MessageOutcome.REQUEUED
+        after = reimbursement_messages_requeued_total.labels(REIMBURSEMENT_TOPIC)._value.get()
+        assert after == before + 1
+
+    async def it_does_not_increment_messages_requeued_when_the_requeue_publish_itself_fails(
+        self,
+    ) -> None:
+        uuid = uuid4()
+        pool = FakePool(get_errors={uuid: RuntimeError("connection reset")})
+        producer = FakeProducer(errors={REIMBURSEMENT_TOPIC: Exception("broker unreachable")})
+        deps = _deps(pool=pool, producer=producer)
+        envelope = _envelope(uuid=uuid, retry=0)
+        before = reimbursement_messages_requeued_total.labels(REIMBURSEMENT_TOPIC)._value.get()
+
+        outcome = await handle_message(deps, envelope.model_dump_json().encode())
+
+        assert outcome == MessageOutcome.LOGGED
+        assert reimbursement_messages_requeued_total.labels(REIMBURSEMENT_TOPIC)._value.get() == before
