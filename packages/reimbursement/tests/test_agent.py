@@ -19,6 +19,10 @@ from reimbursement.agent.nodes.extract_fields import (
     ExtractFields,
 )
 from reimbursement.agent.nodes.validate import Validate
+from reimbursement.metrics import (
+    reimbursement_agent_decision_duration_seconds,
+    reimbursement_agent_node_duration_seconds,
+)
 from reimbursement.models import Reimbursement
 from shared.logging import reset_correlation_id, set_correlation_id
 
@@ -78,6 +82,11 @@ def _initial_state(uuid: object) -> dict:
 
 def _flow_lines(caplog: pytest.LogCaptureFixture) -> list[str]:
     return [r.message for r in caplog.records if r.message.startswith("FLOW: Executing")]
+
+
+def _observation_count(node: str, model: str) -> float:
+    child = reimbursement_agent_node_duration_seconds.labels(node, model)
+    return sum(bucket.get() for bucket in child._buckets)
 
 
 class DescribeGetGraphSingleton:
@@ -302,6 +311,96 @@ class DescribeGraphRouting:
         assert any("apply_agent_decision" in line for line in lines)
 
 
+class DescribePerNodeTiming:
+    async def it_observes_duration_exactly_once_for_each_node_actually_executed(self) -> None:
+        uuid = uuid4()
+        fakes = _Fakes(
+            extracted=ExtractedFieldsSchema(value=5000, currency="BRL", receipts_date=date(2026, 1, 9)),
+            guardrail=GuardrailVerdict(status="auto-approved", reason="unused"),
+            apply_policies_result=uuid,
+            apply_agent_decision_result=uuid,
+        )
+        graph = fakes.wire()
+        before = {
+            node: _observation_count(node, "")
+            for node in ("extract_fields", "validate", "apply_policies", "analysis", "apply_agent_decision")
+        }
+
+        await graph.ainvoke(
+            _initial_state(uuid),
+            config={"configurable": {"pool": FakeAcquirePool(object()), "acquire_timeout_seconds": 5.0}},
+        )
+
+        # Stale-receipt path executes extract_fields/validate/apply_policies
+        # only — analysis/apply_agent_decision never run.
+        assert _observation_count("extract_fields", "") == before["extract_fields"] + 1
+        assert _observation_count("validate", "") == before["validate"] + 1
+        assert _observation_count("apply_policies", "") == before["apply_policies"] + 1
+        assert _observation_count("analysis", "") == before["analysis"]
+        assert _observation_count("apply_agent_decision", "") == before["apply_agent_decision"]
+
+    async def it_labels_only_extract_fields_and_analysis_with_a_non_empty_model_when_supplied(
+        self,
+    ) -> None:
+        uuid = uuid4()
+        fakes = _Fakes(
+            extracted=ExtractedFieldsSchema(value=1000, currency="BRL", receipts_date=date(2026, 4, 1)),
+            guardrail=GuardrailVerdict(status="auto-approved", reason="amount matches receipt text"),
+            apply_policies_result=uuid,
+            apply_agent_decision_result=uuid,
+        )
+        nodes = {
+            "extract_fields": ExtractFields(model=fakes.extract_model, model_name=DEFAULT_TEST_MODEL_NAME),
+            "validate": Validate(),
+            "apply_policies": ApplyPolicies(apply_decision=fakes.apply_policies_decision),
+            "analysis": Analysis(model=fakes.analysis_model, model_name=DEFAULT_TEST_MODEL_NAME),
+            "apply_agent_decision": ApplyAgentDecision(
+                apply_decision=fakes.apply_agent_decision_decision
+            ),
+        }
+        graph = agent._wire(
+            nodes,
+            node_models={"extract_fields": DEFAULT_TEST_MODEL_NAME, "analysis": DEFAULT_TEST_MODEL_NAME},
+        )
+        before_extract = _observation_count("extract_fields", DEFAULT_TEST_MODEL_NAME)
+        before_analysis = _observation_count("analysis", DEFAULT_TEST_MODEL_NAME)
+        before_validate = _observation_count("validate", "")
+        before_apply_agent_decision = _observation_count("apply_agent_decision", "")
+
+        await graph.ainvoke(
+            _initial_state(uuid),
+            config={"configurable": {"pool": FakeAcquirePool(object()), "acquire_timeout_seconds": 5.0}},
+        )
+
+        assert _observation_count("extract_fields", DEFAULT_TEST_MODEL_NAME) == before_extract + 1
+        assert _observation_count("analysis", DEFAULT_TEST_MODEL_NAME) == before_analysis + 1
+        assert _observation_count("validate", "") == before_validate + 1
+        assert (
+            _observation_count("apply_agent_decision", "") == before_apply_agent_decision + 1
+        )
+
+    async def it_defaults_every_node_label_to_an_empty_string_when_wire_is_called_without_node_models(
+        self,
+    ) -> None:
+        uuid = uuid4()
+        fakes = _Fakes(
+            extracted=ExtractedFieldsSchema(value=150, currency="BRL", receipts_date=date(2026, 4, 1)),
+            guardrail=GuardrailVerdict(status="auto-approved", reason="unused"),
+            apply_policies_result=uuid,
+            apply_agent_decision_result=uuid,
+        )
+        graph = fakes.wire()  # calls agent._wire(nodes) with no node_models
+        before = _observation_count("extract_fields", "")
+
+        result = await graph.ainvoke(
+            _initial_state(uuid),
+            config={"configurable": {"pool": FakeAcquirePool(object()), "acquire_timeout_seconds": 5.0}},
+        )
+
+        assert result["status"] == "auto-approved"
+        assert _observation_count("extract_fields", "") == before + 1
+
+
 class DescribeBuildGraph:
     def it_wires_the_real_dependencies_into_the_expected_node_set(self) -> None:
         # No monkeypatching: proves the real body (init_chat_model calls,
@@ -447,3 +546,50 @@ class DescribeDecide:
 
         assert calls[0]["metadata"] == {"langfuse_session_id": str(uuid)}
         assert "correlation_id" not in calls[0]["metadata"]
+
+    async def it_observes_the_full_graph_decision_duration_exactly_once(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class _FakeGraph:
+            async def ainvoke(self, state: dict, config: dict) -> dict:
+                return {"status": "auto-approved"}
+
+        monkeypatch.setattr(agent, "get_graph", lambda: _FakeGraph())
+        before = sum(
+            bucket.get() for bucket in reimbursement_agent_decision_duration_seconds._buckets
+        )
+
+        await agent.decide(
+            Reimbursement(uuid=uuid4(), original_payload={}),
+            FakeAcquirePool(object()),
+            acquire_timeout_seconds=5.0,
+        )
+
+        after = sum(
+            bucket.get() for bucket in reimbursement_agent_decision_duration_seconds._buckets
+        )
+        assert after == before + 1
+
+    async def it_observes_the_decision_duration_even_when_ainvoke_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class _FailingGraph:
+            async def ainvoke(self, state: dict, config: dict) -> dict:
+                raise RuntimeError("graph failed")
+
+        monkeypatch.setattr(agent, "get_graph", lambda: _FailingGraph())
+        before = sum(
+            bucket.get() for bucket in reimbursement_agent_decision_duration_seconds._buckets
+        )
+
+        with pytest.raises(RuntimeError, match="graph failed"):
+            await agent.decide(
+                Reimbursement(uuid=uuid4(), original_payload={}),
+                FakeAcquirePool(object()),
+                acquire_timeout_seconds=5.0,
+            )
+
+        after = sum(
+            bucket.get() for bucket in reimbursement_agent_decision_duration_seconds._buckets
+        )
+        assert after == before + 1

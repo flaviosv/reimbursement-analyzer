@@ -9,11 +9,13 @@ message (L-003's "compiled once" proxy). `_wire` is split out from
 LLM/DB boundary, without constructing a real Groq client."""
 
 import logging
+import time
 from functools import lru_cache
 from typing import Any
 
 import asyncpg
 from langchain.chat_models import init_chat_model
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from shared import failure_log
@@ -35,23 +37,53 @@ from reimbursement.agent.nodes.validate import Validate, route_after_validate
 
 from reimbursement.agent.types import Node
 from reimbursement.config import load_agent_config
+from reimbursement.metrics import (
+    reimbursement_agent_decision_duration_seconds,
+    reimbursement_agent_node_duration_seconds,
+)
 from reimbursement.models import Reimbursement
 from reimbursement.schema import State
 
 logger = logging.getLogger(__name__)
 
 
-def _wire(nodes: dict[str, Node]) -> CompiledStateGraph:
+def _timed_node(name: str, node: Node, model_name: str = "") -> Node:
+    """Wraps `node` to observe `reimbursement_agent_node_duration_seconds`
+    for every invocation, success or failure. `model_name` defaults to `""`
+    — the encoding for "not applicable" on the 3 non-LLM nodes, since a
+    Prometheus label set is fixed-arity and cannot be truly omitted per
+    observation."""
+
+    async def wrapper(state: State, config: RunnableConfig) -> dict[str, Any]:
+        start = time.monotonic()
+        try:
+            return await node(state, config)
+        finally:
+            reimbursement_agent_node_duration_seconds.labels(name, model_name).observe(
+                time.monotonic() - start
+            )
+
+    return wrapper
+
+
+def _wire(nodes: dict[str, Node], node_models: dict[str, str] | None = None) -> CompiledStateGraph:
     """The graph shape (Architecture Overview diagram), parameterized by
     already-constructed node instances — shared between `build_graph`
     (real dependencies) and the routing tests (fakes at every LLM/DB
-    boundary)."""
+    boundary). `node_models` supplies the `model` label for the 2 LLM nodes
+    (`extract_fields`/`analysis`) — defaults to `{}` so every existing
+    routing-test call site keeps working unchanged."""
+    node_models = node_models or {}
+
+    def _wrapped(name: str) -> Node:
+        return _timed_node(name, nodes[name], node_models.get(name, ""))
+
     graph = StateGraph(State)
-    graph.add_node("extract_fields", nodes["extract_fields"])
-    graph.add_node("validate", nodes["validate"])
-    graph.add_node("apply_policies", nodes["apply_policies"])
-    graph.add_node("analysis", nodes["analysis"])
-    graph.add_node("apply_agent_decision", nodes["apply_agent_decision"])
+    graph.add_node("extract_fields", _wrapped("extract_fields"))
+    graph.add_node("validate", _wrapped("validate"))
+    graph.add_node("apply_policies", _wrapped("apply_policies"))
+    graph.add_node("analysis", _wrapped("analysis"))
+    graph.add_node("apply_agent_decision", _wrapped("apply_agent_decision"))
 
     graph.add_edge(START, "extract_fields")
     graph.add_edge("extract_fields", "validate")
@@ -94,7 +126,11 @@ def build_graph() -> CompiledStateGraph:
         "analysis": Analysis(model=analysis_model, model_name=config.models.analysis.model_name),
         "apply_agent_decision": ApplyAgentDecision(apply_decision=apply_decision),
     }
-    return _wire(nodes)
+    node_models = {
+        "extract_fields": config.models.extract_fields.model_name,
+        "analysis": config.models.analysis.model_name,
+    }
+    return _wire(nodes, node_models=node_models)
 
 
 @lru_cache(maxsize=1)
@@ -149,12 +185,16 @@ async def decide(
     metadata: dict[str, str] = {"langfuse_session_id": str(reimbursement.uuid)}
     if (correlation_id := get_correlation_id()) is not None:
         metadata["correlation_id"] = correlation_id
-    result = await graph.ainvoke(
-        {"reimbursement": reimbursement},
-        config={
-            "configurable": {"pool": pool, "acquire_timeout_seconds": acquire_timeout_seconds},
-            "callbacks": _langfuse_handlers(),
-            "metadata": metadata,
-        },
-    )
+    start = time.monotonic()
+    try:
+        result = await graph.ainvoke(
+            {"reimbursement": reimbursement},
+            config={
+                "configurable": {"pool": pool, "acquire_timeout_seconds": acquire_timeout_seconds},
+                "callbacks": _langfuse_handlers(),
+                "metadata": metadata,
+            },
+        )
+    finally:
+        reimbursement_agent_decision_duration_seconds.observe(time.monotonic() - start)
     return result
