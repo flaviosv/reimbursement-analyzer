@@ -11,6 +11,7 @@ import reimbursement.consumer as consumer_module
 import pytest
 from reimbursement.config import load_agent_config
 from reimbursement.consumer import check_startup_config, managed_consumer, run
+from reimbursement.metrics import reimbursement_messages_consumed_total
 from reimbursement.validation import Dependencies
 from agent_fakes import FakePool, FakeProducer
 from confluent_kafka.aio import AIOConsumer
@@ -313,3 +314,58 @@ class DescribeTheLoop:
             await task
 
         assert consumer.commits == []
+
+
+class DescribeMessagesConsumedMetric:
+    async def it_increments_once_per_genuinely_delivered_message(self) -> None:
+        stopping = asyncio.Event()
+        consumer = FakeConsumer([[_message()]], stopping=stopping, stop_after=2)
+        before = reimbursement_messages_consumed_total.labels(REIMBURSEMENT_TOPIC)._value.get()
+
+        await run(_deps(FakePool(), FakeProducer()), consumer, stopping)
+
+        after = reimbursement_messages_consumed_total.labels(REIMBURSEMENT_TOPIC)._value.get()
+        assert after == before + 1
+
+    async def it_does_not_increment_on_a_protocol_level_error_message(self) -> None:
+        stopping = asyncio.Event()
+        consumer = FakeConsumer(
+            [[FakeMessage(error="broker: partition eof")]], stopping=stopping, stop_after=2
+        )
+        before = reimbursement_messages_consumed_total.labels(REIMBURSEMENT_TOPIC)._value.get()
+
+        await run(_deps(FakePool(), FakeProducer()), consumer, stopping)
+
+        assert reimbursement_messages_consumed_total.labels(REIMBURSEMENT_TOPIC)._value.get() == before
+
+    async def it_does_not_increment_when_no_message_was_available(self) -> None:
+        stopping = asyncio.Event()
+        consumer = FakeConsumer([[]], stopping=stopping, stop_after=2)
+        before = reimbursement_messages_consumed_total.labels(REIMBURSEMENT_TOPIC)._value.get()
+
+        await run(_deps(FakePool(), FakeProducer()), consumer, stopping)
+
+        assert reimbursement_messages_consumed_total.labels(REIMBURSEMENT_TOPIC)._value.get() == before
+
+
+class DescribeMain:
+    def it_starts_the_metrics_server_with_the_configured_port_before_serving(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        started: list[int] = []
+        ran: list[bool] = []
+
+        monkeypatch.setattr(consumer_module, "start_metrics_server", lambda port: started.append(port))
+        monkeypatch.setattr(consumer_module, "load_dotenv", lambda: None)
+        monkeypatch.setattr(consumer_module, "configure_logging", lambda: None)
+
+        def _fake_run(coro: Any) -> None:
+            coro.close()
+            ran.append(True)
+
+        monkeypatch.setattr(consumer_module.asyncio, "run", _fake_run)
+
+        consumer_module.main()
+
+        assert started == [load_agent_config().metrics_port]
+        assert ran == [True]
