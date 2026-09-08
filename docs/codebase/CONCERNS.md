@@ -41,10 +41,10 @@
 - Recommendations: this was flagged as a real compliance-posture question during design; the project owner (AD-032, `.specs/STATE.md`) chose to proceed without adding scrubbing/redaction as part of this change — worth a data-residency/compliance review before Groq is used with real, non-synthetic receipt data.
 
 **No authentication on the public API:**
-- Risk: no route has auth middleware or dependency — this now covers the full HTTP surface, not just intake: `POST /api/v1/reimbursement`, `/health`, `GET /api/v1/reimbursement` (lists every reimbursement, including PII in `original_payload`, to any caller), and `PUT /api/v1/reimbursement/{uuid}` (anyone can approve or reject any reimbursement — the highest-stakes of the four, since it's the endpoint that actually finalizes a financial decision).
-- Files: `packages/api/src/api/main.py`, `packages/api/src/api/reimbursement/create/route.py`, `packages/api/src/api/reimbursement/list/route.py`, `packages/api/src/api/reimbursement/update/route.py`
+- Risk: no route has auth middleware or dependency — this now covers the full HTTP surface, not just intake: `POST /api/v1/reimbursement`, `/health`, `GET /api/v1/reimbursement` (lists every reimbursement, including PII in `original_payload`, to any caller), `PUT /api/v1/reimbursement/{uuid}` (anyone can approve or reject any reimbursement — the highest-stakes of the four, since it's the endpoint that actually finalizes a financial decision), and `/metrics` on all 3 services (`api`, `publisher`, `reimbursement`).
+- Files: `packages/api/src/api/main.py`, `packages/api/src/api/reimbursement/create/route.py`, `packages/api/src/api/reimbursement/list/route.py`, `packages/api/src/api/reimbursement/update/route.py`, `packages/publisher/src/publisher/consumer.py`, `packages/reimbursement/src/reimbursement/consumer.py`
 - Current mitigation: none observed.
-- Recommendations: expected for a scoped technical test (also listed as Phase 2 backlog in `docs/SCOPE.md`); would need addressing before any real deployment, given the financial domain and stated audit requirements — `PUT` in particular should not ship unauthenticated past this stage.
+- Recommendations: expected for a scoped technical test (also listed as Phase 2 backlog in `docs/SCOPE.md`); would need addressing before any real deployment, given the financial domain and stated audit requirements — `PUT` in particular should not ship unauthenticated past this stage. The RA-3 metrics MVP adds two more unauthenticated surfaces beyond `api`'s existing HTTP port: `publisher`'s `METRICS_PORT` (default `9101`) and `reimbursement`'s `METRICS_PORT` (default `9102`), each a standalone listening port with no auth of its own.
 
 ## Fragile Areas
 
@@ -77,6 +77,13 @@
 - Current workaround: none; relies on the developer running the suite before pushing.
 - Blocks: automated gate-checking on PRs, `docs/codebase/PIPELINE.md` (skipped entirely by this scan for lack of evidence).
 - Rough effort: small — a single workflow running `uv sync --all-packages` + `uv run pytest` would cover the current test suite.
+
+**3 new Prometheus scrape targets need k3s manifest updates:**
+- Problem: `publisher` and `reimbursement` each now expose a `/metrics` HTTP port (`METRICS_PORT`, default 9101/9102) with no corresponding k3s Service/scrape-annotation/ServiceMonitor added by this feature — `api`'s `/metrics` rides its existing Service, but the other two are brand-new listening ports with no deployment-side discovery path yet.
+- Files: k3s manifests / `docker-compose.yml` (whichever this repo's current deployment tooling actually is at the time this gap is picked up — verify, don't assume).
+- Current workaround: none; the endpoints work if scraped directly by IP:port, but nothing wires that up today.
+- Blocks: Prometheus actually discovering and scraping any of the 3 new/changed endpoints in a real deployment.
+- Rough effort: small — one Service + one scrape annotation (or ServiceMonitor, if a Prometheus Operator is in use) per service.
 
 **No lint gate — and now two unconfigured linters, not one:**
 - Problem: `ruff` is present locally (evidenced by a `.ruff_cache/` directory) but has no `[tool.ruff]` configuration anywhere in the workspace, and is not run in any automated gate. `pylint>=4.0.6` was newly added to the root `dependency-groups.dev` with no `.pylintrc`/`[tool.pylint]` config and no gate either — the workspace now declares two linters, neither wired to anything.

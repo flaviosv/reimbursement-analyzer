@@ -11,6 +11,7 @@ import httpx
 import pytest
 from api.dependencies import get_pool
 from api.errors import register_handlers
+from api.metrics import reimbursement_review_wait_seconds
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from helpers import FakePool
@@ -19,7 +20,13 @@ from helpers import valid_approve_payload, valid_reject_payload
 from api.main import app as real_app
 from api.reimbursement.update.route import router
 from shared.errors import ReimbursementNotFound
-from shared.testing import seed_reimbursement, seed_reimbursement_with_receipts
+from shared.metrics import reimbursement_status_transitions_total
+from shared.testing import (
+    histogram_sample_count,
+    metric_value,
+    seed_reimbursement,
+    seed_reimbursement_with_receipts,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -379,6 +386,73 @@ class DescribePutReimbursement:
             assert count == 2
         finally:
             await pool.close()
+
+
+class DescribeStatusTransitionAndReviewWaitMetrics:
+    async def it_increments_status_transitions_total_on_approve_from_human_review(
+        self, db: asyncpg.Connection
+    ) -> None:
+        uuid = await seed_reimbursement(db, "REQ-PUT-METRICS-APPROVE-TRANSITION")
+        before = metric_value(reimbursement_status_transitions_total, "human-review", "human-approved")
+
+        async with _build_client(FakePool(db)) as client:
+            response = await client.put(f"/api/v1/reimbursement/{uuid}", json=_APPROVE_PAYLOAD)
+
+        assert response.status_code == 200
+        after = metric_value(reimbursement_status_transitions_total, "human-review", "human-approved")
+        assert after == before + 1
+
+    async def it_increments_status_transitions_total_on_reject_from_human_review(
+        self, db: asyncpg.Connection
+    ) -> None:
+        uuid = await seed_reimbursement_with_receipts(db, "REQ-PUT-METRICS-REJECT-TRANSITION")
+        before = metric_value(reimbursement_status_transitions_total, "human-review", "human-rejected")
+        wait_before = histogram_sample_count(reimbursement_review_wait_seconds)
+
+        async with _build_client(FakePool(db)) as client:
+            response = await client.put(f"/api/v1/reimbursement/{uuid}", json=_REJECT_PAYLOAD)
+
+        assert response.status_code == 200
+        after = metric_value(reimbursement_status_transitions_total, "human-review", "human-rejected")
+        assert after == before + 1
+        assert histogram_sample_count(reimbursement_review_wait_seconds) == wait_before + 1
+
+    async def it_observes_review_wait_seconds_when_leaving_human_review(
+        self, db: asyncpg.Connection
+    ) -> None:
+        uuid = await seed_reimbursement(db, "REQ-PUT-METRICS-REVIEW-WAIT")
+        before = histogram_sample_count(reimbursement_review_wait_seconds)
+
+        async with _build_client(FakePool(db)) as client:
+            response = await client.put(f"/api/v1/reimbursement/{uuid}", json=_APPROVE_PAYLOAD)
+
+        assert response.status_code == 200
+        assert histogram_sample_count(reimbursement_review_wait_seconds) == before + 1
+
+    async def it_does_not_observe_review_wait_seconds_when_from_status_is_not_human_review(
+        self, db: asyncpg.Connection
+    ) -> None:
+        uuid = await seed_reimbursement(db, "REQ-PUT-METRICS-NO-REVIEW-WAIT", status="auto-rejected")
+        wait_before = histogram_sample_count(reimbursement_review_wait_seconds)
+
+        async with _build_client(FakePool(db)) as client:
+            response = await client.put(f"/api/v1/reimbursement/{uuid}", json=_APPROVE_PAYLOAD)
+
+        assert response.status_code == 200
+        assert histogram_sample_count(reimbursement_review_wait_seconds) == wait_before
+
+    async def it_still_records_the_status_transition_when_from_status_is_not_human_review(
+        self, db: asyncpg.Connection
+    ) -> None:
+        uuid = await seed_reimbursement(db, "REQ-PUT-METRICS-TRANSITION-NO-WAIT", status="auto-rejected")
+        transitions_before = metric_value(reimbursement_status_transitions_total, "auto-rejected", "human-approved")
+
+        async with _build_client(FakePool(db)) as client:
+            response = await client.put(f"/api/v1/reimbursement/{uuid}", json=_APPROVE_PAYLOAD)
+
+        assert response.status_code == 200
+        transitions_after = metric_value(reimbursement_status_transitions_total, "auto-rejected", "human-approved")
+        assert transitions_after == transitions_before + 1
 
 
 class DescribeTheRealApp:

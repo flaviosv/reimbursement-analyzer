@@ -4,9 +4,10 @@ from uuid import UUID, uuid4
 
 import asyncpg
 import pytest
+from shared.metrics import reimbursement_status_transitions_total
 from shared.reimbursement.repository import insert_pending
 from shared.reimbursement.use_cases.apply_decision import apply_decision
-from shared.testing import valid_reimbursement_item
+from shared.testing import metric_value, valid_reimbursement_item
 
 pytestmark = pytest.mark.anyio
 
@@ -82,3 +83,28 @@ class DescribeApplyDecision:
         assert row["receipts_value"] == Decimal("64.80")
         assert row["receipts_date"] == date(2026, 4, 11)
         assert row["currency"] == "BRL"
+
+
+class DescribeApplyDecisionStatusTransitionsMetric:
+    async def it_increments_status_transitions_total_with_pending_as_the_from_label(
+        self, db: asyncpg.Connection
+    ) -> None:
+        uuid = await insert_pending(db, valid_reimbursement_item("REQ-APPLY-METRIC-INC"))
+        before = metric_value(reimbursement_status_transitions_total, "pending", "auto-approved")
+
+        result = await apply_decision(db, uuid, "auto-approved", "value 150 <= 200 threshold")
+
+        assert result == uuid
+        after = metric_value(reimbursement_status_transitions_total, "pending", "auto-approved")
+        assert after == before + 1
+
+    async def it_does_not_increment_status_transitions_total_for_a_ghost_uuid(
+        self, db: asyncpg.Connection
+    ) -> None:
+        before = metric_value(reimbursement_status_transitions_total, "pending", "human-review")
+
+        result = await apply_decision(db, uuid4(), "human-review", "unreachable reason")
+
+        assert result is None
+        after = metric_value(reimbursement_status_transitions_total, "pending", "human-review")
+        assert after == before

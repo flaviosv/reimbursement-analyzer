@@ -1,4 +1,5 @@
 import logging
+from datetime import UTC, datetime
 from uuid import UUID
 
 import asyncpg
@@ -13,12 +14,14 @@ from shared.errors import (
     sanitize,
 )
 from shared.logging import get_correlation_id, log_event
+from shared.metrics import reimbursement_status_transitions_total
 from shared.reimbursement.use_cases.get_reimbursement import get_reimbursement
 from shared.reimbursement.use_cases.review_reimbursement import approve_reimbursement, reject_reimbursement
 from shared.tracing import stamp_span
 
 from api.dependencies import get_pool
 from api.errors import MessageResponse
+from api.metrics import reimbursement_review_wait_seconds
 from api.reimbursement.create.payload import read_capped
 from api.reimbursement.response import ReimbursementDetailResponse, ReimbursementItem
 from api.reimbursement.update.validation import ApproveReview, validate_review
@@ -58,10 +61,11 @@ async def put_reimbursement(
         raise ReimbursementUuidMismatch("body uuid does not match the path uuid")
 
     decision_write_error: Exception | None = None
+    decision_row: asyncpg.Record | None = None
     async with pool.acquire(timeout=load_config().database.acquire_timeout_seconds) as conn:
         try:
             if isinstance(review, ApproveReview):
-                await approve_reimbursement(
+                decision_row = await approve_reimbursement(
                     conn,
                     uuid,
                     receipts_value=review.receipts_value,
@@ -71,7 +75,7 @@ async def put_reimbursement(
                     approved_by=review.approved_by,
                 )
             else:
-                await reject_reimbursement(
+                decision_row = await reject_reimbursement(
                     conn,
                     uuid,
                     reason=review.reason,
@@ -113,6 +117,16 @@ async def put_reimbursement(
             },
         )
         raise decision_write_error
+
+    from_status = decision_row["from_status"]
+    reimbursement_status_transitions_total.labels(from_status, row["status"]).inc()
+    if from_status == "human-review":
+        # Clamped to 0 for the same reason as reimbursement_time_to_decision_seconds
+        # (reimbursement/validation.py): clock skew or a malformed
+        # from_updated_at could otherwise silently record a negative-latency
+        # observation — Prometheus does not reject it.
+        wait_seconds = (datetime.now(UTC) - decision_row["from_updated_at"]).total_seconds()
+        reimbursement_review_wait_seconds.observe(max(0.0, wait_seconds))
 
     log_event(
         logger,

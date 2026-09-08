@@ -56,6 +56,7 @@ class AgentConfig:
     ai: AIConfig
     models: AgentModelsConfig
     consume_timeout_seconds: float = 1.0
+    metrics_port: int = 9102
 
     def to_consumer_config(self, kafka: KafkaConfig) -> dict[str, Any]:
         # No fetch.max.bytes/max.partition.fetch.bytes override, unlike
@@ -88,4 +89,5 @@ def load_agent_config() -> AgentConfig:
                 temperature=_float_env("ANALYSIS_TEMPERATURE", _DEFAULT_TEMPERATURE),
             ),
         ),
+        metrics_port=int(os.getenv("METRICS_PORT", "9102")),
     )

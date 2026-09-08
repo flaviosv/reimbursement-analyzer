@@ -6,6 +6,7 @@ from uuid import UUID
 
 import asyncpg
 
+from shared.metrics import reimbursement_status_transitions_total
 from shared.models import DecisionStatus
 from shared.reimbursement import repository
 
@@ -31,4 +32,10 @@ async def apply_decision(
         receipts_date=receipts_date,
         currency=currency,
     )
-    return uuid if updated else None
+    if not updated:
+        return None
+    # "pending" is hardcoded, not queried: reimbursement only ever writes a
+    # status-changing decision onto a row that started at pending (see
+    # design.md's Approach Exploration #3 and Risks & Concerns).
+    reimbursement_status_transitions_total.labels("pending", status).inc()
+    return uuid

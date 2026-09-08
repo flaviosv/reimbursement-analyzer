@@ -15,11 +15,13 @@ from opentelemetry import trace
 from shared.config import REIMBURSEMENT_TOPIC, Config, load_config
 from shared.db import managed_pool
 from shared.logging import configure_logging
+from shared.metrics import start_metrics_server
 from shared.producer import managed_producer
 from shared.signals import install_shutdown_handlers
 from shared.tracing import init_tracer, shutdown_tracer_async, traced_message_span
 
 from reimbursement.config import AgentConfig, load_agent_config
+from reimbursement.metrics import reimbursement_messages_consumed_total
 from reimbursement.validation import Dependencies, handle_message
 
 logger = logging.getLogger(__name__)
@@ -76,6 +78,7 @@ async def run(deps: Dependencies, consumer: AIOConsumer, stopping: asyncio.Event
                 logger.error("consumer error, message skipped: %s", error)
                 continue
 
+            reimbursement_messages_consumed_total.labels(REIMBURSEMENT_TOPIC).inc()
             await handle_message(deps, message.value())
             # Only now. A crash before this point redelivers the whole
             # message, and whatever already happened (a ghost drop, a
@@ -108,6 +111,7 @@ async def _serve() -> None:
 def main() -> None:
     load_dotenv()
     configure_logging()
+    start_metrics_server(load_agent_config().metrics_port)
     asyncio.run(_serve())
 
 

@@ -31,6 +31,26 @@ class DescribeAgentConfig:
 
         assert config.consumer_group_id == "agent-canary"
 
+    def it_defaults_metrics_port_to_9102_when_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("METRICS_PORT", raising=False)
+
+        config = load_agent_config()
+
+        assert config.metrics_port == 9102
+
+    def it_reads_metrics_port_from_the_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("METRICS_PORT", "9300")
+
+        config = load_agent_config()
+
+        assert config.metrics_port == 9300
+
+    def it_raises_when_metrics_port_is_not_numeric(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("METRICS_PORT", "not_a_number")
+
+        with pytest.raises(ValueError):
+            load_agent_config()
+
     def it_raises_when_groq_api_key_is_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("GROQ_API_KEY", raising=False)
 

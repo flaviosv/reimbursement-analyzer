@@ -4,11 +4,13 @@
 import logging
 from datetime import UTC, datetime
 from decimal import Decimal
+from enum import Enum
 from typing import Any, Literal
 
 from langchain_core.runnables import RunnableConfig
 
 from reimbursement.agent.types import ApplyDecision
+from reimbursement.metrics import reimbursement_policy_rule_triggered_total
 from reimbursement.schema import State
 
 logger = logging.getLogger(__name__)
@@ -16,6 +18,12 @@ logger = logging.getLogger(__name__)
 REJECT_THRESHOLD_DAYS = 90
 AUTO_APPROVE_CEILING = 200
 HUMAN_REVIEW_FLOOR = 2000
+
+
+class PolicyRule(str, Enum):
+    STALE_RECEIPT_REJECT = "stale-receipt-reject"
+    LOW_VALUE_AUTO_APPROVE = "low-value-auto-approve"
+    HIGH_VALUE_HUMAN_REVIEW = "high-value-human-review"
 
 
 class ApplyPolicies:
@@ -39,18 +47,21 @@ class ApplyPolicies:
         days_old = (today - receipts_date).days
 
         if days_old > REJECT_THRESHOLD_DAYS:
+            rule = PolicyRule.STALE_RECEIPT_REJECT
             status = "auto-rejected"
             decision_reason = (
                 f"reject rule: receipt dated {receipts_date.isoformat()} is {days_old} days "
                 f"old as of {today.isoformat()}, older than the {REJECT_THRESHOLD_DAYS}-day limit"
             )
         elif value <= AUTO_APPROVE_CEILING:
+            rule = PolicyRule.LOW_VALUE_AUTO_APPROVE
             status = "auto-approved"
             decision_reason = (
                 f"auto-approve rule: resolved value {value} is within the "
                 f"{AUTO_APPROVE_CEILING} ceiling"
             )
         elif value > HUMAN_REVIEW_FLOOR:
+            rule = PolicyRule.HIGH_VALUE_HUMAN_REVIEW
             status = "human-review"
             decision_reason = (
                 f"mandatory human-review rule: resolved value {value} exceeds the "
@@ -63,6 +74,7 @@ class ApplyPolicies:
             )
             return {"requires_llm_judgment": True}
 
+        reimbursement_policy_rule_triggered_total.labels(rule.value).inc()
         logger.info("FLOW: apply_policies rule fired: status=%s uuid=%s", status, uuid)
         # receipts_value's own DB column has a >=0 CHECK constraint; spec.md
         # deliberately lets a zero/negative extracted value clear the <=200

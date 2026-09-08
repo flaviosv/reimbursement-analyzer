@@ -2,18 +2,23 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import replace
 
+import asyncpg
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from prometheus_client import CONTENT_TYPE_LATEST, REGISTRY, generate_latest
 from shared.config import load_config
 from shared.db import managed_pool
 from shared.logging import configure_logging
 from shared.models import HealthStatus
 from shared.producer import managed_producer
 from shared.tracing import init_tracer, shutdown_tracer_async
+from starlette.responses import Response
 
+from api.dependencies import get_pool
 from api.errors import register_handlers
-from api.middleware import CorrelationIdMiddleware
+from api.metrics import refresh_status_gauge
+from api.middleware import CorrelationIdMiddleware, MetricsMiddleware
 from api.reimbursement.create.route import router as reimbursement_router
 from api.reimbursement.get.route import router as get_reimbursement_router
 from api.reimbursement.list.route import router as list_reimbursement_router
@@ -46,6 +51,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(CorrelationIdMiddleware)
+app.add_middleware(MetricsMiddleware)
 FastAPIInstrumentor.instrument_app(app)
 register_handlers(app)
 app.include_router(reimbursement_router)
@@ -57,3 +63,9 @@ app.include_router(update_reimbursement_router)
 @app.get("/health", response_model=HealthStatus)
 def health() -> HealthStatus:
     return HealthStatus()
+
+
+@app.get("/metrics")
+async def metrics(pool: asyncpg.Pool = Depends(get_pool)) -> Response:
+    await refresh_status_gauge(pool)
+    return Response(generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)

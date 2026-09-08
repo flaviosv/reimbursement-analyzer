@@ -29,6 +29,11 @@ from shared.tracing import stamp_span
 
 from reimbursement.agent import agent
 from reimbursement.config import AgentConfig
+from reimbursement.metrics import (
+    reimbursement_decision_failure_escalations_total,
+    reimbursement_messages_requeued_total,
+    reimbursement_time_to_decision_seconds,
+)
 from reimbursement.models import Reimbursement
 
 logger = logging.getLogger(__name__)
@@ -213,6 +218,13 @@ async def _decide(
             }
         )
     )
+    if final_state.get("persisted"):
+        # Clamped to 0: clock skew across containers, or a malformed
+        # created_at, could otherwise feed a negative value into .observe()
+        # — Prometheus does not reject it, so it would silently record a
+        # nonsensical negative-latency point.
+        time_to_decision_seconds = (datetime.now(UTC) - row["created_at"]).total_seconds()
+        reimbursement_time_to_decision_seconds.observe(max(0.0, time_to_decision_seconds))
     return MessageOutcome.RESOLVED
 
 
@@ -225,6 +237,7 @@ async def _escalate_decision_failure(
     `escalate_existing`, carrying `envelope.errors` plus one new entry for
     this failure. Never raises."""
     errors = [*envelope.errors, AttemptError.from_exception(len(envelope.errors) + 1, "decide", exc)]
+    reimbursement_decision_failure_escalations_total.inc()
     return await _escalate_row(
         deps, envelope, errors, header="Decision-stage failure", context=" after a decision failure"
     )
@@ -259,6 +272,7 @@ async def _requeue(
             ),
         )
         return MessageOutcome.LOGGED
+    reimbursement_messages_requeued_total.labels(REIMBURSEMENT_TOPIC).inc()
     return MessageOutcome.REQUEUED
 
 
