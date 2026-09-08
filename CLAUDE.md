@@ -27,6 +27,27 @@ For any change that creates, modifies, or influences a reimbursement decision (d
 
 **Local development note:** this repo's real local dev/verification environment is the sibling `local-env` project's k3s/Tilt setup (the only place that reaches the real Elastic APM Server) — not an operational instruction for other developers to follow verbatim, since that path is specific to this machine.
 
+## Observability — Metrics & Dashboards
+
+`docs/METRICS.md` is the source of truth for every Prometheus metric this
+repo's 3 services expose: types, labels, histogram bucket configuration
+(see "The Decision-Latency Histogram Split" and "API HTTP Latency
+Buckets"), and which percentiles the Grafana dashboard graphs for each
+histogram (with the reasoning, and a note on whether it's backed by an
+actual SLO or just a generic default). Keep it in sync whenever a metric is
+added, renamed, relabeled, or rebucketed.
+
+A Grafana dashboard for this project already exists, in its own folder, in
+the shared platform's k3s cluster — kept in sync with `docs/METRICS.md`,
+not the other way around. A change to a metric's meaning, labels, or which
+percentiles matter should land in `docs/METRICS.md` first, then be
+reflected in the dashboard. To find the dashboard, its scrape config, or
+how it's provisioned, query the cluster directly rather than assuming
+anything about how it got there:
+- `kubectl get ingress -A | grep -i grafana` — dashboard URL
+- `kubectl get svc,deploy -n shared-services | grep -i grafana` — how Grafana itself runs
+- `kubectl get svc <api/publisher service> -o yaml | grep prometheus.io` — this repo's own Prometheus scrape annotations (should already be present on `api`'s and `publisher`'s Services)
+
 ## Logging
 
 Every log line across `api`, `publisher`, and `reimbursement` is a single JSON object with ECS field names, and every HTTP request carries a `correlation_id` that threads through in-process logs, Kafka messages, and LangFuse trace metadata — the mechanism that lets a decision be reconstructed end-to-end from logs alone (the traceability NFR above).

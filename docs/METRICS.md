@@ -90,6 +90,39 @@ automated pipeline latency — on a minutes-to-days scale: buckets
 week). It shares no bucket configuration with any of the three histograms
 above.
 
+## API HTTP Latency Buckets
+
+`api_http_request_duration_seconds` — the one histogram not covered by "The
+Decision-Latency Histogram Split" above, since it isn't part of the
+decision pipeline — uses its own explicit buckets in
+`packages/api/src/api/metrics.py`: `(0.005, 0.01, 0.025, 0.05, 0.1, 0.25,
+0.5, 1, 2.5, 5, 10)` seconds. These are `prometheus_client`'s own default
+HTTP-latency-shaped buckets, chosen deliberately because `api` makes no LLM
+calls in its own request path — unlike the 3 decision-pipeline histograms
+above, which are custom-bucketed for LLM-call timescales instead.
+
+## Dashboard Percentiles (Grafana)
+
+The reimbursement-analyzer Grafana dashboard (`local-env`'s
+`terraform/personal/reimbursement-analyzer/grafana-dashboard.json`, pushed
+via the Grafana HTTP API from this repo's Tiltfile) graphs the 5 histograms
+above at:
+
+| Histogram | Percentiles graphed | Why |
+|---|---|---|
+| `api_http_request_duration_seconds` | p50, p95, p99 (by `path`) | Standard RED-method trio |
+| `reimbursement_review_wait_seconds` | p50, p95 | Human-review queue time; p99 omitted since the bucket range already tops out at 1 week and a single stale review skews it heavily |
+| `reimbursement_agent_decision_duration_seconds` | p95 | Tail latency of one `agent.decide()` graph run |
+| `reimbursement_time_to_decision_seconds` | p95 | End-to-end tail latency, including Kafka queue wait |
+| `reimbursement_agent_node_duration_seconds` | p95 (by `node`, `model`) | Per-node tail latency, to isolate which node/model is slow |
+
+No SLO is defined for any of these yet — this percentile selection is a
+generic default (median + p95 for most, plus p99 where request-level tail
+latency is the concern), not a requirement from
+`.specs/features/RA-3-prometheus-metrics-mvp/spec.md`. If an SLO is defined
+later, update this table and the corresponding `histogram_quantile(...)`
+queries in `grafana-dashboard.json` together.
+
 ## Why 3 Independent Scrape Targets
 
 `api`, `publisher`, and `reimbursement` are three separately deployable
